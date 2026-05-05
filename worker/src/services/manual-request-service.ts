@@ -94,8 +94,8 @@ export class ManualRequestService {
       `SELECT mr.id, mr.user_id, mr.customer_name, mr.customer_phone, mr.customer_email, mr.customer_address, mr.service_description, mr.media_item_ids_json, mr.created_at
        FROM manual_requests mr
        JOIN quote_drafts qd ON qd.manual_request_id = mr.id
-       WHERE qd.id = ? AND mr.user_id = ?`
-    ).bind(draftId, userId).first() as Record<string, unknown> | null;
+       WHERE qd.id = ? AND mr.user_id = ? AND qd.user_id = ?`
+    ).bind(draftId, userId, userId).first() as Record<string, unknown> | null;
 
     if (!row) {
       return null;
@@ -108,8 +108,15 @@ export class ManualRequestService {
    * Validate the create payload. Throws PlatformError on invalid input.
    */
   private validate(payload: CreateManualRequestPayload): void {
+    // Runtime type guards
+    const customerName = typeof payload.customerName === 'string' ? payload.customerName.trim() : '';
+    const serviceDescription = typeof payload.serviceDescription === 'string' ? payload.serviceDescription.trim() : '';
+    const customerEmail = typeof payload.customerEmail === 'string' ? payload.customerEmail.trim() : null;
+    const customerPhone = typeof payload.customerPhone === 'string' ? payload.customerPhone.trim() : null;
+    const customerAddress = typeof payload.customerAddress === 'string' ? payload.customerAddress.trim() : null;
+
     // customerName: required, non-empty after trim, max 200 chars
-    if (!payload.customerName || payload.customerName.trim().length === 0) {
+    if (!customerName) {
       throw new PlatformError({
         severity: 'error',
         component: 'ManualRequestService',
@@ -119,7 +126,7 @@ export class ManualRequestService {
         statusCode: 400,
       });
     }
-    if (payload.customerName.trim().length > 200) {
+    if (customerName.length > 200) {
       throw new PlatformError({
         severity: 'error',
         component: 'ManualRequestService',
@@ -131,7 +138,7 @@ export class ManualRequestService {
     }
 
     // serviceDescription: required, non-empty after trim, max 10000 chars
-    if (!payload.serviceDescription || payload.serviceDescription.trim().length === 0) {
+    if (!serviceDescription) {
       throw new PlatformError({
         severity: 'error',
         component: 'ManualRequestService',
@@ -141,7 +148,7 @@ export class ManualRequestService {
         statusCode: 400,
       });
     }
-    if (payload.serviceDescription.trim().length > 10000) {
+    if (serviceDescription.length > 10000) {
       throw new PlatformError({
         severity: 'error',
         component: 'ManualRequestService',
@@ -153,8 +160,8 @@ export class ManualRequestService {
     }
 
     // customerEmail: optional, basic email regex validation
-    if (payload.customerEmail && payload.customerEmail.trim().length > 0) {
-      if (!EMAIL_REGEX.test(payload.customerEmail.trim())) {
+    if (customerEmail && customerEmail.length > 0) {
+      if (!EMAIL_REGEX.test(customerEmail)) {
         throw new PlatformError({
           severity: 'error',
           component: 'ManualRequestService',
@@ -167,7 +174,7 @@ export class ManualRequestService {
     }
 
     // customerPhone: optional, max 30 chars
-    if (payload.customerPhone && payload.customerPhone.trim().length > 30) {
+    if (customerPhone && customerPhone.length > 30) {
       throw new PlatformError({
         severity: 'error',
         component: 'ManualRequestService',
@@ -179,7 +186,7 @@ export class ManualRequestService {
     }
 
     // customerAddress: optional, max 500 chars
-    if (payload.customerAddress && payload.customerAddress.trim().length > 500) {
+    if (customerAddress && customerAddress.length > 500) {
       throw new PlatformError({
         severity: 'error',
         component: 'ManualRequestService',
@@ -191,15 +198,27 @@ export class ManualRequestService {
     }
 
     // mediaItemIds: optional array, max 10 items
-    if (payload.mediaItemIds && payload.mediaItemIds.length > 10) {
-      throw new PlatformError({
-        severity: 'error',
-        component: 'ManualRequestService',
-        operation: 'create',
-        description: 'Maximum 10 images allowed',
-        recommendedActions: ['Remove some images to stay within the 10-image limit'],
-        statusCode: 400,
-      });
+    if (payload.mediaItemIds !== undefined && payload.mediaItemIds !== null) {
+      if (!Array.isArray(payload.mediaItemIds)) {
+        throw new PlatformError({
+          severity: 'error',
+          component: 'ManualRequestService',
+          operation: 'create',
+          description: 'mediaItemIds must be an array',
+          recommendedActions: ['Provide mediaItemIds as an array of strings'],
+          statusCode: 400,
+        });
+      }
+      if (payload.mediaItemIds.length > 10) {
+        throw new PlatformError({
+          severity: 'error',
+          component: 'ManualRequestService',
+          operation: 'create',
+          description: 'Maximum 10 images allowed',
+          recommendedActions: ['Remove some images to stay within the 10-image limit'],
+          statusCode: 400,
+        });
+      }
     }
   }
 
@@ -207,6 +226,14 @@ export class ManualRequestService {
    * Map a database row to a ManualRequest object.
    */
   private mapRow(row: Record<string, unknown>): ManualRequest {
+    let mediaItemIds: string[] = [];
+    try {
+      const raw = row.media_item_ids_json as string;
+      mediaItemIds = raw ? JSON.parse(raw) : [];
+    } catch {
+      mediaItemIds = [];
+    }
+
     return {
       id: row.id as string,
       userId: row.user_id as string,
@@ -215,7 +242,7 @@ export class ManualRequestService {
       customerEmail: (row.customer_email as string) || null,
       customerAddress: (row.customer_address as string) || null,
       serviceDescription: row.service_description as string,
-      mediaItemIds: JSON.parse((row.media_item_ids_json as string) || '[]'),
+      mediaItemIds,
       requestSource: 'manual',
       createdAt: new Date(row.created_at as string),
     };

@@ -675,7 +675,8 @@ export async function fetchDraftManualRequest(draftId: string): Promise<ManualRe
   const res = await fetch(API_BASE + '/api/quotes/drafts/' + draftId + '/manual-request', {
     headers: { ...authHeaders() },
   });
-  return handleResponse(res);
+  const data = await handleResponse(res);
+  return data?.manualRequest ?? null;
 }
 
 // ── Rules Engine ──
