@@ -1497,9 +1497,12 @@ app.get('/jobber/requests', async (c) => {
   const cacheFetchedAt = jobberIntegration.getRequestsCacheFetchedAt();
   if (cacheFetchedAt !== null) {
     try {
+      // Convert epoch ms to SQLite datetime format (YYYY-MM-DD HH:MM:SS) to match received_at column
+      const cacheDate = new Date(cacheFetchedAt);
+      const sqliteTimestamp = cacheDate.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
       const newerWebhook = await db.prepare(
         `SELECT 1 FROM jobber_webhook_requests WHERE received_at > ? LIMIT 1`
-      ).bind(new Date(cacheFetchedAt).toISOString()).first();
+      ).bind(sqliteTimestamp).first();
       if (newerWebhook) {
         console.log('[quotes/requests] Webhook arrived after cache, invalidating');
         jobberIntegration.invalidateCache();

@@ -17,20 +17,27 @@ export default function RequestSelector({ onSelect, onClear, selectedRequestId, 
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const fetchIdRef = useRef(0);
 
   const loadRequests = useCallback(async (opts?: { fresh?: boolean; silent?: boolean }) => {
+    const currentFetchId = ++fetchIdRef.current;
     if (!opts?.silent) setLoading(true);
     setError(null);
     try {
       const data = await fetchJobberRequests({ fresh: opts?.fresh });
-      setRequests(data.requests);
+      // Only apply if this is still the most recent fetch (discard stale responses)
+      if (fetchIdRef.current === currentFetchId) {
+        setRequests(data.requests);
+      }
     } catch {
-      if (!opts?.silent) {
+      if (fetchIdRef.current === currentFetchId && !opts?.silent) {
         setError('Could not load Jobber requests. You can enter text manually below.');
       }
     } finally {
-      if (!opts?.silent) setLoading(false);
-      setRefreshing(false);
+      if (fetchIdRef.current === currentFetchId) {
+        if (!opts?.silent) setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
