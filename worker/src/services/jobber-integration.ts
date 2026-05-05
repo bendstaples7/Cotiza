@@ -2,7 +2,7 @@ import { ActivityLogService } from './activity-log-service.js';
 import type { JobberTokenStore } from './jobber-token-store.js';
 import type { ProductCatalogEntry, JobberCustomerRequest } from 'shared';
 
-const DEFAULT_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const DEFAULT_CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes
 const API_TIMEOUT_MS = 10_000;
 const DEFAULT_PAGE_SIZE = 50;
 
@@ -191,6 +191,14 @@ export class JobberIntegration {
   invalidateCache(): void {
     this.productCatalogCache = null;
     this.customerRequestsCache = null;
+  }
+
+  /**
+   * Get the timestamp when the customer requests cache was last populated.
+   * Returns null if no cache exists.
+   */
+  getRequestsCacheFetchedAt(): number | null {
+    return this.customerRequestsCache?.fetchedAt ?? null;
   }
 
   // ── Product Catalog ──────────────────────────────────────────────

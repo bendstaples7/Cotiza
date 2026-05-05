@@ -1486,6 +1486,32 @@ app.get('/jobber/requests', async (c) => {
   const db = c.env.DB;
   const { jobberIntegration, tokenStore, activityLog } = await createJobberIntegration(db, c.env);
 
+  // Support ?fresh=true to bypass the in-memory cache
+  const freshParam = c.req.query('fresh');
+  if (freshParam === 'true') {
+    jobberIntegration.invalidateCache();
+  }
+
+  // Webhook-aware cache invalidation: if a webhook arrived after the cache was populated,
+  // invalidate so we fetch fresh data from Jobber that includes the new request
+  const cacheFetchedAt = jobberIntegration.getRequestsCacheFetchedAt();
+  if (cacheFetchedAt !== null) {
+    try {
+      // Convert epoch ms to SQLite datetime format (YYYY-MM-DD HH:MM:SS) to match received_at column
+      const cacheDate = new Date(cacheFetchedAt);
+      const sqliteTimestamp = cacheDate.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+      const newerWebhook = await db.prepare(
+        `SELECT 1 FROM jobber_webhook_requests WHERE received_at > ? LIMIT 1`
+      ).bind(sqliteTimestamp).first();
+      if (newerWebhook) {
+        console.log('[quotes/requests] Webhook arrived after cache, invalidating');
+        jobberIntegration.invalidateCache();
+      }
+    } catch {
+      // Best-effort — if the table doesn't exist or query fails, skip
+    }
+  }
+
   let requests: JobberCustomerRequest[] = [];
   let available = false;
 

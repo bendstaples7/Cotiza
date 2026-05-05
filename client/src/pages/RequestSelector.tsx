@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import type { JobberCustomerRequest } from 'shared';
 import { fetchJobberRequests } from '../api';
+
+const POLL_INTERVAL_MS = 60_000; // Poll every 60 seconds
 
 interface RequestSelectorProps {
   onSelect: (request: JobberCustomerRequest) => void;
@@ -13,26 +15,53 @@ export default function RequestSelector({ onSelect, onClear, selectedRequestId, 
   const [requests, setRequests] = useState<JobberCustomerRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const fetchIdRef = useRef(0);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
+  const loadRequests = useCallback(async (opts?: { fresh?: boolean; silent?: boolean }) => {
+    const currentFetchId = ++fetchIdRef.current;
+    if (!opts?.silent) setLoading(true);
     setError(null);
-    fetchJobberRequests()
-      .then((data) => {
-        if (!cancelled) {
-          setRequests(data.requests);
-          setLoading(false);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setError('Could not load Jobber requests. You can enter text manually below.');
-          setLoading(false);
-        }
-      });
-    return () => { cancelled = true; };
+    try {
+      const data = await fetchJobberRequests({ fresh: opts?.fresh });
+      // Only apply if this is still the most recent fetch (discard stale responses)
+      if (fetchIdRef.current === currentFetchId) {
+        setRequests(data.requests);
+      }
+    } catch {
+      if (fetchIdRef.current === currentFetchId && !opts?.silent) {
+        setError('Could not load Jobber requests. You can enter text manually below.');
+      }
+    } finally {
+      if (fetchIdRef.current === currentFetchId) {
+        // Always clear loading — if this silent fetch superseded a non-silent one,
+        // loading would otherwise stay stuck at true forever
+        setLoading(false);
+        setRefreshing(false);
+      }
+    }
   }, []);
+
+  // Initial load
+  useEffect(() => {
+    loadRequests();
+  }, [loadRequests]);
+
+  // Poll every 60 seconds (silent background refresh)
+  useEffect(() => {
+    pollRef.current = setInterval(() => {
+      loadRequests({ fresh: true, silent: true });
+    }, POLL_INTERVAL_MS);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [loadRequests]);
+
+  const handleRefresh = () => {
+    setRefreshing(true);
+    loadRequests({ fresh: true });
+  };
 
   const selectedRequest = requests.find((r) => r.id === selectedRequestId);
 
@@ -160,8 +189,11 @@ export default function RequestSelector({ onSelect, onClear, selectedRequestId, 
   // Show request list for selection
   return (
     <div style={wrapperStyle}>
-      <div style={{ marginBottom: '0.5rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
         <span style={headingStyle}>Jobber Requests</span>
+        <button onClick={handleRefresh} disabled={refreshing} style={refreshBtnStyle} type="button">
+          {refreshing ? '↻ Refreshing…' : '↻ Refresh'}
+        </button>
       </div>
       <div style={listStyle}>
         {requests.map((req) => (
@@ -224,6 +256,17 @@ const clearBtnStyle: React.CSSProperties = {
   borderRadius: 4,
   cursor: 'pointer',
   fontSize: '0.8rem',
+};
+
+const refreshBtnStyle: React.CSSProperties = {
+  padding: '0.2rem 0.5rem',
+  border: '1px solid #ccc',
+  background: 'transparent',
+  color: '#555',
+  borderRadius: 4,
+  cursor: 'pointer',
+  fontSize: '0.75rem',
+  fontFamily: 'inherit',
 };
 
 const detailCardStyle: React.CSSProperties = {

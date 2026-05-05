@@ -590,8 +590,11 @@ export async function checkJobberStatus(): Promise<boolean> {
   return data.available;
 }
 
-export async function fetchJobberRequests(): Promise<{ requests: JobberCustomerRequest[]; available: boolean }> {
-  const res = await fetch(API_BASE + '/api/quotes/jobber/requests', {
+export async function fetchJobberRequests(opts?: { fresh?: boolean }): Promise<{ requests: JobberCustomerRequest[]; available: boolean }> {
+  const url = opts?.fresh
+    ? API_BASE + '/api/quotes/jobber/requests?fresh=true'
+    : API_BASE + '/api/quotes/jobber/requests';
+  const res = await fetch(url, {
     headers: { ...authHeaders() },
   });
   return handleResponse(res);
