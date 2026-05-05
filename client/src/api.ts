@@ -675,7 +675,7 @@ export async function fetchDraftManualRequest(draftId: string): Promise<ManualRe
   const res = await fetch(API_BASE + '/api/quotes/drafts/' + draftId + '/manual-request', {
     headers: { ...authHeaders() },
   });
-  const data = await handleResponse(res);
+  const data = await handleResponse<{ manualRequest: ManualRequest | null }>(res);
   return data?.manualRequest ?? null;
 }
 
