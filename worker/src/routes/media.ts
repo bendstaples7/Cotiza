@@ -8,6 +8,31 @@ import { PlatformError } from '../errors/index.js';
 
 const app = new Hono<{ Bindings: Bindings; Variables: { user: User } }>();
 
+/** Infer MIME type from filename extension when Content-Type is missing or generic. */
+function inferMimeType(headerType: string, filename: string): string {
+  if (headerType && headerType !== 'application/octet-stream') {
+    return headerType;
+  }
+  const ext = filename.split('.').pop()?.toLowerCase();
+  switch (ext) {
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'png':
+      return 'image/png';
+    case 'webp':
+      return 'image/webp';
+    case 'heic':
+      return 'image/heic';
+    case 'heif':
+      return 'image/heif';
+    case 'mp4':
+      return 'video/mp4';
+    default:
+      return headerType || 'application/octet-stream';
+  }
+}
+
 app.use('*', sessionMiddleware);
 
 /**
@@ -27,8 +52,11 @@ app.get('/', async (c) => {
  * Upload a media file (expects raw body with Content-Type header).
  */
 app.post('/upload', async (c) => {
-  const contentType = c.req.header('Content-Type') || '';
+  const rawContentType = (c.req.header('Content-Type') || '').split(';')[0].trim();
   const filename = c.req.header('X-Filename') || 'upload';
+
+  // Infer MIME type from filename extension when Content-Type is missing or generic
+  const contentType = inferMimeType(rawContentType, filename);
 
   // Preflight size check using Content-Length header
   const MAX_UPLOAD_SIZE = 50 * 1024 * 1024; // 50 MB
@@ -60,7 +88,7 @@ app.post('/upload', async (c) => {
   const item = await mediaService.upload(
     {
       originalname: filename,
-      mimetype: contentType.split(';')[0].trim(),
+      mimetype: contentType,
       size: buffer.byteLength,
       buffer,
     },
