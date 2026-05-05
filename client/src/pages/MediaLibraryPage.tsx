@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import type { MediaItem, GeneratedImage, ImageStyle, ErrorResponse } from 'shared';
 import { listMedia, uploadMedia, generateImages, saveGeneratedImage, deleteMedia } from '../api';
 
-const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'video/mp4'];
+const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'video/mp4'];
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 const STYLES: { value: ImageStyle; label: string }[] = [
   { value: 'photorealistic', label: 'Photorealistic' },
@@ -12,7 +12,7 @@ const STYLES: { value: ImageStyle; label: string }[] = [
 
 function validateFile(file: File): string | null {
   if (!ACCEPTED_TYPES.includes(file.type)) {
-    return 'Unsupported format. Please use JPEG, PNG, or MP4.';
+    return 'Unsupported format. Please use JPEG, PNG, WebP, HEIC, or MP4.';
   }
   if (file.size > MAX_FILE_SIZE) {
     return 'File exceeds the 50 MB size limit.';
@@ -199,7 +199,7 @@ export default function MediaLibraryPage() {
                 style={{ display: 'none' }}
                 onChange={(e) => handleFiles(e.target.files)}
               />
-              <p style={{ margin: '0.75rem 0 0', fontSize: '0.8rem', color: '#999' }}>JPEG, PNG, or MP4 — max 50 MB</p>
+              <p style={{ margin: '0.75rem 0 0', fontSize: '0.8rem', color: '#999' }}>JPEG, PNG, WebP, HEIC, or MP4 — max 50 MB</p>
             </div>
             {uploading && <p style={{ color: '#00a89d' }}>Uploading…</p>}
             {uploadError && <div role="alert" style={{ ...alertStyle, marginTop: '0.75rem' }}>{uploadError}</div>}

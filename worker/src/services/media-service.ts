@@ -1,7 +1,7 @@
 import { PlatformError } from '../errors/index.js';
 import type { MediaItem, PaginationParams, GeneratedImage } from 'shared';
 
-const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'video/mp4'];
+const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'video/mp4'];
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 
 export interface UploadedFile {
@@ -179,8 +179,8 @@ export class MediaService {
         severity: 'warning',
         component: 'MediaService',
         operation: 'upload',
-        description: 'This file format is not supported. The platform accepts JPEG, PNG, and MP4 files.',
-        recommendedActions: ['Convert the file to JPEG, PNG, or MP4 and try again'],
+        description: 'This file format is not supported. The platform accepts JPEG, PNG, WebP, HEIC, and MP4 files.',
+        recommendedActions: ['Convert the file to JPEG, PNG, WebP, HEIC, or MP4 and try again'],
       });
     }
     if (file.size > MAX_FILE_SIZE) {
