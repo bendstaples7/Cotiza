@@ -35,7 +35,9 @@ export default function RequestSelector({ onSelect, onClear, selectedRequestId, 
       }
     } finally {
       if (fetchIdRef.current === currentFetchId) {
-        if (!opts?.silent) setLoading(false);
+        // Always clear loading — if this silent fetch superseded a non-silent one,
+        // loading would otherwise stay stuck at true forever
+        setLoading(false);
         setRefreshing(false);
       }
     }
