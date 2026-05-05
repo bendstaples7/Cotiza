@@ -21,8 +21,8 @@ export class QuoteDraftService {
         // Atomically compute next draft_number inside the INSERT so the
         // read and write happen in the same statement, avoiding TOCTOU races.
         this.db.prepare(
-          `INSERT INTO quote_drafts (id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, draft_number)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(draft_number), 0) + 1 FROM quote_drafts WHERE user_id = ?))`
+          `INSERT INTO quote_drafts (id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(draft_number), 0) + 1 FROM quote_drafts WHERE user_id = ?))`
         ).bind(
           draft.id,
           draft.userId,
@@ -32,6 +32,7 @@ export class QuoteDraftService {
           draft.status,
           draft.jobberRequestId ?? null,
           draft.customerNote ?? null,
+          draft.manualRequestId ?? null,
           draft.userId,
         ),
       ];
@@ -93,7 +94,7 @@ export class QuoteDraftService {
     // Re-read the saved row to get DB-assigned fields (draft_number, timestamps).
     // We reuse the original draft's lineItems/unresolvedItems since they were just inserted.
     const row = await this.db.prepare(
-      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, created_at, updated_at FROM quote_drafts WHERE id = ?'
+      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, created_at, updated_at FROM quote_drafts WHERE id = ?'
     ).bind(draft.id).first() as any;
 
     return this.mapDraftRow(row, draft.lineItems, draft.unresolvedItems, draft.actionItems);
@@ -104,7 +105,7 @@ export class QuoteDraftService {
    */
   async getById(draftId: string, userId: string): Promise<QuoteDraft> {
     const row = await this.db.prepare(
-      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, created_at, updated_at FROM quote_drafts WHERE id = ? AND user_id = ?'
+      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, created_at, updated_at FROM quote_drafts WHERE id = ? AND user_id = ?'
     ).bind(draftId, userId).first() as any;
 
     if (!row) {
@@ -127,7 +128,7 @@ export class QuoteDraftService {
    */
   async list(userId: string): Promise<QuoteDraft[]> {
     const result = await this.db.prepare(
-      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, created_at, updated_at FROM quote_drafts WHERE user_id = ? ORDER BY created_at DESC'
+      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, created_at, updated_at FROM quote_drafts WHERE user_id = ? ORDER BY created_at DESC'
     ).bind(userId).all();
 
     const drafts: QuoteDraft[] = [];
@@ -227,7 +228,7 @@ export class QuoteDraftService {
     await this.db.batch(statements);
 
     const row = await this.db.prepare(
-      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, created_at, updated_at FROM quote_drafts WHERE id = ?'
+      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, created_at, updated_at FROM quote_drafts WHERE id = ?'
     ).bind(draftId).first() as any;
 
     const { lineItems, unresolvedItems } = await this.fetchLineItems(draftId);
@@ -374,6 +375,7 @@ export class QuoteDraftService {
       lineItems,
       unresolvedItems,
       jobberRequestId: (row.jobber_request_id as string) ?? null,
+      manualRequestId: (row.manual_request_id as string) ?? null,
       jobberQuoteId: (row.jobber_quote_id as string) ?? null,
       jobberQuoteNumber: (row.jobber_quote_number as string) ?? null,
       jobberQuoteWebUri: (row.jobber_quote_web_uri as string) ?? null,

@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Bindings } from '../bindings.js';
-import type { User, ProductCatalogEntry, QuoteTemplate, JobberCustomerRequest, SimilarQuote, StructuredRule, RuleCondition, RuleAction, TriggerMode, ActionItem } from 'shared';
+import type { User, ProductCatalogEntry, QuoteTemplate, JobberCustomerRequest, SimilarQuote, StructuredRule, RuleCondition, RuleAction, TriggerMode, ActionItem, CreateManualRequestPayload } from 'shared';
 import { sessionMiddleware } from '../middleware/session.js';
 import { PlatformError } from '../errors/index.js';
 import { JobberWebSession } from '../services/jobber-web-session.js';
@@ -15,6 +15,7 @@ import {
   SimilarityEngine,
   QuoteSyncService,
   JobberQuotePushService,
+  ManualRequestService,
 } from '../services/index.js';
 import { JobberWebhookService } from '../services/jobber-webhook-service.js';
 import { JobberTokenStore } from '../services/jobber-token-store.js';
@@ -287,6 +288,35 @@ app.post('/rules/auto-categorize', async (c) => {
   return c.json(result);
 });
 
+// ── Manual Request endpoints ──────────────────────────────────
+
+/**
+ * POST /manual-requests
+ * Create a manual customer request.
+ */
+app.post('/manual-requests', async (c) => {
+  const userId = c.get('user').id;
+  const db = c.env.DB;
+  const body = await c.req.json() as CreateManualRequestPayload;
+
+  const manualRequestService = new ManualRequestService(db);
+  const manualRequest = await manualRequestService.create(userId, body);
+  return c.json(manualRequest, 201);
+});
+
+/**
+ * GET /manual-requests/:id
+ * Get a manual request by ID, scoped to authenticated user.
+ */
+app.get('/manual-requests/:id', async (c) => {
+  const userId = c.get('user').id;
+  const db = c.env.DB;
+
+  const manualRequestService = new ManualRequestService(db);
+  const manualRequest = await manualRequestService.getById(c.req.param('id'), userId);
+  return c.json(manualRequest);
+});
+
 // ── Helper functions ──────────────────────────────────────────
 
 /**
@@ -345,6 +375,7 @@ app.post('/generate', async (c) => {
     manualCatalog?: ProductCatalogEntry[];
     manualTemplates?: QuoteTemplate[];
     jobberRequestId?: string;
+    manualRequestId?: string;
   };
 
   if (!body.customerText && (!body.mediaItemIds || body.mediaItemIds.length === 0)) {
@@ -412,6 +443,14 @@ app.post('/generate', async (c) => {
     result.draft.jobberRequestId = body.jobberRequestId;
   }
 
+  if (body.manualRequestId) {
+    result.draft.manualRequestId = body.manualRequestId;
+    // Populate clientName from the manual request's customerName
+    const manualRequestService = new ManualRequestService(db);
+    const manualRequest = await manualRequestService.getById(body.manualRequestId, userId);
+    result.draft.clientName = manualRequest.customerName;
+  }
+
   const saved = await quoteDraftService.save(result.draft);
   return c.json(saved, 201);
 });
@@ -434,6 +473,19 @@ app.get('/drafts/:id', async (c) => {
   const quoteDraftService = new QuoteDraftService(c.env.DB);
   const draft = await quoteDraftService.getById(c.req.param('id'), c.get('user').id);
   return c.json(draft);
+});
+
+/**
+ * GET /drafts/:id/manual-request
+ * Get the manual request associated with a draft.
+ */
+app.get('/drafts/:id/manual-request', async (c) => {
+  const userId = c.get('user').id;
+  const db = c.env.DB;
+
+  const manualRequestService = new ManualRequestService(db);
+  const manualRequest = await manualRequestService.getByDraftId(c.req.param('id'), userId);
+  return c.json({ manualRequest });
 });
 
 /**
