@@ -24,6 +24,8 @@ function inferMimeType(headerType: string, filename: string): string {
       return 'image/webp';
     case 'heic':
       return 'image/heic';
+    case 'heif':
+      return 'image/heif';
     case 'mp4':
       return 'video/mp4';
     default:
