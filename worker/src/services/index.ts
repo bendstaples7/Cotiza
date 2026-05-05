@@ -32,3 +32,4 @@ export type { RulesEngineInput } from './rules-engine.js';
 export { EnrichmentService } from './enrichment-service.js';
 export { JobberQuotePushService } from './jobber-quote-push-service.js';
 export type { PushResult } from './jobber-quote-push-service.js';
+export { ManualRequestService } from './manual-request-service.js';

@@ -1,3 +1,27 @@
+/** A manually-created customer request */
+export interface ManualRequest {
+  id: string;
+  userId: string;
+  customerName: string;
+  customerPhone: string | null;
+  customerEmail: string | null;
+  customerAddress: string | null;
+  serviceDescription: string;
+  mediaItemIds: string[];
+  requestSource: 'manual';
+  createdAt: Date;
+}
+
+/** Payload for creating a manual request */
+export interface CreateManualRequestPayload {
+  customerName: string;
+  customerPhone?: string;
+  customerEmail?: string;
+  customerAddress?: string;
+  serviceDescription: string;
+  mediaItemIds?: string[];
+}
+
 /** A product from the Jobber catalog or manual entry */
 export interface ProductCatalogEntry {
   id: string;
@@ -63,6 +87,7 @@ export interface QuoteDraft {
   lineItems: QuoteLineItem[];
   unresolvedItems: QuoteLineItem[];
   jobberRequestId: string | null;
+  manualRequestId?: string | null;
   clientName?: string | null;
   jobberQuoteId?: string | null;
   jobberQuoteNumber?: string | null;

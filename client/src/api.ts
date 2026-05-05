@@ -7,6 +7,7 @@ import type {
   JobberCustomerRequest, SimilarQuote, JobberRequestFormData,
   Rule, RuleGroup, RuleGroupWithRules, SystemsStatusResponse,
   RuleCondition, RuleAction, TriggerMode,
+  ManualRequest, CreateManualRequestPayload,
 } from 'shared';
 
 const TOKEN_KEY = 'session_token';
@@ -442,6 +443,7 @@ export async function generateQuote(data: {
   customerText?: string;
   mediaItemIds?: string[];
   jobberRequestId?: string;
+  manualRequestId?: string;
 }): Promise<QuoteDraft> {
   const res = await fetch(API_BASE + '/api/quotes/generate', {
     method: 'POST',
@@ -650,6 +652,32 @@ export async function fetchCorpusStatus(): Promise<{ totalQuotes: number; lastSy
   return handleResponse(res);
 }
 
+
+// ── Manual Requests ──
+
+export async function createManualRequest(payload: CreateManualRequestPayload): Promise<ManualRequest> {
+  const res = await fetch(API_BASE + '/api/quotes/manual-requests', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(payload),
+  });
+  return handleResponseWithToast(res);
+}
+
+export async function fetchManualRequest(id: string): Promise<ManualRequest> {
+  const res = await fetch(API_BASE + '/api/quotes/manual-requests/' + id, {
+    headers: { ...authHeaders() },
+  });
+  return handleResponse(res);
+}
+
+export async function fetchDraftManualRequest(draftId: string): Promise<ManualRequest | null> {
+  const res = await fetch(API_BASE + '/api/quotes/drafts/' + draftId + '/manual-request', {
+    headers: { ...authHeaders() },
+  });
+  const data = await handleResponse<{ manualRequest: ManualRequest | null }>(res);
+  return data?.manualRequest ?? null;
+}
 
 // ── Rules Engine ──
 

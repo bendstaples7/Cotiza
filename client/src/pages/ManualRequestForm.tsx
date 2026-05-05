@@ -1,9 +1,7 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { MediaItem, JobberCustomerRequest } from 'shared';
-import { uploadMedia, generateQuote, checkJobberStatus, fetchJobberRequestFormData } from '../api';
-import RequestSelector from './RequestSelector';
-import ManualRequestForm from './ManualRequestForm';
+import type { MediaItem, CreateManualRequestPayload } from 'shared';
+import { uploadMedia, createManualRequest, generateQuote } from '../api';
 
 function extractErrorMessage(err: unknown, fallback: string): string {
   if (err && typeof err === 'object' && 'message' in err && typeof (err as any).message === 'string') {
@@ -22,103 +20,73 @@ const ACCEPTED_MIME_TYPES = new Set([
 const ACCEPTED_FORMATS_LABEL = 'JPEG, PNG, HEIC, WebP';
 const MAX_IMAGES = 10;
 
-/**
- * Build customer text directly from the request object.
- * Single source of truth — no separate API call needed.
- */
-function buildCustomerText(request: JobberCustomerRequest): string {
-  const parts: string[] = [];
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-  // Use description if it adds content beyond what's in the notes
-  if (request.description) {
-    const trimmedDesc = request.description.trim();
-    if (trimmedDesc) {
-      // Only skip description if it's exactly the notes joined together
-      const noteTexts = request.structuredNotes.map((n) => n.message.trim());
-      const notesJoined = noteTexts.join('\n\n');
-      if (trimmedDesc !== notesJoined) {
-        parts.push(trimmedDesc);
-      }
-    }
-  }
-
-  // Add structured notes with author labels
-  for (const note of request.structuredNotes) {
-    const trimmed = note.message.trim();
-    if (!trimmed) continue;
-    const label = note.createdBy === 'team' ? '[Team Note]' : note.createdBy === 'client' ? '[Client]' : '[System]';
-    parts.push(`${label} ${trimmed}`);
-  }
-
-  return parts.join('\n\n') || request.title?.trim() || '';
+interface ValidationErrors {
+  customerName?: string;
+  customerEmail?: string;
+  customerPhone?: string;
+  customerAddress?: string;
+  serviceDescription?: string;
 }
 
-export default function QuoteInputPage() {
+function validate(fields: {
+  customerName: string;
+  customerEmail: string;
+  customerPhone: string;
+  customerAddress: string;
+  serviceDescription: string;
+}): ValidationErrors {
+  const errors: ValidationErrors = {};
+
+  if (!fields.customerName.trim()) {
+    errors.customerName = 'Customer name is required.';
+  } else if (fields.customerName.trim().length > 200) {
+    errors.customerName = 'Customer name must be 200 characters or less.';
+  }
+
+  if (fields.customerEmail.trim() && !EMAIL_REGEX.test(fields.customerEmail.trim())) {
+    errors.customerEmail = 'Enter a valid email address.';
+  }
+
+  if (fields.customerPhone.trim().length > 30) {
+    errors.customerPhone = 'Phone number must be 30 characters or less.';
+  }
+
+  if (fields.customerAddress.trim().length > 500) {
+    errors.customerAddress = 'Address must be 500 characters or less.';
+  }
+
+  if (!fields.serviceDescription.trim()) {
+    errors.serviceDescription = 'Service description is required.';
+  } else if (fields.serviceDescription.trim().length > 10000) {
+    errors.serviceDescription = 'Service description must be 10,000 characters or less.';
+  }
+
+  return errors;
+}
+
+export default function ManualRequestForm() {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [customerText, setCustomerText] = useState('');
+  const [customerName, setCustomerName] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
+  const [customerEmail, setCustomerEmail] = useState('');
+  const [customerAddress, setCustomerAddress] = useState('');
+  const [serviceDescription, setServiceDescription] = useState('');
   const [images, setImages] = useState<MediaItem[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [generating, setGenerating] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [jobberAvailable, setJobberAvailable] = useState(false);
-  const [jobberChecked, setJobberChecked] = useState(false);
-  const [jobberRequestId, setJobberRequestId] = useState<string | null>(null);
-  const [hasLoadedFormData, setHasLoadedFormData] = useState(false);
-  const [showManualForm, setShowManualForm] = useState(false);
-
-  useEffect(() => {
-    checkJobberStatus()
-      .then((available) => setJobberAvailable(available))
-      .catch(() => setJobberAvailable(false))
-      .finally(() => setJobberChecked(true));
-  }, []);
-
-  const selectTokenRef = useRef(0);
-
-  const handleRequestSelect = async (request: JobberCustomerRequest) => {
-    const token = ++selectTokenRef.current;
-    setJobberRequestId(request.id);
-
-    // Try the form-data endpoint first (uses web session cookies for requestDetails.form)
-    try {
-      const { formData } = await fetchJobberRequestFormData(request.id);
-      if (token !== selectTokenRef.current) return; // stale
-      if (formData && formData.text) {
-        setCustomerText(formData.text);
-        setHasLoadedFormData(true);
-        return;
-      }
-    } catch {
-      if (token !== selectTokenRef.current) return;
-      // Fall through to local extraction
-    }
-
-    if (token !== selectTokenRef.current) return;
-    // Fallback: build text from the request object's notes/description
-    setCustomerText(buildCustomerText(request));
-    setHasLoadedFormData(true);
-  };
-
-  const handleRequestClear = () => {
-    ++selectTokenRef.current;
-    setJobberRequestId(null);
-    setCustomerText('');
-    setHasLoadedFormData(false);
-  };
-
-  const hasText = customerText.trim().length > 0;
-  const hasImages = images.length > 0;
-  const hasJobberRequest = jobberRequestId !== null;
-  const canGenerate = (hasText || hasImages || hasJobberRequest) && !generating;
+  const [validationErrors, setValidationErrors] = useState<ValidationErrors>({});
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const validateAndUploadFiles = useCallback(async (files: FileList | File[]) => {
     setFileError(null);
     const fileArray = Array.from(files);
 
-    // Check for invalid file types first
     for (const file of fileArray) {
       if (!ACCEPTED_MIME_TYPES.has(file.type)) {
         setFileError(
@@ -128,13 +96,11 @@ export default function QuoteInputPage() {
       }
     }
 
-    // Check image count limit
     if (images.length + fileArray.length > MAX_IMAGES) {
       setFileError(`You can upload a maximum of ${MAX_IMAGES} images.`);
       return;
     }
 
-    // Upload each file
     setUploading(true);
     try {
       const uploaded: MediaItem[] = [];
@@ -154,7 +120,6 @@ export default function QuoteInputPage() {
     if (e.target.files && e.target.files.length > 0) {
       validateAndUploadFiles(e.target.files);
     }
-    // Reset so the same file can be re-selected
     e.target.value = '';
   };
 
@@ -171,91 +136,137 @@ export default function QuoteInputPage() {
     setFileError(null);
   };
 
-  const handleGenerate = async () => {
-    if (!canGenerate) return;
-    setGenerating(true);
-    setFileError(null);
+  const handleSubmit = async () => {
+    setSubmitError(null);
+
+    const errors = validate({
+      customerName,
+      customerEmail,
+      customerPhone,
+      customerAddress,
+      serviceDescription,
+    });
+    setValidationErrors(errors);
+
+    if (Object.keys(errors).length > 0) return;
+
+    setSubmitting(true);
     try {
+      const payload: CreateManualRequestPayload = {
+        customerName: customerName.trim(),
+        serviceDescription: serviceDescription.trim(),
+      };
+      if (customerPhone.trim()) payload.customerPhone = customerPhone.trim();
+      if (customerEmail.trim()) payload.customerEmail = customerEmail.trim();
+      if (customerAddress.trim()) payload.customerAddress = customerAddress.trim();
+      if (images.length > 0) payload.mediaItemIds = images.map((img) => img.id);
+
+      const manualRequest = await createManualRequest(payload);
+
       const draft = await generateQuote({
-        customerText: hasText ? customerText.trim() : undefined,
+        customerText: serviceDescription.trim(),
         mediaItemIds: images.length > 0 ? images.map((img) => img.id) : undefined,
-        jobberRequestId: jobberRequestId ?? undefined,
+        manualRequestId: manualRequest.id,
       });
+
       navigate('/quotes/drafts/' + draft.id);
     } catch (err) {
-      setFileError(extractErrorMessage(err, 'Quote generation failed.'));
+      setSubmitError(extractErrorMessage(err, 'Failed to create request. Please try again.'));
     } finally {
-      setGenerating(false);
+      setSubmitting(false);
     }
   };
 
-  // When Jobber is unavailable, show ManualRequestForm as the primary input method
-  if (jobberChecked && !jobberAvailable) {
-    return (
-      <div style={containerStyle}>
-        <ManualRequestForm />
-      </div>
-    );
-  }
-
-  // When user has toggled to manual form mode
-  if (showManualForm) {
-    return (
-      <div style={containerStyle}>
-        <button
-          onClick={() => setShowManualForm(false)}
-          style={backBtnStyle}
-          type="button"
-        >
-          ← Back
-        </button>
-        <ManualRequestForm />
-      </div>
-    );
-  }
-
   return (
     <div style={containerStyle}>
-      <h1 style={titleStyle}>New Quote</h1>
+      <h1 style={titleStyle}>Create Manual Request</h1>
 
-      {/* Jobber Request Selector */}
-      {jobberAvailable && (
-        <RequestSelector
-          onSelect={handleRequestSelect}
-          onClear={handleRequestClear}
-          selectedRequestId={jobberRequestId}
-          hasFormData={hasLoadedFormData}
-        />
-      )}
-
-      {/* Create Manual Request button */}
-      {jobberAvailable && (
-        <div style={{ marginBottom: '1.25rem' }}>
-          <button
-            onClick={() => setShowManualForm(true)}
-            style={btnOutlineStyle}
-            type="button"
-          >
-            Create Manual Request
-          </button>
-        </div>
-      )}
-
-      {/* Customer request text area */}
+      {/* Customer Name */}
       <label style={labelStyle}>
-        Customer Request
-        <textarea
-          value={customerText}
-          onChange={(e) => setCustomerText(e.target.value)}
-          placeholder={jobberRequestId
-            ? 'Request details loaded above. Edit as needed or paste additional details.'
-            : 'Paste the customer\'s email, text message, or describe the work requested…'}
-          rows={6}
-          style={textareaStyle}
-          disabled={generating}
-          aria-label="Customer request text"
+        Customer Name <span style={requiredStyle}>*</span>
+        <input
+          type="text"
+          value={customerName}
+          onChange={(e) => setCustomerName(e.target.value)}
+          placeholder="Enter customer name"
+          style={inputStyle}
+          disabled={submitting}
+          aria-label="Customer name"
+          aria-required="true"
         />
       </label>
+      {validationErrors.customerName && (
+        <div role="alert" style={fieldErrorStyle}>{validationErrors.customerName}</div>
+      )}
+
+      {/* Customer Phone */}
+      <label style={labelStyle}>
+        Phone Number
+        <input
+          type="tel"
+          value={customerPhone}
+          onChange={(e) => setCustomerPhone(e.target.value)}
+          placeholder="Enter phone number"
+          style={inputStyle}
+          disabled={submitting}
+          aria-label="Customer phone number"
+        />
+      </label>
+      {validationErrors.customerPhone && (
+        <div role="alert" style={fieldErrorStyle}>{validationErrors.customerPhone}</div>
+      )}
+
+      {/* Customer Email */}
+      <label style={labelStyle}>
+        Email Address
+        <input
+          type="email"
+          value={customerEmail}
+          onChange={(e) => setCustomerEmail(e.target.value)}
+          placeholder="Enter email address"
+          style={inputStyle}
+          disabled={submitting}
+          aria-label="Customer email address"
+        />
+      </label>
+      {validationErrors.customerEmail && (
+        <div role="alert" style={fieldErrorStyle}>{validationErrors.customerEmail}</div>
+      )}
+
+      {/* Customer Address */}
+      <label style={labelStyle}>
+        Property Address
+        <input
+          type="text"
+          value={customerAddress}
+          onChange={(e) => setCustomerAddress(e.target.value)}
+          placeholder="Enter property address"
+          style={inputStyle}
+          disabled={submitting}
+          aria-label="Customer property address"
+        />
+      </label>
+      {validationErrors.customerAddress && (
+        <div role="alert" style={fieldErrorStyle}>{validationErrors.customerAddress}</div>
+      )}
+
+      {/* Service Description */}
+      <label style={labelStyle}>
+        Service Description <span style={requiredStyle}>*</span>
+        <textarea
+          value={serviceDescription}
+          onChange={(e) => setServiceDescription(e.target.value)}
+          placeholder="Describe the work the customer is requesting…"
+          rows={6}
+          style={textareaStyle}
+          disabled={submitting}
+          aria-label="Service description"
+          aria-required="true"
+        />
+      </label>
+      {validationErrors.serviceDescription && (
+        <div role="alert" style={fieldErrorStyle}>{validationErrors.serviceDescription}</div>
+      )}
 
       {/* Image upload area */}
       <div style={{ marginBottom: '1rem' }}>
@@ -280,7 +291,7 @@ export default function QuoteInputPage() {
           <button
             onClick={() => fileInputRef.current?.click()}
             style={{ ...btnOutlineStyle, marginTop: '0.75rem' }}
-            disabled={uploading || generating}
+            disabled={uploading || submitting}
             type="button"
           >
             Browse Files
@@ -299,14 +310,12 @@ export default function QuoteInputPage() {
           {uploading && <p style={{ color: '#00a89d', margin: '0.5rem 0 0', fontSize: '0.85rem' }}>Uploading…</p>}
         </div>
 
-        {/* Inline error */}
         {fileError && (
           <div role="alert" style={inlineErrorStyle}>
             {fileError}
           </div>
         )}
 
-        {/* Image thumbnails */}
         {images.length > 0 && (
           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.75rem' }}>
             {images.map((img) => (
@@ -330,20 +339,27 @@ export default function QuoteInputPage() {
         )}
       </div>
 
-      {/* Generate Quote button */}
+      {/* Submit error */}
+      {submitError && (
+        <div role="alert" style={inlineErrorStyle}>
+          {submitError}
+        </div>
+      )}
+
+      {/* Submit button */}
       <button
-        onClick={handleGenerate}
-        disabled={!canGenerate}
-        style={{ ...btnStyle, opacity: canGenerate ? 1 : 0.5 }}
+        onClick={handleSubmit}
+        disabled={submitting}
+        style={{ ...btnStyle, opacity: submitting ? 0.5 : 1 }}
         type="button"
       >
-        {generating ? (
+        {submitting ? (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
             <span style={spinnerStyle} />
             Generating Quote…
           </span>
         ) : (
-          'Generate Quote'
+          'Create Request & Generate Quote'
         )}
       </button>
     </div>
@@ -355,17 +371,33 @@ export default function QuoteInputPage() {
 const containerStyle: React.CSSProperties = { maxWidth: 700, margin: '0 auto' };
 const titleStyle: React.CSSProperties = { margin: '0 0 1.5rem', fontSize: '1.5rem' };
 
+const requiredStyle: React.CSSProperties = { color: '#d32f2f' };
+
 const labelStyle: React.CSSProperties = {
   display: 'block',
-  marginBottom: '1.25rem',
+  marginBottom: '0.5rem',
   fontSize: '0.9rem',
   fontWeight: 500,
+};
+
+const inputStyle: React.CSSProperties = {
+  display: 'block',
+  width: '100%',
+  marginTop: '0.25rem',
+  marginBottom: '0.75rem',
+  padding: '0.5rem',
+  border: '1px solid #ccc',
+  borderRadius: 4,
+  fontSize: '0.9rem',
+  boxSizing: 'border-box',
+  fontFamily: 'inherit',
 };
 
 const textareaStyle: React.CSSProperties = {
   display: 'block',
   width: '100%',
   marginTop: '0.25rem',
+  marginBottom: '0.75rem',
   padding: '0.5rem',
   border: '1px solid #ccc',
   borderRadius: 4,
@@ -373,6 +405,13 @@ const textareaStyle: React.CSSProperties = {
   boxSizing: 'border-box',
   resize: 'vertical',
   fontFamily: 'inherit',
+};
+
+const fieldErrorStyle: React.CSSProperties = {
+  color: '#d32f2f',
+  fontSize: '0.8rem',
+  marginTop: '-0.5rem',
+  marginBottom: '0.75rem',
 };
 
 const dropZoneStyle: React.CSSProperties = {
@@ -389,6 +428,7 @@ const inlineErrorStyle: React.CSSProperties = {
   padding: '0.5rem 0.75rem',
   borderRadius: 4,
   marginTop: '0.5rem',
+  marginBottom: '0.75rem',
   fontSize: '0.85rem',
 };
 
@@ -444,16 +484,6 @@ const btnOutlineStyle: React.CSSProperties = {
   borderRadius: 4,
   cursor: 'pointer',
   fontSize: '0.85rem',
-};
-
-const backBtnStyle: React.CSSProperties = {
-  padding: '0.4rem 0.75rem',
-  border: 'none',
-  background: 'transparent',
-  color: '#555',
-  cursor: 'pointer',
-  fontSize: '0.9rem',
-  marginBottom: '0.5rem',
 };
 
 const spinnerStyle: React.CSSProperties = {
