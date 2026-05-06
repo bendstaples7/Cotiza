@@ -26,19 +26,20 @@ function step(label, cmd, cwd = workerDir) {
 }
 
 // ── Setup steps (sequential, must all pass) ──────────────────
+// NOTE: migrations, token sync, and cookie sync are handled by the worker's
+// own `npm run dev` script, so they run on every worker startup automatically.
 
-step('Applying D1 migrations', 'node scripts/apply-migrations.mjs');
-step('Syncing Jobber tokens', 'node scripts/sync-tokens.mjs');
-step('Syncing Jobber cookies', 'node scripts/sync-cookies.mjs --target local');
 step('Syncing rules from production', 'node scripts/sync-rules.mjs');
 step('Syncing product catalog from production', 'node scripts/sync-catalog.mjs');
 step('Applying catalog ordering', 'node scripts/apply-catalog-order.mjs --local');
 
 // ── Start dev servers (parallel) ─────────────────────────────
+// The worker's `npm run dev` applies migrations + syncs tokens/cookies before
+// starting wrangler, so the DB is always up to date on every startup.
 
 console.log('\n🚀 Starting dev servers...\n');
 
-const worker = spawn('npx', ['wrangler', 'dev'], {
+const worker = spawn('npm', ['run', 'dev'], {
   cwd: workerDir,
   stdio: 'inherit',
   shell: true,

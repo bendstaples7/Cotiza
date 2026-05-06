@@ -1,5 +1,5 @@
 import { PlatformError } from '../errors/index.js';
-import type { ActionItem, QuoteDraft, QuoteDraftUpdate, QuoteLineItem } from 'shared';
+import type { ActionItem, LineItemRationale, QuoteDraft, QuoteDraftUpdate, QuoteLineItem, SqftResolutionResult } from 'shared';
 
 export class QuoteDraftService {
   private readonly db: D1Database;
@@ -21,8 +21,8 @@ export class QuoteDraftService {
         // Atomically compute next draft_number inside the INSERT so the
         // read and write happen in the same statement, avoiding TOCTOU races.
         this.db.prepare(
-          `INSERT INTO quote_drafts (id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(draft_number), 0) + 1 FROM quote_drafts WHERE user_id = ?))`
+          `INSERT INTO quote_drafts (id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, sqft_resolution_json, draft_number)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(draft_number), 0) + 1 FROM quote_drafts WHERE user_id = ?))`
         ).bind(
           draft.id,
           draft.userId,
@@ -33,6 +33,7 @@ export class QuoteDraftService {
           draft.jobberRequestId ?? null,
           draft.customerNote ?? null,
           draft.manualRequestId ?? null,
+          draft.sqftResolution ? JSON.stringify(draft.sqftResolution) : null,
           draft.userId,
         ),
       ];
@@ -45,7 +46,7 @@ export class QuoteDraftService {
       for (const item of allItems) {
         statements.push(
           this.db.prepare(
-            "INSERT INTO quote_line_items (id, quote_draft_id, product_catalog_entry_id, product_name, description, quantity, unit_price, confidence_score, original_text, resolved, unmatched_reason, display_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO quote_line_items (id, quote_draft_id, product_catalog_entry_id, product_name, description, quantity, unit_price, confidence_score, original_text, resolved, unmatched_reason, display_order, rationale_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
           ).bind(
             item.id,
             draft.id,
@@ -59,6 +60,7 @@ export class QuoteDraftService {
             item.resolved ? 1 : 0,
             item.unmatchedReason ?? null,
             item.displayOrder,
+            item.rationale ? JSON.stringify(item.rationale) : null,
           ),
         );
       }
@@ -94,7 +96,7 @@ export class QuoteDraftService {
     // Re-read the saved row to get DB-assigned fields (draft_number, timestamps).
     // We reuse the original draft's lineItems/unresolvedItems since they were just inserted.
     const row = await this.db.prepare(
-      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, created_at, updated_at FROM quote_drafts WHERE id = ?'
+      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, created_at, updated_at FROM quote_drafts WHERE id = ?'
     ).bind(draft.id).first() as any;
 
     return this.mapDraftRow(row, draft.lineItems, draft.unresolvedItems, draft.actionItems);
@@ -105,7 +107,7 @@ export class QuoteDraftService {
    */
   async getById(draftId: string, userId: string): Promise<QuoteDraft> {
     const row = await this.db.prepare(
-      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, created_at, updated_at FROM quote_drafts WHERE id = ? AND user_id = ?'
+      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, created_at, updated_at FROM quote_drafts WHERE id = ? AND user_id = ?'
     ).bind(draftId, userId).first() as any;
 
     if (!row) {
@@ -128,7 +130,7 @@ export class QuoteDraftService {
    */
   async list(userId: string): Promise<QuoteDraft[]> {
     const result = await this.db.prepare(
-      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, created_at, updated_at FROM quote_drafts WHERE user_id = ? ORDER BY created_at DESC'
+      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, created_at, updated_at FROM quote_drafts WHERE user_id = ? ORDER BY created_at DESC'
     ).bind(userId).all();
 
     const drafts: QuoteDraft[] = [];
@@ -228,12 +230,65 @@ export class QuoteDraftService {
     await this.db.batch(statements);
 
     const row = await this.db.prepare(
-      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, created_at, updated_at FROM quote_drafts WHERE id = ?'
+      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, created_at, updated_at FROM quote_drafts WHERE id = ?'
     ).bind(draftId).first() as any;
 
     const { lineItems, unresolvedItems } = await this.fetchLineItems(draftId);
     const actionItems = await this.fetchActionItems(draftId);
     return this.mapDraftRow(row, lineItems, unresolvedItems, actionItems);
+  }
+
+  /**
+   * Apply or clear a manual sqft override on a quote draft.
+   *
+   * - When sqftOverride is a number: sets manualOverride, preserves originalResolution,
+   *   and updates the active resolution to reflect the manual_override tier.
+   * - When sqftOverride is null: clears the override and restores the original resolution.
+   *
+   * Requirements: 7.1, 7.2, 7.3, 7.4
+   */
+  async updateSqftResolution(draftId: string, userId: string, sqftOverride: number | null): Promise<QuoteDraft> {
+    const draft = await this.getById(draftId, userId);
+
+    let newResolutionJson: string | null;
+
+    if (sqftOverride !== null) {
+      // Apply override: preserve original, set active resolution to manual_override
+      const currentResolution = draft.sqftResolution?.resolution ?? null;
+      const originalResolution = draft.sqftResolution?.originalResolution ?? currentResolution;
+
+      const overrideResult: SqftResolutionResult = {
+        resolution: {
+          resolved: true,
+          value: sqftOverride,
+          tier: 'manual_override',
+          confidence: 'high',
+          metadata: {},
+        },
+        manualOverride: sqftOverride,
+        originalResolution,
+      };
+      newResolutionJson = JSON.stringify(overrideResult);
+    } else {
+      // Clear override: restore original resolution
+      if (draft.sqftResolution?.originalResolution) {
+        const restored: SqftResolutionResult = {
+          resolution: draft.sqftResolution.originalResolution,
+          manualOverride: null,
+          originalResolution: null,
+        };
+        newResolutionJson = JSON.stringify(restored);
+      } else {
+        // No original to restore — clear entirely
+        newResolutionJson = null;
+      }
+    }
+
+    await this.db.prepare(
+      "UPDATE quote_drafts SET sqft_resolution_json = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?"
+    ).bind(newResolutionJson, draftId, userId).run();
+
+    return this.getById(draftId, userId);
   }
 
   /**
@@ -309,7 +364,7 @@ export class QuoteDraftService {
 
   private async fetchLineItems(draftId: string): Promise<{ lineItems: QuoteLineItem[]; unresolvedItems: QuoteLineItem[] }> {
     const result = await this.db.prepare(
-      'SELECT id, product_catalog_entry_id, product_name, description, quantity, unit_price, confidence_score, original_text, resolved, unmatched_reason, display_order FROM quote_line_items WHERE quote_draft_id = ? ORDER BY display_order ASC'
+      'SELECT id, product_catalog_entry_id, product_name, description, quantity, unit_price, confidence_score, original_text, resolved, unmatched_reason, display_order, rationale_json FROM quote_line_items WHERE quote_draft_id = ? ORDER BY display_order ASC'
     ).bind(draftId).all();
 
     const lineItems: QuoteLineItem[] = [];
@@ -342,6 +397,14 @@ export class QuoteDraftService {
   }
 
   private mapLineItemRow(row: Record<string, unknown>): QuoteLineItem {
+    let rationale: LineItemRationale | undefined;
+    if (row.rationale_json) {
+      try {
+        rationale = JSON.parse(row.rationale_json as string) as LineItemRationale;
+      } catch {
+        // Ignore malformed rationale — it's supplementary display data
+      }
+    }
     return {
       id: row.id as string,
       productCatalogEntryId: (row.product_catalog_entry_id as string) ?? null,
@@ -353,6 +416,7 @@ export class QuoteDraftService {
       originalText: row.original_text as string,
       resolved: row.resolved === 1 || row.resolved === true,
       unmatchedReason: (row.unmatched_reason as string) ?? undefined,
+      rationale,
     };
   }
 
@@ -365,6 +429,17 @@ export class QuoteDraftService {
     if (row.draft_number == null) {
       console.warn(`[QuoteDraftService] draft_number is NULL for draft id=${row.id}, created_at=${row.created_at} — falling back to 0`);
     }
+
+    // Deserialize sqft_resolution_json if present
+    let sqftResolution: SqftResolutionResult | null = null;
+    if (row.sqft_resolution_json) {
+      try {
+        sqftResolution = JSON.parse(row.sqft_resolution_json as string) as SqftResolutionResult;
+      } catch {
+        console.warn(`[QuoteDraftService] Failed to parse sqft_resolution_json for draft id=${row.id}`);
+      }
+    }
+
     return {
       id: row.id as string,
       draftNumber: (row.draft_number as number) ?? 0,
@@ -382,6 +457,7 @@ export class QuoteDraftService {
       status: row.status as QuoteDraft['status'],
       actionItems,
       customerNote: (row.customer_note as string) ?? null,
+      sqftResolution,
       createdAt: new Date(row.created_at as string),
       updatedAt: new Date(row.updated_at as string),
     };

@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Bindings } from '../bindings.js';
-import type { User, ProductCatalogEntry, QuoteTemplate, JobberCustomerRequest, SimilarQuote, StructuredRule, RuleCondition, RuleAction, TriggerMode, ActionItem, CreateManualRequestPayload } from 'shared';
+import type { User, ProductCatalogEntry, QuoteTemplate, JobberCustomerRequest, SimilarQuote, StructuredRule, RuleCondition, RuleAction, TriggerMode, ActionItem, CreateManualRequestPayload, UpdateProductivityRatePayload } from 'shared';
 import { sessionMiddleware } from '../middleware/session.js';
 import { PlatformError } from '../errors/index.js';
 import { JobberWebSession } from '../services/jobber-web-session.js';
@@ -16,6 +16,8 @@ import {
   QuoteSyncService,
   JobberQuotePushService,
   ManualRequestService,
+  QuantityEngine,
+  ProductivityRatesService,
 } from '../services/index.js';
 import { JobberWebhookService } from '../services/jobber-webhook-service.js';
 import { JobberTokenStore } from '../services/jobber-token-store.js';
@@ -78,6 +80,16 @@ async function createJobberIntegration(db: D1Database, env: Bindings): Promise<{
 app.use('*', sessionMiddleware);
 
 // ── Rules CRUD endpoints ──────────────────────────────────────
+
+/**
+ * GET /rules/extraction-presets
+ * Return available extraction presets for context-aware quantity rules.
+ */
+app.get('/rules/extraction-presets', async (c) => {
+  const { getExtractionPresets } = await import('../services/extraction-presets.js');
+  const presets = getExtractionPresets();
+  return c.json({ presets });
+});
 
 /**
  * GET /rules
@@ -388,7 +400,7 @@ app.post('/generate', async (c) => {
     });
   }
 
-  const quoteEngine = new QuoteEngine(c.env.AI_TEXT_API_KEY, c.env.AI_TEXT_API_URL);
+  const quoteEngine = new QuoteEngine(c.env.AI_TEXT_API_KEY, c.env.AI_TEXT_API_URL, new QuantityEngine(db), c.env.R2_BUCKET, db);
   const quoteDraftService = new QuoteDraftService(db);
 
   // Unified catalog: always read from product_catalog (manualCatalog override still supported)
@@ -425,6 +437,49 @@ app.post('/generate', async (c) => {
     }
   }
 
+  // Resolve property address for sqft public records lookup (graceful degradation)
+  let jobberPropertyAddress: string | null = null;
+  let manualRequestAddress: string | null = null;
+
+  if (body.jobberRequestId) {
+    try {
+      // Attempt to extract property address from stored Jobber request data
+      const jobberRow = await db.prepare(
+        `SELECT request_body FROM jobber_webhook_requests WHERE jobber_request_id = ? ORDER BY processed_at DESC LIMIT 1`
+      ).bind(body.jobberRequestId).first() as Record<string, unknown> | null;
+
+      if (jobberRow?.request_body) {
+        const detail = JSON.parse(jobberRow.request_body as string);
+        // Jobber property address is on the client's property record
+        const property = detail?.property;
+        if (property) {
+          const parts = [
+            property.street1,
+            property.street2,
+            property.city,
+            property.province,
+            property.postalCode,
+          ].filter((p): p is string => typeof p === 'string' && p.trim().length > 0);
+          if (parts.length > 0) {
+            jobberPropertyAddress = parts.join(', ');
+          }
+        }
+      }
+    } catch {
+      // Graceful degradation — address resolution failure must not block quote generation
+    }
+  }
+
+  if (body.manualRequestId) {
+    try {
+      const manualRequestService = new ManualRequestService(db);
+      const manualRequest = await manualRequestService.getById(body.manualRequestId, userId);
+      manualRequestAddress = manualRequest.customerAddress ?? null;
+    } catch {
+      // Graceful degradation
+    }
+  }
+
   const result = await quoteEngine.generateQuote(
     {
       customerText: body.customerText ?? '',
@@ -433,6 +488,8 @@ app.post('/generate', async (c) => {
       manualCatalog: catalog,
       manualTemplates: templates,
       similarQuotes,
+      jobberPropertyAddress,
+      manualRequestAddress,
     },
     catalog,
     templates,
@@ -604,6 +661,64 @@ app.delete('/drafts/:id', async (c) => {
   const quoteDraftService = new QuoteDraftService(c.env.DB);
   await quoteDraftService.delete(c.req.param('id'), c.get('user').id);
   return c.json({ success: true });
+});
+
+/**
+ * PATCH /drafts/:id
+ * Apply or clear a manual square footage override on a quote draft.
+ * Accepts { sqftOverride: number | null } in the request body.
+ */
+app.patch('/drafts/:id', async (c) => {
+  const userId = c.get('user').id;
+  const draftId = c.req.param('id');
+  const body = await c.req.json() as { sqftOverride?: number | null };
+
+  if (!('sqftOverride' in body)) {
+    throw new PlatformError({
+      severity: 'error',
+      component: 'QuoteRoutes',
+      operation: 'patchDraft',
+      description: 'Request body must include a "sqftOverride" field.',
+      recommendedActions: ['Provide sqftOverride as a positive number or null to clear'],
+    });
+  }
+
+  const { sqftOverride } = body;
+
+  // Validate: must be a positive number ≤ 100,000 or null (to clear)
+  if (sqftOverride !== null && sqftOverride !== undefined) {
+    if (typeof sqftOverride !== 'number' || !Number.isFinite(sqftOverride)) {
+      throw new PlatformError({
+        severity: 'error',
+        component: 'QuoteRoutes',
+        operation: 'patchDraft',
+        description: 'Enter a valid number for square footage.',
+        recommendedActions: ['Provide a numeric value for sqftOverride'],
+      });
+    }
+    if (sqftOverride <= 0) {
+      throw new PlatformError({
+        severity: 'error',
+        component: 'QuoteRoutes',
+        operation: 'patchDraft',
+        description: 'Square footage must be a positive number.',
+        recommendedActions: ['Enter a value greater than 0'],
+      });
+    }
+    if (sqftOverride > 100_000) {
+      throw new PlatformError({
+        severity: 'error',
+        component: 'QuoteRoutes',
+        operation: 'patchDraft',
+        description: 'Square footage value seems unreasonably large.',
+        recommendedActions: ['Enter a value of 100,000 or less'],
+      });
+    }
+  }
+
+  const quoteDraftService = new QuoteDraftService(c.env.DB);
+  const draft = await quoteDraftService.updateSqftResolution(draftId, userId, sqftOverride ?? null);
+  return c.json(draft);
 });
 
 /**
@@ -1261,7 +1376,8 @@ app.post('/corpus/sync', async (c) => {
 
   const { jobberIntegration, activityLog } = await createJobberIntegration(db, c.env);
   const embeddingService = new EmbeddingService(c.env.AI_TEXT_API_KEY);
-  const quoteSyncService = new QuoteSyncService(db, embeddingService, activityLog, jobberIntegration);
+  const quantityEngine = new QuantityEngine(db);
+  const quoteSyncService = new QuoteSyncService(db, embeddingService, activityLog, jobberIntegration, quantityEngine);
 
   try {
     const result = await quoteSyncService.sync();
@@ -1701,6 +1817,27 @@ app.get('/jobber/status', async (c) => {
   } catch { /* table may not exist yet */ }
 
   return c.json({ available: jobberIntegration.isAvailable() || webhookActive, webhookActive });
+});
+
+/**
+ * GET /productivity-rates
+ * Return all productivity rates ordered by display_name ascending.
+ */
+app.get('/productivity-rates', async (c) => {
+  const service = new ProductivityRatesService(c.env.DB);
+  const rates = await service.getAllRates();
+  return c.json({ rates });
+});
+
+/**
+ * PUT /productivity-rates/:id
+ * Update sqft_per_hour, display_name, and/or description for a rate.
+ */
+app.put('/productivity-rates/:id', async (c) => {
+  const service = new ProductivityRatesService(c.env.DB);
+  const body = await c.req.json() as UpdateProductivityRatePayload;
+  const rate = await service.updateRate(c.req.param('id'), body);
+  return c.json(rate);
 });
 
 export default app;

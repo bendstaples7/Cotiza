@@ -1,6 +1,7 @@
 import { EmbeddingService } from './embedding-service.js';
 import { ActivityLogService } from './activity-log-service.js';
 import { JobberIntegration } from './jobber-integration.js';
+import { QuantityEngine } from './quantity-engine.js';
 
 const EMBEDDING_BATCH_SIZE = 20;
 
@@ -20,6 +21,7 @@ interface JobberQuoteNode {
   title: string | null;
   message: string | null;
   quoteStatus: string;
+  lineItems?: { nodes: Array<{ name: string; quantity: number }> };
 }
 
 interface CorpusRecord {
@@ -40,6 +42,12 @@ const QUOTES_QUERY = `
           title
           message
           quoteStatus
+          lineItems {
+            nodes {
+              name
+              quantity
+            }
+          }
         }
       }
       pageInfo {
@@ -55,17 +63,20 @@ export class QuoteSyncService {
   private readonly embeddingService: EmbeddingService;
   private readonly activityLog: ActivityLogService;
   private readonly jobberIntegration: JobberIntegration;
+  private readonly quantityEngine?: QuantityEngine;
 
   constructor(
     db: D1Database,
     embeddingService: EmbeddingService,
     activityLog: ActivityLogService,
     jobberIntegration: JobberIntegration,
+    quantityEngine?: QuantityEngine,
   ) {
     this.db = db;
     this.embeddingService = embeddingService;
     this.activityLog = activityLog;
     this.jobberIntegration = jobberIntegration;
+    this.quantityEngine = quantityEngine;
   }
 
   /**
@@ -143,6 +154,39 @@ export class QuoteSyncService {
       // Generate embeddings in batches
       result.embeddingsGenerated = await this.generateEmbeddings(needsEmbedding);
 
+      // Extract quantity data from new/changed quotes for the Quantity Engine
+      if (this.quantityEngine) {
+        // Determine if we need a full backfill (quantity_history is empty)
+        // This handles the case where quotes were synced before the quantity_history table existed
+        const needsBackfill = await this.isQuantityHistoryEmpty();
+
+        const quotesForExtraction = needsBackfill
+          ? quotes.map(q => ({
+              jobberQuoteId: q.id,
+              quoteNumber: q.quoteNumber,
+              message: q.message,
+              lineItems: q.lineItems?.nodes,
+            }))
+          : [...newQuotes, ...changedQuotes.map(c => c.node)]
+              .map(q => ({
+                jobberQuoteId: q.id,
+                quoteNumber: q.quoteNumber,
+                message: q.message,
+                lineItems: q.lineItems?.nodes,
+              }));
+
+        if (quotesForExtraction.length > 0) {
+          const extractionResult = await this.quantityEngine.extractAndStore(quotesForExtraction);
+          await this.activityLog.log({
+            userId: 'system',
+            component: 'QuoteSyncService',
+            operation: 'quantityExtraction',
+            severity: 'info',
+            description: `Quantity extraction${needsBackfill ? ' (backfill)' : ''}: ${extractionResult.extracted} records extracted, ${extractionResult.skipped} quotes skipped from ${quotesForExtraction.length} quotes.`,
+          });
+        }
+      }
+
       const durationMs = Date.now() - startTime;
       result.durationMs = durationMs;
       await this.updateSyncStatus(result.totalFetched, durationMs, null);
@@ -207,7 +251,7 @@ export class QuoteSyncService {
   private async fetchAllQuotes(): Promise<JobberQuoteNode[]> {
     const allQuotes: JobberQuoteNode[] = [];
     let after: string | null = null;
-    const PAGE_SIZE = 50;
+    const PAGE_SIZE = 25;
 
     do {
       const data = await this.jobberIntegration.graphqlRequest<{
@@ -321,6 +365,22 @@ export class QuoteSyncService {
       }
     } catch (err) {
       console.error('[QuoteSyncService] Failed to update sync status:', err);
+    }
+  }
+
+  /**
+   * Check if the quantity_history table is empty.
+   * Used to trigger a one-time backfill when quotes were synced before the table existed.
+   */
+  private async isQuantityHistoryEmpty(): Promise<boolean> {
+    try {
+      const row = await this.db.prepare(
+        'SELECT COUNT(*) as count FROM quantity_history LIMIT 1'
+      ).first<{ count: number }>();
+      return !row || row.count === 0;
+    } catch {
+      // Table might not exist yet — treat as empty
+      return true;
     }
   }
 }
