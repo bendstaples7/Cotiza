@@ -166,6 +166,8 @@ function tokenize(formula: string): Token[] {
 class Parser {
   private tokens: Token[];
   private pos: number;
+  private depth: number = 0;
+  private static readonly MAX_DEPTH = 100;
   public referencedVariables: Set<string> = new Set();
 
   constructor(tokens: Token[]) {
@@ -248,12 +250,20 @@ class Parser {
   }
 
   private parseUnary(): (variables: Map<string, number>) => number {
-    if (this.peek().type === 'minus') {
-      this.advance();
-      const operand = this.parseUnary();
-      return (vars) => -operand(vars);
+    this.depth++;
+    if (this.depth > Parser.MAX_DEPTH) {
+      throw new FormulaError(`Formula exceeds maximum nesting depth of ${Parser.MAX_DEPTH}`);
     }
-    return this.parsePrimary();
+    try {
+      if (this.peek().type === 'minus') {
+        this.advance();
+        const operand = this.parseUnary();
+        return (vars) => -operand(vars);
+      }
+      return this.parsePrimary();
+    } finally {
+      this.depth--;
+    }
   }
 
   private parsePrimary(): (variables: Map<string, number>) => number {

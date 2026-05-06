@@ -255,7 +255,15 @@ export class SqftResolutionService {
         }
 
         const imageData = await object.arrayBuffer();
-        const base64 = btoa(String.fromCharCode(...new Uint8Array(imageData)));
+        // Convert to base64 in chunks to avoid stack overflow for large images
+        // (spreading large Uint8Array into String.fromCharCode can exceed call stack)
+        const bytes = new Uint8Array(imageData);
+        const CHUNK_SIZE = 8192;
+        let binary = '';
+        for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
+          binary += String.fromCharCode(...bytes.subarray(offset, offset + CHUNK_SIZE));
+        }
+        const base64 = btoa(binary);
         const contentType = object.httpMetadata?.contentType ?? 'image/jpeg';
 
         // Send to OpenAI vision API

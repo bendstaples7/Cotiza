@@ -40,7 +40,7 @@ const PRESETS: ExtractionPreset[] = [
     id: 'floor_count',
     name: 'Floor Count',
     description: 'Extracts floor/story counts from text (e.g., "2 floors", "2 stories", "2 levels", "2-story")',
-    pattern: '(\\d+)\\s*(?:floors?|stor(?:y|ies)|levels?)',
+    pattern: '(\\d+)[\\s-]*(?:floors?|stor(?:y|ies)|levels?)',
     variableName: 'floors',
     exampleMatches: ['2 floors', '2 stories', '2 levels', '2-story'],
   },

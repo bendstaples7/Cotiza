@@ -198,9 +198,25 @@ export function validateCondition(condition: unknown): { valid: boolean; error?:
           }
           if (pattern[i] === '(') {
             // Check if this is a non-capturing or lookahead/lookbehind group
+            // (?:...) — non-capturing
+            // (?=...) — lookahead
+            // (?!...) — negative lookahead
+            // (?<=...) — lookbehind
+            // (?<!...) — negative lookbehind
+            // (?<name>...) — named capturing group (IS a capturing group, do NOT skip)
             if (i + 1 < pattern.length && pattern[i + 1] === '?') {
-              // (?:...), (?=...), (?!...), (?<= ...), (?<!...)
-              continue;
+              const nextTwo = pattern.slice(i + 2, i + 4);
+              // Non-capturing: (?:, (?=, (?!, (?<= (lookbehind), (?<! (neg lookbehind)
+              // Named capture (?<name>) starts with (?< followed by a letter/underscore
+              const isNonCapturing =
+                nextTwo.startsWith(':') ||
+                nextTwo.startsWith('=') ||
+                nextTwo.startsWith('!') ||
+                (nextTwo.startsWith('<') && (nextTwo[1] === '=' || nextTwo[1] === '!'));
+              if (isNonCapturing) {
+                continue;
+              }
+              // (?<name>...) is a named capturing group — fall through to count it
             }
             captureGroupCount++;
           }

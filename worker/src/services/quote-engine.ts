@@ -236,8 +236,9 @@ export class QuoteEngine {
               }
             }
           }
-        } catch {
+        } catch (err) {
           // Graceful degradation — prediction failure should not block quote generation
+          console.warn('[QuoteEngine] Quantity prediction failed:', err instanceof Error ? err.message : String(err));
         }
       }
 
@@ -266,8 +267,9 @@ export class QuoteEngine {
           if (resolutionResult.resolved && resolutionResult.value !== null) {
             preResolvedContext = new Map([['sqft', resolutionResult.value]]);
           }
-        } catch {
+        } catch (err) {
           // Graceful degradation — resolution failure must not block quote generation
+          console.warn('[QuoteEngine] Sqft resolution failed:', err instanceof Error ? err.message : String(err));
         }
       }
 
@@ -285,8 +287,9 @@ export class QuoteEngine {
               preResolvedContext.set(rate.variableName, rate.sqftPerHour);
             }
           }
-        } catch {
+        } catch (err) {
           // Graceful degradation — rate loading failure must not block quote generation
+          console.warn('[QuoteEngine] Productivity rates loading failed:', err instanceof Error ? err.message : String(err));
         }
       }
 

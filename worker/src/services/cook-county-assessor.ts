@@ -47,8 +47,12 @@ export class CookCountyAssessorClient {
 
     const { houseNumber, street } = parsed;
 
+    // Escape single quotes in street name to prevent SoQL injection
+    // (e.g., "O'BRIEN ST" → "O''BRIEN ST" in SoQL string literals)
+    const escapedStreet = street.replace(/'/g, "''");
+
     // Build SODA query — filter by address prefix, order by most recent tax year first
-    const whereClause = `upper(addr) like '${houseNumber} ${street}%'`;
+    const whereClause = `upper(addr) like '${houseNumber} ${escapedStreet}%'`;
     const params = new URLSearchParams({
       $where: whereClause,
       $select: 'pin,addr,bldg_sf,class,town_code,tax_year',

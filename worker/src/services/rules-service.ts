@@ -56,8 +56,26 @@ function resolvePresetsInCondition(condition: RuleCondition): string | null {
 /**
  * Cross-validate formula variables against extracted condition variables.
  * For each compute_quantity action, verify that every variable referenced in
- * the formula is extracted by some request_text_extract condition.
+ * the formula is either:
+ *   1. Extracted by a request_text_extract condition, OR
+ *   2. A known preResolvedContext variable (sqft, productivity rates like drywall_rate)
+ *      that will be injected by the QuoteEngine before the rules engine runs.
+ *
+ * This allows formulas like "sqft / drywall_rate" where drywall_rate comes from
+ * the productivity_rates table (injected into preResolvedContext), not from a condition.
  */
+const PRE_RESOLVED_CONTEXT_VARIABLES = new Set([
+  'sqft',
+  'drywall_rate',
+  'paint_rate',
+  'paint_ceiling_rate',
+  'tile_shower_rate',
+  'tile_floor_rate',
+  'tile_bath_rate',
+  'baseboard_rate',
+  'crown_molding_rate',
+]);
+
 function crossValidateFormulaConditions(
   condition: RuleCondition,
   actions: RuleAction[],
@@ -72,10 +90,10 @@ function crossValidateFormulaConditions(
         continue;
       }
       for (const varName of formulaResult.referencedVariables) {
-        if (!extractedVars.has(varName)) {
+        if (!extractedVars.has(varName) && !PRE_RESOLVED_CONTEXT_VARIABLES.has(varName)) {
           return {
             valid: false,
-            error: `Formula references variable '${varName}' which is not extracted by any condition`,
+            error: `Formula references variable '${varName}' which is not extracted by any condition and is not a known pre-resolved variable (sqft, productivity rates)`,
           };
         }
       }
