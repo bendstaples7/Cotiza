@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { QuoteDraft, QuoteLineItem, ErrorResponse, RuleGroupWithRules, Rule, ProductCatalogEntry, ActionItem } from 'shared';
+import type { QuoteDraft, QuoteLineItem, LineItemRationale, ErrorResponse, RuleGroupWithRules, Rule, ProductCatalogEntry, ActionItem, QuantityPredictionMeta, QuantitySource, ResolutionConfidence, ResolutionTier } from 'shared';
 import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, fetchCatalog, updateCatalogEntry, pushDraftToJobber } from '../api';
 import type { JobberRequestDetail } from '../api';
 import SimilarQuotesPanel from './SimilarQuotesPanel';
@@ -58,6 +58,11 @@ export default function QuoteDraftPage() {
   const [pushError, setPushError] = useState<string | null>(null);
   const [customQty, setCustomQty] = useState('1');
   const [customPrice, setCustomPrice] = useState('');
+
+  // Sqft override state
+  const [sqftOverrideInput, setSqftOverrideInput] = useState('');
+  const [sqftOverrideSaving, setSqftOverrideSaving] = useState(false);
+  const [sqftOverrideError, setSqftOverrideError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -229,6 +234,47 @@ export default function QuoteDraftPage() {
       setPushError((err as any).message ?? 'Failed to push to Jobber.');
     } finally {
       setPushing(false);
+    }
+  };
+
+  // ── Sqft override handlers ──
+
+  const handleSaveSqftOverride = async () => {
+    if (!draft || !id || sqftOverrideSaving) return;
+    setSqftOverrideError(null);
+    const val = parseFloat(sqftOverrideInput);
+    if (isNaN(val) || val <= 0) {
+      setSqftOverrideError('Enter a valid positive number for square footage.');
+      return;
+    }
+    if (val > 100000) {
+      setSqftOverrideError('Square footage value seems unreasonably large (max 100,000).');
+      return;
+    }
+    setSqftOverrideSaving(true);
+    try {
+      const updated = await updateDraft(id, { sqftOverride: val });
+      setDraft(updated);
+      setSqftOverrideInput('');
+    } catch {
+      // Error toast shown automatically by the API layer
+    } finally {
+      setSqftOverrideSaving(false);
+    }
+  };
+
+  const handleClearSqftOverride = async () => {
+    if (!draft || !id || sqftOverrideSaving) return;
+    setSqftOverrideSaving(true);
+    setSqftOverrideError(null);
+    try {
+      const updated = await updateDraft(id, { sqftOverride: null });
+      setDraft(updated);
+      setSqftOverrideInput('');
+    } catch {
+      // Error toast shown automatically by the API layer
+    } finally {
+      setSqftOverrideSaving(false);
     }
   };
 
@@ -543,6 +589,7 @@ export default function QuoteDraftPage() {
                   <th style={thStyle}>Product Name</th>
                   <th style={{ ...thStyle, textAlign: 'right' }}>Quantity</th>
                   <th style={{ ...thStyle, textAlign: 'right' }}>Unit Price</th>
+                  <th style={{ ...thStyle, textAlign: 'right' }}>Total</th>
                   <th style={{ ...thStyle, textAlign: 'right' }}>Confidence</th>
                   <th style={{ ...thStyle, textAlign: 'center', width: 40 }}>Rules</th>
                   <th style={{ ...thStyle, textAlign: 'center', width: 36 }}></th>
@@ -681,16 +728,27 @@ export default function QuoteDraftPage() {
                               aria-label={`Edit quantity for ${item.productName}`}
                             />
                           ) : (
-                            <span
-                              onClick={() => startEditing(item.id, 'quantity', item.quantity)}
-                              style={editableCellStyle}
-                              role="button"
-                              tabIndex={0}
-                              onKeyDown={(e) => { if (e.key === 'Enter') startEditing(item.id, 'quantity', item.quantity); }}
-                              aria-label={`Quantity: ${item.quantity}. Click to edit.`}
-                            >
-                              {item.quantity}
-                            </span>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.2rem' }}>
+                              <span
+                                onClick={() => startEditing(item.id, 'quantity', item.quantity)}
+                                style={editableCellStyle}
+                                role="button"
+                                tabIndex={0}
+                                onKeyDown={(e) => { if (e.key === 'Enter') startEditing(item.id, 'quantity', item.quantity); }}
+                                aria-label={`Quantity: ${item.quantity}. Click to edit.`}
+                              >
+                                {item.quantity}
+                              </span>
+                              {item.quantityPrediction && (
+                                <span
+                                  style={quantitySourceBadgeStyle(item.quantityPrediction.quantitySource)}
+                                  title={getQuantitySourceTooltip(item.quantityPrediction)}
+                                  aria-label={getQuantitySourceTooltip(item.quantityPrediction)}
+                                >
+                                  {getQuantitySourceLabel(item.quantityPrediction.quantitySource)}
+                                </span>
+                              )}
+                            </div>
                           )}
                         </td>
                         <td style={{ ...tdStyle, textAlign: 'right', padding: isEditingPrice ? '0.3rem 0.5rem' : undefined }}>
@@ -720,6 +778,9 @@ export default function QuoteDraftPage() {
                               ${item.unitPrice.toFixed(2)}
                             </span>
                           )}
+                        </td>
+                        <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 600 }}>
+                          ${(item.quantity * item.unitPrice).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                         <td style={{ ...tdStyle, textAlign: 'right' }}>
                           <span style={confidenceBadgeStyle(item.confidenceScore)}>
@@ -751,7 +812,7 @@ export default function QuoteDraftPage() {
                       {isExpanded && (
                         <tr>
                           <td
-                            colSpan={7}
+                            colSpan={8}
                             style={{ padding: 0, border: 'none' }}
                           >
                             <div
@@ -762,44 +823,7 @@ export default function QuoteDraftPage() {
                               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleRuleRow(item.id); } }}
                               aria-label="Click to close rules panel"
                             >
-                              {!hasRules ? (
-                                <div>
-                                  {item.originalText && item.originalText !== MANUALLY_ADDED_SENTINEL ? (
-                                    <>
-                                      <p style={ruleGroupHeadingStyle}>AI-Matched from Request</p>
-                                      <p style={{ ...noRulesTextStyle, fontStyle: 'normal' }}>
-                                        &ldquo;{item.originalText}&rdquo;
-                                      </p>
-                                    </>
-                                  ) : item.originalText === MANUALLY_ADDED_SENTINEL ? (
-                                    <p style={noRulesTextStyle}>Manually added by user</p>
-                                  ) : (
-                                    <p style={noRulesTextStyle}>No specific rules were applied</p>
-                                  )}
-                                </div>
-                              ) : (
-                                <>
-                                  {item.originalText && item.originalText !== MANUALLY_ADDED_SENTINEL && (
-                                    <div style={{ marginBottom: '0.5rem' }}>
-                                      <p style={ruleGroupHeadingStyle}>AI-Matched from Request</p>
-                                      <p style={{ ...noRulesTextStyle, fontStyle: 'normal' }}>
-                                        &ldquo;{item.originalText}&rdquo;
-                                      </p>
-                                    </div>
-                                  )}
-                                  {Array.from(appliedGrouped.entries()).map(([groupName, rules]) => (
-                                    <div key={groupName} style={{ marginBottom: '0.5rem' }}>
-                                      <p style={ruleGroupHeadingStyle}>{groupName}</p>
-                                      {rules.map((rule) => (
-                                        <div key={rule.id} style={ruleEntryStyle}>
-                                          <span style={ruleNameStyle}>{rule.name}</span>
-                                          <span style={ruleDescStyle}>{rule.description}</span>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  ))}
-                                </>
-                              )}
+                              <LineItemRationalePanel item={item} appliedGrouped={appliedGrouped} />
                             </div>
                           </td>
                         </tr>
@@ -808,6 +832,17 @@ export default function QuoteDraftPage() {
                   );
                 })}
               </tbody>
+              <tfoot>
+                <tr>
+                  <td colSpan={4} style={{ padding: '0.6rem 0.75rem', borderTop: '2px solid #e0e0e0', fontWeight: 700, fontSize: '0.9rem', textAlign: 'right', color: '#333' }}>
+                    Quote Total
+                  </td>
+                  <td style={{ padding: '0.6rem 0.75rem', borderTop: '2px solid #e0e0e0', fontWeight: 700, fontSize: '0.95rem', textAlign: 'right', color: '#00a89d' }}>
+                    ${draft.lineItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </td>
+                  <td colSpan={3} style={{ borderTop: '2px solid #e0e0e0' }} />
+                </tr>
+              </tfoot>
             </table>
           </div>
         )}
@@ -999,6 +1034,116 @@ export default function QuoteDraftPage() {
           </div>
         );
       })()}
+
+      {/* Square Footage Resolution */}
+      <div style={sqftResolutionSectionStyle}>
+        <h2 style={sectionTitleStyle}>📐 Square Footage</h2>
+        {draft.sqftResolution?.resolution.resolved ? (
+          <>
+            {/* Active resolution display */}
+            <div style={sqftResolutionRowStyle}>
+              <span style={sqftValueStyle}>
+                {(draft.sqftResolution.manualOverride ?? draft.sqftResolution.resolution.value)?.toLocaleString()} sq ft
+              </span>
+              <span style={sqftTierLabelStyle}>
+                {getTierLabel(draft.sqftResolution.resolution.tier)}
+              </span>
+              {draft.sqftResolution.resolution.confidence && (
+                <span style={sqftConfidenceBadgeStyle(draft.sqftResolution.resolution.confidence)}>
+                  {draft.sqftResolution.resolution.confidence}
+                </span>
+              )}
+            </div>
+
+            {/* Tier-specific metadata */}
+            {draft.sqftResolution.resolution.tier === 'text_extraction' && draft.sqftResolution.resolution.metadata.matchedText && (
+              <p style={sqftMetaTextStyle}>
+                Matched: &ldquo;{draft.sqftResolution.resolution.metadata.matchedText}&rdquo;
+              </p>
+            )}
+            {draft.sqftResolution.resolution.tier === 'layout_diagram' && (
+              <div style={sqftMetaTextStyle}>
+                {draft.sqftResolution.resolution.metadata.imageId && (
+                  <span>Image: {draft.sqftResolution.resolution.metadata.imageId}</span>
+                )}
+                {draft.sqftResolution.resolution.metadata.aiReasoning && (
+                  <p style={{ margin: '0.25rem 0 0', fontStyle: 'italic' }}>
+                    {draft.sqftResolution.resolution.metadata.aiReasoning}
+                  </p>
+                )}
+              </div>
+            )}
+            {draft.sqftResolution.resolution.tier === 'public_records' && draft.sqftResolution.resolution.metadata.propertyAddress && (
+              <p style={sqftMetaTextStyle}>
+                Property: {draft.sqftResolution.resolution.metadata.propertyAddress}
+              </p>
+            )}
+
+            {/* Original resolution when override is active */}
+            {draft.sqftResolution.manualOverride !== null && draft.sqftResolution.originalResolution?.resolved && (
+              <div style={sqftOriginalResolutionStyle}>
+                <span style={{ fontWeight: 600, fontSize: '0.75rem', color: '#888' }}>Original: </span>
+                <span style={{ fontSize: '0.8rem', color: '#666' }}>
+                  {draft.sqftResolution.originalResolution.value?.toLocaleString()} sq ft
+                  {' '}({getTierLabel(draft.sqftResolution.originalResolution.tier)})
+                </span>
+                <button
+                  onClick={handleClearSqftOverride}
+                  disabled={sqftOverrideSaving}
+                  style={sqftClearBtnStyle}
+                  aria-label="Clear manual override and restore original resolution"
+                >
+                  {sqftOverrideSaving ? 'Clearing…' : 'Clear override'}
+                </button>
+              </div>
+            )}
+          </>
+        ) : (
+          <p style={sqftUnavailableStyle} role="status">
+            Square footage unavailable — quantity rules requiring it will use default values.
+          </p>
+        )}
+
+        {/* Manual override input — only shown when no override is currently active */}
+        {(draft.sqftResolution?.manualOverride === null || draft.sqftResolution?.manualOverride === undefined) && (
+          <div style={sqftOverrideFormStyle}>
+            <label htmlFor="sqft-override-input" style={sqftOverrideLabelStyle}>
+              {draft.sqftResolution?.resolution.resolved ? 'Override square footage:' : 'Set square footage manually:'}
+            </label>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                id="sqft-override-input"
+                type="number"
+                min={1}
+                max={100000}
+                step={1}
+                value={sqftOverrideInput}
+                onChange={(e) => { setSqftOverrideInput(e.target.value); setSqftOverrideError(null); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSaveSqftOverride(); }}
+                placeholder="e.g. 1500"
+                style={sqftOverrideInputStyle}
+                aria-label="Manual square footage override value"
+                disabled={sqftOverrideSaving}
+              />
+              <button
+                onClick={handleSaveSqftOverride}
+                disabled={!sqftOverrideInput.trim() || sqftOverrideSaving}
+                style={{
+                  ...sqftSaveBtnStyle,
+                  opacity: sqftOverrideInput.trim() && !sqftOverrideSaving ? 1 : 0.5,
+                  cursor: sqftOverrideInput.trim() && !sqftOverrideSaving ? 'pointer' : 'not-allowed',
+                }}
+                aria-label="Save manual square footage override"
+              >
+                {sqftOverrideSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+            {sqftOverrideError && (
+              <p style={sqftOverrideErrorStyle} role="alert">{sqftOverrideError}</p>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Feedback input */}
       <div style={sectionStyle}>
@@ -1392,6 +1537,104 @@ const tdStyle: React.CSSProperties = {
   fontSize: '0.9rem',
 };
 
+// ---------------------------------------------------------------------------
+// LineItemRationalePanel — shown when the ℹ button is clicked on a line item
+// ---------------------------------------------------------------------------
+
+function LineItemRationalePanel({
+  item,
+  appliedGrouped,
+}: {
+  item: QuoteLineItem;
+  appliedGrouped: Map<string, Rule[]>;
+}) {
+  const r = item.rationale;
+  const hasRules = appliedGrouped.size > 0;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+
+      {/* ── Why was this item added? ── */}
+      <div>
+        <p style={ruleGroupHeadingStyle}>Why was this item added?</p>
+        {r?.addedByRuleName ? (
+          <div style={ruleEntryStyle}>
+            <span style={ruleNameStyle}>Rule: {r.addedByRuleName}</span>
+            {r.conditionSummary && (
+              <span style={ruleDescStyle}>Condition: {r.conditionSummary}</span>
+            )}
+          </div>
+        ) : item.originalText && item.originalText !== MANUALLY_ADDED_SENTINEL ? (
+          <p style={{ ...noRulesTextStyle, fontStyle: 'normal' }}>
+            AI matched from customer request: &ldquo;{item.originalText}&rdquo;
+          </p>
+        ) : item.originalText === MANUALLY_ADDED_SENTINEL ? (
+          <p style={noRulesTextStyle}>Manually added by user</p>
+        ) : (
+          <p style={noRulesTextStyle}>AI-generated — no specific rule triggered this item</p>
+        )}
+      </div>
+
+      {/* ── Why is the quantity what it is? ── */}
+      <div>
+        <p style={ruleGroupHeadingStyle}>Why is the quantity {item.quantity}?</p>
+        {r?.quantityFormula ? (
+          <div style={ruleEntryStyle}>
+            <span style={ruleNameStyle}>
+              Formula: <code style={{ fontFamily: 'monospace', background: '#f5f5f5', padding: '0.1rem 0.3rem', borderRadius: 3 }}>{r.quantityFormula}</code>
+            </span>
+            {r.quantityVariables && Object.keys(r.quantityVariables).length > 0 && (
+              <div style={{ marginTop: '0.3rem' }}>
+                <span style={ruleDescStyle}>Variables used:</span>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginTop: '0.2rem' }}>
+                  {Object.entries(r.quantityVariables).map(([key, val]) => (
+                    <span key={key} style={{ fontFamily: 'monospace', fontSize: '0.78rem', background: '#e8f5e9', color: '#2e7d32', padding: '0.1rem 0.4rem', borderRadius: 4 }}>
+                      {key} = {typeof val === 'number' ? val.toLocaleString() : val}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {r.quantityBefore != null && r.quantityAfter != null && (
+              <span style={{ ...ruleDescStyle, marginTop: '0.25rem', display: 'block' }}>
+                Result: {r.quantityBefore} → <strong>{r.quantityAfter}</strong>
+              </span>
+            )}
+          </div>
+        ) : item.quantityPrediction ? (
+          <p style={noRulesTextStyle}>
+            {item.quantityPrediction.quantitySource === 'historical_prediction'
+              ? `Predicted from ${item.quantityPrediction.sourceQuoteNumbers.length} similar past quote(s) (confidence: ${item.quantityPrediction.confidenceScore}%)`
+              : item.quantityPrediction.quantitySource === 'rule_override'
+              ? 'Set by a business rule'
+              : 'AI estimate based on customer request'}
+          </p>
+        ) : (
+          <p style={noRulesTextStyle}>AI estimate based on customer request</p>
+        )}
+      </div>
+
+      {/* ── Applied rules (legacy lookup by ID) ── */}
+      {hasRules && (
+        <div>
+          <p style={ruleGroupHeadingStyle}>Applied Rules</p>
+          {Array.from(appliedGrouped.entries()).map(([groupName, rules]) => (
+            <div key={groupName} style={{ marginBottom: '0.4rem' }}>
+              <span style={{ fontSize: '0.75rem', color: '#888', fontWeight: 600 }}>{groupName}</span>
+              {rules.map((rule) => (
+                <div key={rule.id} style={ruleEntryStyle}>
+                  <span style={ruleNameStyle}>{rule.name}</span>
+                  {rule.description && <span style={ruleDescStyle}>{rule.description}</span>}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function confidenceBadgeStyle(score: number): React.CSSProperties {
   const bg = score >= 90 ? '#e0f7f5' : score >= 70 ? '#fff3e0' : '#fdecea';
   const color = score >= 90 ? '#00a89d' : score >= 70 ? '#e65100' : '#611a15';
@@ -1403,6 +1646,60 @@ function confidenceBadgeStyle(score: number): React.CSSProperties {
     fontWeight: 600,
     background: bg,
     color,
+  };
+}
+
+// ── Quantity Source Badge Helpers ──
+
+function getQuantitySourceLabel(source: QuantitySource): string {
+  switch (source) {
+    case 'ai_estimate': return 'AI estimate';
+    case 'historical_prediction': return 'Historical prediction';
+    case 'rule_override': return 'Rule override';
+    default: return '';
+  }
+}
+
+function getQuantitySourceTooltip(prediction: QuantityPredictionMeta): string {
+  const label = getQuantitySourceLabel(prediction.quantitySource);
+  if (prediction.quantitySource === 'historical_prediction') {
+    const parts = [`${label} (confidence: ${prediction.confidenceScore}%)`];
+    if (prediction.sourceQuoteNumbers.length > 0) {
+      parts.push(`Source quotes: ${prediction.sourceQuoteNumbers.join(', ')}`);
+    }
+    return parts.join('\n');
+  }
+  return label;
+}
+
+function quantitySourceBadgeStyle(source: QuantitySource): React.CSSProperties {
+  let bg: string;
+  let color: string;
+  switch (source) {
+    case 'historical_prediction':
+      bg = '#e3f2fd';
+      color = '#1565c0';
+      break;
+    case 'rule_override':
+      bg = '#fce4ec';
+      color = '#c62828';
+      break;
+    case 'ai_estimate':
+    default:
+      bg = '#f3e5f5';
+      color = '#6a1b9a';
+      break;
+  }
+  return {
+    display: 'inline-block',
+    padding: '0.1rem 0.4rem',
+    borderRadius: 8,
+    fontSize: '0.65rem',
+    fontWeight: 600,
+    background: bg,
+    color,
+    whiteSpace: 'nowrap',
+    cursor: source === 'historical_prediction' ? 'help' : 'default',
   };
 }
 
@@ -1814,4 +2111,142 @@ const updateCatalogLabelStyle: React.CSSProperties = {
   marginTop: '0.25rem',
   cursor: 'pointer',
   userSelect: 'none',
+};
+
+// ── Sqft Resolution Helpers ──
+
+function getTierLabel(tier: ResolutionTier | null): string {
+  switch (tier) {
+    case 'text_extraction': return 'Extracted from request text';
+    case 'layout_diagram': return 'Estimated from layout diagram';
+    case 'public_records': return 'From public records';
+    case 'manual_override': return 'Manual override';
+    default: return 'Unknown source';
+  }
+}
+
+function sqftConfidenceBadgeStyle(confidence: ResolutionConfidence): React.CSSProperties {
+  const map: Record<ResolutionConfidence, { bg: string; color: string }> = {
+    high: { bg: '#e0f7f5', color: '#00695c' },
+    medium: { bg: '#fff8e1', color: '#e65100' },
+    low: { bg: '#f5f5f5', color: '#757575' },
+  };
+  const { bg, color } = map[confidence] ?? { bg: '#f5f5f5', color: '#757575' };
+  return {
+    display: 'inline-block',
+    padding: '0.15rem 0.5rem',
+    borderRadius: 12,
+    fontSize: '0.75rem',
+    fontWeight: 600,
+    background: bg,
+    color,
+    textTransform: 'capitalize',
+  };
+}
+
+// ── Sqft Resolution Styles ──
+
+const sqftResolutionSectionStyle: React.CSSProperties = {
+  background: '#fff',
+  border: '1px solid #e0e0e0',
+  borderRadius: 8,
+  padding: '1rem 1.25rem',
+  marginBottom: '1rem',
+};
+
+const sqftResolutionRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '0.6rem',
+  flexWrap: 'wrap',
+  marginBottom: '0.4rem',
+};
+
+const sqftValueStyle: React.CSSProperties = {
+  fontSize: '1.1rem',
+  fontWeight: 700,
+  color: '#333',
+};
+
+const sqftTierLabelStyle: React.CSSProperties = {
+  fontSize: '0.8rem',
+  color: '#666',
+  background: '#f5f5f5',
+  padding: '0.15rem 0.5rem',
+  borderRadius: 10,
+};
+
+const sqftMetaTextStyle: React.CSSProperties = {
+  margin: '0 0 0.5rem',
+  fontSize: '0.8rem',
+  color: '#888',
+};
+
+const sqftOriginalResolutionStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '0.5rem',
+  flexWrap: 'wrap',
+  marginTop: '0.5rem',
+  padding: '0.4rem 0.6rem',
+  background: '#f9f9f9',
+  borderRadius: 6,
+  border: '1px solid #eee',
+};
+
+const sqftClearBtnStyle: React.CSSProperties = {
+  marginLeft: 'auto',
+  background: 'none',
+  border: '1px solid #ccc',
+  borderRadius: 4,
+  padding: '0.2rem 0.6rem',
+  fontSize: '0.75rem',
+  color: '#555',
+  cursor: 'pointer',
+};
+
+const sqftUnavailableStyle: React.CSSProperties = {
+  margin: '0 0 0.75rem',
+  fontSize: '0.85rem',
+  color: '#888',
+  fontStyle: 'italic',
+};
+
+const sqftOverrideFormStyle: React.CSSProperties = {
+  marginTop: '0.75rem',
+  paddingTop: '0.75rem',
+  borderTop: '1px solid #f0f0f0',
+};
+
+const sqftOverrideLabelStyle: React.CSSProperties = {
+  display: 'block',
+  fontSize: '0.8rem',
+  fontWeight: 600,
+  color: '#555',
+  marginBottom: '0.4rem',
+};
+
+const sqftOverrideInputStyle: React.CSSProperties = {
+  width: 120,
+  padding: '0.4rem 0.6rem',
+  border: '1px solid #ccc',
+  borderRadius: 6,
+  fontSize: '0.9rem',
+  boxSizing: 'border-box',
+};
+
+const sqftSaveBtnStyle: React.CSSProperties = {
+  padding: '0.4rem 0.9rem',
+  background: '#00a89d',
+  color: '#fff',
+  border: 'none',
+  borderRadius: 6,
+  fontSize: '0.85rem',
+  fontWeight: 600,
+};
+
+const sqftOverrideErrorStyle: React.CSSProperties = {
+  margin: '0.35rem 0 0',
+  fontSize: '0.8rem',
+  color: '#d32f2f',
 };

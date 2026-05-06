@@ -5,6 +5,7 @@ import type { Bindings } from './bindings.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { handleImageQueue } from './queue/image-consumer.js';
 import type { ImageJobMessage } from './queue/image-consumer.js';
+import { handleScheduledSync } from './scheduled/corpus-sync.js';
 import authRoutes from './routes/auth.js';
 import mediaRoutes from './routes/media.js';
 import postRoutes from './routes/posts.js';
@@ -101,5 +102,8 @@ export default {
   fetch: app.fetch,
   async queue(batch: MessageBatch<ImageJobMessage>, env: Bindings): Promise<void> {
     await handleImageQueue(batch, env);
+  },
+  async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext): Promise<void> {
+    await handleScheduledSync(env, ctx);
   },
 };

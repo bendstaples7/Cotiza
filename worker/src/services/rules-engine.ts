@@ -8,6 +8,7 @@ import type {
   ProductCatalogEntry,
   PendingEnrichment,
 } from 'shared';
+import { evaluateFormula, validateFormula, FormulaError } from './formula-evaluator.js';
 
 // ---------------------------------------------------------------------------
 // Pattern matching helper
@@ -42,6 +43,8 @@ export interface RulesEngineInput {
   catalog: ProductCatalogEntry[];
   customerRequestText?: string;
   maxIterations?: number;
+  /** Pre-populated context variables (e.g. resolved sqft) injected before rule evaluation */
+  preResolvedContext?: Map<string, number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -51,6 +54,8 @@ export interface RulesEngineInput {
 interface ConditionResult {
   matched: boolean;
   matchingLineItemIds: string[];
+  contextVariables?: Map<string, number>;
+  rawExtractedText?: Map<string, string>;
 }
 
 interface ActionResult {
@@ -66,6 +71,13 @@ interface ActionResult {
     matchingLineItemIds: string[];
   };
   customerNoteValue?: string;
+  computedQuantityMeta?: {
+    formula: string;
+    variableValues: Record<string, number>;
+    rawExtractedText: Record<string, string>;
+    previousQuantity: number;
+    computedQuantity: number;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +91,8 @@ const CONDITION_TYPES = new Set([
   'line_item_quantity_gte',
   'line_item_quantity_lte',
   'request_text_contains',
+  'request_text_extract',
+  'compound',
   'always',
 ]);
 
@@ -94,6 +108,7 @@ const ACTION_TYPES = new Set([
   'extract_request_context',
   'set_customer_note',
   'append_customer_note',
+  'compute_quantity',
 ]);
 
 export function validateCondition(condition: unknown): { valid: boolean; error?: string } {
@@ -157,6 +172,66 @@ export function validateCondition(condition: unknown): { valid: boolean; error?:
     case 'always':
       // No additional fields required
       break;
+
+    case 'request_text_extract': {
+      if (typeof cond.pattern !== 'string' || cond.pattern.trim().length === 0) {
+        return { valid: false, error: 'Condition type "request_text_extract" requires a non-empty string "pattern" field' };
+      }
+      if (typeof cond.variableName !== 'string' || cond.variableName.trim().length === 0) {
+        return { valid: false, error: 'Condition type "request_text_extract" requires a non-empty string "variableName" field' };
+      }
+      // Validate regex is syntactically valid
+      try {
+        new RegExp(cond.pattern as string, 'i');
+      } catch (e) {
+        return { valid: false, error: `Invalid regex pattern: ${e instanceof Error ? e.message : String(e)}` };
+      }
+      // Validate exactly one capture group
+      {
+        const pattern = cond.pattern as string;
+        let captureGroupCount = 0;
+        for (let i = 0; i < pattern.length; i++) {
+          // Skip escaped characters
+          if (pattern[i] === '\\') {
+            i++;
+            continue;
+          }
+          if (pattern[i] === '(') {
+            // Check if this is a non-capturing or lookahead/lookbehind group
+            if (i + 1 < pattern.length && pattern[i + 1] === '?') {
+              // (?:...), (?=...), (?!...), (?<= ...), (?<!...)
+              continue;
+            }
+            captureGroupCount++;
+          }
+        }
+        if (captureGroupCount === 0) {
+          return { valid: false, error: 'Extraction pattern must contain exactly one capture group' };
+        }
+        if (captureGroupCount > 1) {
+          return { valid: false, error: `Extraction pattern must contain exactly one capture group, found ${captureGroupCount}` };
+        }
+      }
+      break;
+    }
+
+    case 'compound': {
+      if (!Array.isArray(cond.conditions) || cond.conditions.length === 0) {
+        return { valid: false, error: 'Compound condition must contain at least one sub-condition' };
+      }
+      // Validate each sub-condition recursively, reject nested compounds
+      for (let i = 0; i < (cond.conditions as unknown[]).length; i++) {
+        const subCond = (cond.conditions as Record<string, unknown>[])[i];
+        if (subCond && typeof subCond === 'object' && (subCond as Record<string, unknown>).type === 'compound') {
+          return { valid: false, error: 'Compound conditions cannot be nested (max depth: 1)' };
+        }
+        const subResult = validateCondition(subCond);
+        if (!subResult.valid) {
+          return { valid: false, error: `Compound sub-condition[${i}]: ${subResult.error}` };
+        }
+      }
+      break;
+    }
   }
 
   return { valid: true };
@@ -355,6 +430,26 @@ export function validateAction(action: unknown): { valid: boolean; error?: strin
         return { valid: false, error: 'append_customer_note "separator" must be a string if provided' };
       }
       break;
+
+    case 'compute_quantity':
+      if (typeof act.productNamePattern !== 'string' || act.productNamePattern.trim().length === 0) {
+        return { valid: false, error: 'Action type "compute_quantity" requires a non-empty string "productNamePattern" field' };
+      }
+      if (typeof act.formula !== 'string' || act.formula.trim().length === 0) {
+        return { valid: false, error: 'Action type "compute_quantity" requires a non-empty string "formula" field' };
+      }
+      {
+        const formulaValidation = validateFormula(act.formula as string);
+        if (!formulaValidation.valid) {
+          return { valid: false, error: `Invalid formula syntax: ${formulaValidation.error}` };
+        }
+      }
+      if (act.matchMode !== undefined) {
+        if (act.matchMode !== 'exact' && act.matchMode !== 'starts_with' && act.matchMode !== 'contains') {
+          return { valid: false, error: 'matchMode must be "exact", "starts_with", or "contains"' };
+        }
+      }
+      break;
   }
 
   return { valid: true };
@@ -388,6 +483,7 @@ export function evaluateCondition(
   condition: RuleCondition,
   lineItems: EngineLineItem[],
   customerRequestText?: string,
+  preResolvedContext?: Map<string, number>,
 ): ConditionResult {
   switch (condition.type) {
     case 'line_item_exists': {
@@ -456,6 +552,110 @@ export function evaluateCondition(
       };
     }
 
+    case 'request_text_extract': {
+      // If the variable is already pre-resolved, skip extraction and use the pre-resolved value
+      if (preResolvedContext?.has(condition.variableName)) {
+        const preResolvedValue = preResolvedContext.get(condition.variableName)!;
+        const contextVariables = new Map<string, number>([[condition.variableName, preResolvedValue]]);
+        const rawExtractedText = new Map<string, string>([[condition.variableName, String(preResolvedValue)]]);
+        return {
+          matched: true,
+          matchingLineItemIds: lineItems.map((li) => li.id),
+          contextVariables,
+          rawExtractedText,
+        };
+      }
+
+      const text = customerRequestText ?? '';
+      let regex: RegExp;
+      try {
+        regex = new RegExp(condition.pattern, 'i');
+      } catch {
+        // Invalid regex at runtime — treat as non-match
+        return { matched: false, matchingLineItemIds: [], contextVariables: new Map(), rawExtractedText: new Map() };
+      }
+
+      const match = regex.exec(text);
+      if (!match || match[1] === undefined) {
+        return { matched: false, matchingLineItemIds: [], contextVariables: new Map(), rawExtractedText: new Map() };
+      }
+
+      const rawValue = match[1];
+      // Strip commas and parse as number
+      const numericValue = parseFloat(rawValue.replace(/,/g, ''));
+
+      const contextVariables = new Map<string, number>();
+      const rawExtractedText = new Map<string, string>();
+
+      if (!isNaN(numericValue)) {
+        contextVariables.set(condition.variableName, numericValue);
+      }
+      rawExtractedText.set(condition.variableName, rawValue);
+
+      return {
+        matched: true,
+        matchingLineItemIds: lineItems.map((li) => li.id),
+        contextVariables,
+        rawExtractedText,
+      };
+    }
+
+    case 'compound': {
+      const aggregatedVariables = new Map<string, number>();
+      const aggregatedRawText = new Map<string, string>();
+      // Track line-item-targeting condition IDs for intersection
+      let lineItemIds: string[] | null = null;
+
+      for (const subCondition of condition.conditions) {
+        const subResult = evaluateCondition(subCondition, lineItems, customerRequestText, preResolvedContext);
+
+        // Short-circuit: if any sub-condition doesn't match, compound fails
+        if (!subResult.matched) {
+          return { matched: false, matchingLineItemIds: [], contextVariables: new Map(), rawExtractedText: new Map() };
+        }
+
+        // Aggregate context variables
+        if (subResult.contextVariables) {
+          for (const [key, value] of subResult.contextVariables) {
+            aggregatedVariables.set(key, value);
+          }
+        }
+
+        // Aggregate raw extracted text
+        if (subResult.rawExtractedText) {
+          for (const [key, value] of subResult.rawExtractedText) {
+            aggregatedRawText.set(key, value);
+          }
+        }
+
+        // Intersect matchingLineItemIds from line-item-targeting conditions
+        // Text-only conditions (request_text_contains, request_text_extract, always)
+        // return all line item IDs — don't use those for intersection
+        const isLineItemTargeting = subCondition.type !== 'request_text_contains'
+          && subCondition.type !== 'request_text_extract'
+          && subCondition.type !== 'always';
+
+        if (isLineItemTargeting && subResult.matchingLineItemIds.length > 0) {
+          if (lineItemIds === null) {
+            lineItemIds = [...subResult.matchingLineItemIds];
+          } else {
+            const subSet = new Set(subResult.matchingLineItemIds);
+            lineItemIds = lineItemIds.filter((id) => subSet.has(id));
+          }
+        }
+      }
+
+      // If no line-item-targeting conditions, return all line item IDs
+      const finalIds = lineItemIds ?? lineItems.map((li) => li.id);
+
+      return {
+        matched: true,
+        matchingLineItemIds: finalIds,
+        contextVariables: aggregatedVariables,
+        rawExtractedText: aggregatedRawText,
+      };
+    }
+
     case 'always':
       return { matched: true, matchingLineItemIds: lineItems.map((li) => li.id) };
 
@@ -490,6 +690,8 @@ export function executeAction(
   catalog: ProductCatalogEntry[],
   ruleId: string,
   customerNote: string | null,
+  contextVariables?: Map<string, number>,
+  rawExtractedText?: Map<string, string>,
 ): ActionResult {
   switch (action.type) {
     case 'add_line_item': {
@@ -885,6 +1087,102 @@ export function executeAction(
       };
     }
 
+    case 'compute_quantity': {
+      const vars = contextVariables ?? new Map<string, number>();
+      const rawText = rawExtractedText ?? new Map<string, string>();
+
+      // Find matching line items
+      const matching = lineItems.filter(
+        (li) => matchesProductName(li.productName, action.productNamePattern, action.matchMode),
+      );
+
+      if (matching.length === 0) {
+        return { modified: false, lineItems };
+      }
+
+      // Evaluate formula
+      let computedValue: number;
+      try {
+        computedValue = evaluateFormula(action.formula, vars);
+      } catch (e) {
+        if (e instanceof FormulaError && e.message.startsWith("Missing variable")) {
+          // Missing variable — skip with warning
+          return {
+            modified: false,
+            lineItems,
+            warning: `compute_quantity skipped: ${e.message}`,
+          };
+        }
+        // Non-finite result or other formula error — skip with error
+        return {
+          modified: false,
+          lineItems,
+          warning: `compute_quantity error: ${e instanceof Error ? e.message : String(e)}`,
+        };
+      }
+
+      // Check for non-finite result (defensive — evaluateFormula should catch this)
+      if (!Number.isFinite(computedValue)) {
+        return {
+          modified: false,
+          lineItems,
+          warning: `compute_quantity error: Formula produced a non-finite result`,
+        };
+      }
+
+      // Round to nearest integer
+      let finalQuantity = Math.round(computedValue);
+
+      // Clamp ≤ 0 to 1
+      const clamped = finalQuantity <= 0;
+      if (clamped) {
+        finalQuantity = 1;
+      }
+
+      const before = snapshot(matching);
+
+      // Apply quantity to matching line items
+      const updated = lineItems.map((li) => {
+        if (matchesProductName(li.productName, action.productNamePattern, action.matchMode)) {
+          return {
+            ...li,
+            quantity: finalQuantity,
+            ruleIdsApplied: [...li.ruleIdsApplied, ruleId],
+          };
+        }
+        return li;
+      });
+
+      // Build computedQuantityMeta for audit
+      const variableValues: Record<string, number> = {};
+      for (const [key, value] of vars) {
+        variableValues[key] = value;
+      }
+      const rawExtractedTextRecord: Record<string, string> = {};
+      for (const [key, value] of rawText) {
+        rawExtractedTextRecord[key] = value;
+      }
+
+      const after = snapshot(
+        updated.filter((li) => matchesProductName(li.productName, action.productNamePattern, action.matchMode)),
+      );
+
+      return {
+        modified: true,
+        lineItems: updated,
+        beforeSnapshot: before,
+        afterSnapshot: after,
+        warning: clamped ? `compute_quantity: result ${computedValue} was ≤ 0, clamped to 1` : undefined,
+        computedQuantityMeta: {
+          formula: action.formula,
+          variableValues,
+          rawExtractedText: rawExtractedTextRecord,
+          previousQuantity: matching[0].quantity,
+          computedQuantity: finalQuantity,
+        },
+      };
+    }
+
     default:
       return { modified: false, lineItems };
   }
@@ -897,7 +1195,7 @@ export function executeAction(
 const DEFAULT_MAX_ITERATIONS = 10;
 
 export function executeRules(input: RulesEngineInput): RulesEngineResult {
-  const { rules, catalog, customerRequestText, maxIterations = DEFAULT_MAX_ITERATIONS } = input;
+  const { rules, catalog, customerRequestText, maxIterations = DEFAULT_MAX_ITERATIONS, preResolvedContext } = input;
 
   // Clone input line items to avoid mutation
   let lineItems: EngineLineItem[] = input.lineItems.map((li) => ({
@@ -969,8 +1267,20 @@ export function executeRules(input: RulesEngineInput): RulesEngineResult {
       }
 
       // Evaluate condition
-      const condResult = evaluateCondition(rule.condition, lineItems, customerRequestText);
+      const condResult = evaluateCondition(rule.condition, lineItems, customerRequestText, preResolvedContext);
       if (!condResult.matched) continue;
+
+      // Capture context variables scoped to this rule only.
+      // Merge preResolvedContext as a baseline so compute_quantity formulas can
+      // reference pre-resolved variables (e.g. sqft) even when no condition
+      // extracted them. Rule-scoped extracted values take precedence.
+      const ruleContextVariables = new Map<string, number>(preResolvedContext ?? []);
+      if (condResult.contextVariables) {
+        for (const [key, value] of condResult.contextVariables) {
+          ruleContextVariables.set(key, value);
+        }
+      }
+      const ruleRawExtractedText = condResult.rawExtractedText;
 
       // Check duplicate application: skip if this rule has already been
       // applied to all of the matching line items in this execution run.
@@ -982,7 +1292,7 @@ export function executeRules(input: RulesEngineInput): RulesEngineResult {
 
       // Execute each action
       for (const action of rule.actions) {
-        const actionResult = executeAction(action, lineItems, catalog, rule.id, customerNote);
+        const actionResult = executeAction(action, lineItems, catalog, rule.id, customerNote, ruleContextVariables, ruleRawExtractedText);
         lineItems = actionResult.lineItems;
 
         // Update customer note state if the action produced a new value
@@ -1001,6 +1311,7 @@ export function executeRules(input: RulesEngineInput): RulesEngineResult {
             beforeSnapshot: actionResult.beforeSnapshot ?? [],
             afterSnapshot: actionResult.afterSnapshot ?? [],
             warning: actionResult.warning,
+            computedQuantityMeta: actionResult.computedQuantityMeta,
           });
         }
 

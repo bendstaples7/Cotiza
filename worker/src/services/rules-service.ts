@@ -1,9 +1,89 @@
 import { PlatformError } from '../errors/index.js';
 import type { Rule, RuleGroup, RuleGroupWithRules, StructuredRule, RuleCondition, RuleAction, TriggerMode } from 'shared';
 import { validateCondition, validateActions } from './rules-engine.js';
+import { validateFormula } from './formula-evaluator.js';
+import { resolvePreset } from './extraction-presets.js';
 
 /** Standard column list for rule SELECT queries */
 const RULE_COLUMNS = 'id, name, description, rule_group_id, priority_order, is_active, condition_json, action_json, trigger_mode, created_at, updated_at';
+
+// ---------------------------------------------------------------------------
+// Cross-validation helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Collect all variableName values from request_text_extract conditions
+ * (direct or within a compound condition).
+ */
+function collectExtractedVariableNames(condition: RuleCondition): Set<string> {
+  const names = new Set<string>();
+  if (condition.type === 'request_text_extract') {
+    names.add(condition.variableName);
+  } else if (condition.type === 'compound') {
+    for (const sub of condition.conditions) {
+      if (sub.type === 'request_text_extract') {
+        names.add(sub.variableName);
+      }
+    }
+  }
+  return names;
+}
+
+/**
+ * Resolve presets in a condition tree. Mutates the condition in-place by
+ * replacing the `pattern` field with the resolved regex when a `preset` is specified.
+ * Returns an error string if a preset ID is unknown, or null on success.
+ */
+function resolvePresetsInCondition(condition: RuleCondition): string | null {
+  if (condition.type === 'request_text_extract') {
+    if (condition.preset) {
+      const preset = resolvePreset(condition.preset);
+      if (!preset) {
+        return `Unknown extraction preset: "${condition.preset}"`;
+      }
+      // Store the resolved regex pattern
+      (condition as { pattern: string }).pattern = preset.pattern;
+    }
+  } else if (condition.type === 'compound') {
+    for (const sub of condition.conditions) {
+      const err = resolvePresetsInCondition(sub);
+      if (err) return err;
+    }
+  }
+  return null;
+}
+
+/**
+ * Cross-validate formula variables against extracted condition variables.
+ * For each compute_quantity action, verify that every variable referenced in
+ * the formula is extracted by some request_text_extract condition.
+ */
+function crossValidateFormulaConditions(
+  condition: RuleCondition,
+  actions: RuleAction[],
+): { valid: boolean; error?: string } {
+  const extractedVars = collectExtractedVariableNames(condition);
+
+  for (const action of actions) {
+    if (action.type === 'compute_quantity') {
+      const formulaResult = validateFormula(action.formula);
+      if (!formulaResult.valid) {
+        // Formula syntax is invalid — this will be caught by validateAction separately
+        continue;
+      }
+      for (const varName of formulaResult.referencedVariables) {
+        if (!extractedVars.has(varName)) {
+          return {
+            valid: false,
+            error: `Formula references variable '${varName}' which is not extracted by any condition`,
+          };
+        }
+      }
+    }
+  }
+
+  return { valid: true };
+}
 
 export class RulesService {
   private readonly db: D1Database;
@@ -119,6 +199,19 @@ export class RulesService {
 
     // Validate structured rule schemas if provided
     if (data.conditionJson !== undefined) {
+      // Resolve presets before validation (replaces preset reference with actual regex)
+      const presetError = resolvePresetsInCondition(data.conditionJson);
+      if (presetError) {
+        throw new PlatformError({
+          severity: 'warning',
+          component: 'RulesService',
+          operation: 'createRule',
+          description: presetError,
+          recommendedActions: ['Use a valid preset ID (sqft, room_count, floor_count) or provide a custom pattern'],
+          statusCode: 400,
+        });
+      }
+
       const condResult = validateCondition(data.conditionJson);
       if (!condResult.valid) {
         throw new PlatformError({
@@ -141,6 +234,21 @@ export class RulesService {
           operation: 'createRule',
           description: `Invalid action schema: ${actResult.errors?.join('; ')}`,
           recommendedActions: ['Fix the action JSON and retry'],
+          statusCode: 400,
+        });
+      }
+    }
+
+    // Cross-validate formula variables against condition-extracted variables
+    if (data.conditionJson !== undefined && data.actionJson !== undefined) {
+      const crossResult = crossValidateFormulaConditions(data.conditionJson, data.actionJson);
+      if (!crossResult.valid) {
+        throw new PlatformError({
+          severity: 'warning',
+          component: 'RulesService',
+          operation: 'createRule',
+          description: crossResult.error!,
+          recommendedActions: ['Ensure all formula variables are extracted by a request_text_extract condition'],
           statusCode: 400,
         });
       }
@@ -367,6 +475,19 @@ export class RulesService {
     // Validate and apply structured rule fields
     if (data.conditionJson !== undefined) {
       if (data.conditionJson !== null) {
+        // Resolve presets before validation (replaces preset reference with actual regex)
+        const presetError = resolvePresetsInCondition(data.conditionJson);
+        if (presetError) {
+          throw new PlatformError({
+            severity: 'warning',
+            component: 'RulesService',
+            operation: 'updateRule',
+            description: presetError,
+            recommendedActions: ['Use a valid preset ID (sqft, room_count, floor_count) or provide a custom pattern'],
+            statusCode: 400,
+          });
+        }
+
         const condResult = validateCondition(data.conditionJson);
         if (!condResult.valid) {
           throw new PlatformError({
@@ -399,6 +520,22 @@ export class RulesService {
       }
       setClauses.push('action_json = ?');
       values.push(data.actionJson !== null ? JSON.stringify(data.actionJson) : null);
+    }
+
+    // Cross-validate formula variables against condition-extracted variables
+    if (data.conditionJson !== undefined && data.conditionJson !== null &&
+        data.actionJson !== undefined && data.actionJson !== null) {
+      const crossResult = crossValidateFormulaConditions(data.conditionJson, data.actionJson);
+      if (!crossResult.valid) {
+        throw new PlatformError({
+          severity: 'warning',
+          component: 'RulesService',
+          operation: 'updateRule',
+          description: crossResult.error!,
+          recommendedActions: ['Ensure all formula variables are extracted by a request_text_extract condition'],
+          statusCode: 400,
+        });
+      }
     }
 
     if (data.triggerMode !== undefined) {

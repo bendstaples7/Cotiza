@@ -1,7 +1,11 @@
 import { PlatformError } from '../errors/index.js';
 import { deduplicateLineItems, sortLineItemsByCatalog } from './line-item-utils.js';
 import { executeRules } from './rules-engine.js';
-import type { ProductCatalogEntry, QuoteTemplate, QuoteDraft, QuoteLineItem, SimilarQuote, StructuredRule, AuditEntry, EngineLineItem, ActionItem } from 'shared';
+import { QuantityEngine } from './quantity-engine.js';
+import { SqftResolutionService } from './sqft-resolution-service.js';
+import type { SqftResolutionResult } from './sqft-resolution-service.js';
+import { ProductivityRatesService } from './productivity-rates-service.js';
+import type { ProductCatalogEntry, QuoteTemplate, QuoteDraft, QuoteLineItem, LineItemRationale, SimilarQuote, StructuredRule, AuditEntry, EngineLineItem, ActionItem, QuantityPredictionMeta, RuleCondition } from 'shared';
 
 const GENERATION_TIMEOUT_MS = 120_000;
 const CONFIDENCE_THRESHOLD = 70;
@@ -13,6 +17,10 @@ export interface QuoteEngineInput {
   manualCatalog?: ProductCatalogEntry[];
   manualTemplates?: QuoteTemplate[];
   similarQuotes?: SimilarQuote[];
+  /** Property address from the Jobber client record (for sqft public records lookup) */
+  jobberPropertyAddress?: string | null;
+  /** Customer address from a manual request (for sqft public records lookup) */
+  manualRequestAddress?: string | null;
 }
 
 export interface QuoteEngineOutput {
@@ -32,6 +40,7 @@ interface AILineItem {
   originalText: string;
   unmatchedReason?: string;
   ruleIdsApplied?: string[];
+  quantityPrediction?: QuantityPredictionMeta;
 }
 
 interface AIActionItem {
@@ -103,10 +112,16 @@ const SYSTEM_PROMPT = [
 export class QuoteEngine {
   private readonly apiKey: string;
   private readonly apiUrl: string;
+  private readonly quantityEngine?: QuantityEngine;
+  private readonly r2Bucket?: R2Bucket;
+  private readonly db?: D1Database;
 
-  constructor(apiKey: string, apiUrl: string) {
+  constructor(apiKey: string, apiUrl: string, quantityEngine?: QuantityEngine, r2Bucket?: R2Bucket, db?: D1Database) {
     this.apiKey = apiKey;
     this.apiUrl = apiUrl;
+    this.quantityEngine = quantityEngine;
+    this.r2Bucket = r2Bucket;
+    this.db = db;
   }
 
   /**
@@ -171,6 +186,110 @@ export class QuoteEngine {
       const raw = data.choices?.[0]?.message?.content?.trim() ?? '';
       const aiResult = this.parseAIResponse(raw, catalog);
 
+      // --- Quantity Engine Integration ---
+      // Apply historical quantity predictions before the rules engine runs.
+      // Predictions are applied only when confidence exceeds the threshold.
+      const similarQuotes = input.similarQuotes ?? [];
+      if (this.quantityEngine && similarQuotes.length > 0) {
+        try {
+          // Convert SimilarQuote[] to SimilarQuoteResult[] format expected by QuantityEngine
+          const similarQuoteResults = similarQuotes.map(sq => ({
+            jobberQuoteId: sq.jobberQuoteId,
+            quoteNumber: sq.quoteNumber,
+            title: sq.title,
+            message: sq.message,
+            similarityScore: sq.similarityScore,
+            searchableText: '',
+          }));
+
+          // Build temporary EngineLineItem array for prediction
+          const tempEngineItems: EngineLineItem[] = aiResult.lineItems.map((item) => ({
+            id: item.id ?? crypto.randomUUID(),
+            productCatalogEntryId: item.productCatalogEntryId,
+            productName: item.productName,
+            description: item.description ?? '',
+            quantity: item.quantity ?? 1,
+            unitPrice: item.unitPrice ?? 0,
+            confidenceScore: item.confidenceScore,
+            originalText: item.originalText ?? '',
+            ruleIdsApplied: Array.isArray(item.ruleIdsApplied) ? item.ruleIdsApplied.filter((id): id is string => typeof id === 'string') : [],
+          }));
+
+          const predictions = await this.quantityEngine.predictQuantities(tempEngineItems, similarQuoteResults);
+          const confidenceThreshold = this.quantityEngine.confidenceThreshold;
+
+          for (const prediction of predictions) {
+            if (prediction.confidenceScore > confidenceThreshold) {
+              // Use starts_with matching consistent with matchesProductName
+              const lineItem = aiResult.lineItems.find(
+                li => li.productName.toLowerCase().startsWith(prediction.productName.toLowerCase()),
+              );
+              if (lineItem) {
+                lineItem.quantity = prediction.predictedQuantity;
+                // Store prediction metadata for traceability (carried through to EngineLineItem)
+                lineItem.quantityPrediction = {
+                  predictedQuantity: prediction.predictedQuantity,
+                  confidenceScore: prediction.confidenceScore,
+                  sourceQuoteNumbers: prediction.sourceQuotes.map(sq => sq.quoteNumber),
+                  quantitySource: 'historical_prediction' as const,
+                };
+              }
+            }
+          }
+        } catch {
+          // Graceful degradation — prediction failure should not block quote generation
+        }
+      }
+
+      // --- Sqft Resolution ---
+      // Run the tiered resolution pipeline before the rules engine so the
+      // resolved value can be injected as a pre-populated context variable.
+      let sqftResolutionResult: SqftResolutionResult | null = null;
+      let preResolvedContext: Map<string, number> | undefined;
+
+      if (this.r2Bucket) {
+        try {
+          const resolutionService = new SqftResolutionService(this.apiKey, this.apiUrl, this.r2Bucket);
+          const resolutionResult = await resolutionService.resolve({
+            customerText: input.customerText,
+            mediaItemIds: input.mediaItemIds,
+            jobberPropertyAddress: input.jobberPropertyAddress ?? null,
+            manualRequestAddress: input.manualRequestAddress ?? null,
+          });
+
+          sqftResolutionResult = {
+            resolution: resolutionResult,
+            manualOverride: null,
+            originalResolution: null,
+          };
+
+          if (resolutionResult.resolved && resolutionResult.value !== null) {
+            preResolvedContext = new Map([['sqft', resolutionResult.value]]);
+          }
+        } catch {
+          // Graceful degradation — resolution failure must not block quote generation
+        }
+      }
+
+      // --- Productivity Rates Injection ---
+      // Inject all productivity rates into preResolvedContext so formulas like
+      // `sqft / drywall_rate` work in compute_quantity rules.
+      if (this.db) {
+        try {
+          const productivityRatesService = new ProductivityRatesService(this.db);
+          const rates = await productivityRatesService.getAllRates();
+          for (const rate of rates) {
+            if (!preResolvedContext) preResolvedContext = new Map();
+            // Non-overwrite: existing values (e.g. sqft) take precedence
+            if (!preResolvedContext.has(rate.variableName)) {
+              preResolvedContext.set(rate.variableName, rate.sqftPerHour);
+            }
+          }
+        } catch {
+          // Graceful degradation — rate loading failure must not block quote generation
+        }
+      }
+
       // --- Rules Engine Integration ---
       // Convert validated AI line items to EngineLineItem format, run the
       // deterministic rules engine, then convert back for deduplication.
@@ -188,6 +307,7 @@ export class QuoteEngine {
           confidenceScore: item.confidenceScore,
           originalText: item.originalText ?? '',
           ruleIdsApplied: Array.isArray(item.ruleIdsApplied) ? item.ruleIdsApplied.filter((id): id is string => typeof id === 'string') : [],
+          quantityPrediction: item.quantityPrediction ?? undefined,
         }));
 
         const engineResult = executeRules({
@@ -195,6 +315,7 @@ export class QuoteEngine {
           rules: structuredRules,
           catalog,
           customerRequestText: input.customerText,
+          preResolvedContext,
         });
 
         auditTrail = engineResult.auditTrail;
@@ -230,6 +351,7 @@ export class QuoteEngine {
           confidenceScore: eli.confidenceScore,
           originalText: eli.originalText,
           ruleIdsApplied: eli.ruleIdsApplied,
+          quantityPrediction: eli.quantityPrediction,
         }));
       }
 
@@ -237,11 +359,10 @@ export class QuoteEngine {
       aiResult.lineItems = deduplicateLineItems(aiResult.lineItems);
 
       // Always sort by catalog sort order. Rule positioning intent (placeAfter/
-      // placeBefore) is already reflected in the catalog sort_order values —
-      // they are updated when rules are created via RulesService.
+      // placeBefore) is reflected in the catalog sort_order values.
       aiResult.lineItems = sortLineItemsByCatalog(aiResult.lineItems, catalog);
 
-      return this.buildDraft(input, aiResult, auditTrail, rulesCustomerNote);
+      return this.buildDraft(input, aiResult, auditTrail, rulesCustomerNote, sqftResolutionResult);
     } catch (err) {
       if (err instanceof PlatformError) throw err;
 
@@ -457,15 +578,23 @@ export class QuoteEngine {
     aiResult: AIResponse,
     auditTrail?: AuditEntry[],
     rulesCustomerNote?: string | null,
+    sqftResolutionResult?: SqftResolutionResult | null,
   ): QuoteEngineOutput {
     const now = new Date();
     const draftId = crypto.randomUUID();
     const similarQuotes = input.similarQuotes ?? [];
 
+    // Build rationale map from audit trail before constructing line items
+    const allItemIds = new Set(aiResult.lineItems.map((item) => item.id ?? '').filter(Boolean));
+    const rationaleMap = auditTrail && auditTrail.length > 0
+      ? buildRationaleMap(auditTrail, allItemIds)
+      : new Map<string, LineItemRationale>();
+
     const allItems: QuoteLineItem[] = aiResult.lineItems.map((item) => {
+      const itemId = item.id ?? crypto.randomUUID();
       const resolved = item.confidenceScore >= CONFIDENCE_THRESHOLD && item.productCatalogEntryId !== null;
       return {
-        id: item.id ?? crypto.randomUUID(),
+        id: itemId,
         productCatalogEntryId: item.productCatalogEntryId,
         productName: item.productName,
         description: item.description ?? '',
@@ -476,14 +605,64 @@ export class QuoteEngine {
         resolved,
         unmatchedReason: resolved ? undefined : (item.unmatchedReason || 'Low confidence match'),
         ruleIdsApplied: item.ruleIdsApplied ?? [],
+        quantityPrediction: item.quantityPrediction ?? undefined,
+        rationale: rationaleMap.get(itemId),
       };
     });
+
+    // ── Flooring deduplication (Option F) ──────────────────────────────────
+    // When the AI matches multiple flooring installation types for a generic request,
+    // replace them all with a single placeholder and add an action item prompting
+    // the reviewer to confirm the material type before finalizing.
+    const FLOORING_INSTALL_NAMES = new Set([
+      'flooring: install new hardwood',
+      'flooring: install new laminate flooring (basic)',
+      'flooring: install new laminate flooring (complex)',
+      'flooring: install new vinyl flooring',
+      'flooring: install new outdoor flooring on patio',
+    ]);
+    const flooringItems = allItems.filter(
+      (i) => i.resolved && FLOORING_INSTALL_NAMES.has(i.productName.trim().toLowerCase()),
+    );
+    let flooringPlaceholderActionItem: ActionItem | null = null;
+    if (flooringItems.length > 1) {
+      // Keep the highest-confidence flooring item as the base for quantity/price
+      const best = flooringItems.reduce((a, b) => a.confidenceScore >= b.confidenceScore ? a : b);
+      // Remove all flooring items
+      const flooringIds = new Set(flooringItems.map((i) => i.id));
+      const withoutFlooring = allItems.filter((i) => !flooringIds.has(i.id));
+      // Add placeholder
+      const placeholderId = crypto.randomUUID();
+      const placeholder: QuoteLineItem = {
+        id: placeholderId,
+        productCatalogEntryId: null,
+        productName: 'Flooring: Install New Flooring',
+        description: 'Confirm flooring material type — customer did not specify. Replace with the correct flooring line item before finalizing.',
+        quantity: best.quantity,
+        unitPrice: best.unitPrice,
+        confidenceScore: best.confidenceScore,
+        originalText: best.originalText,
+        resolved: true,
+      };
+      allItems.splice(0, allItems.length, ...withoutFlooring, placeholder);
+      flooringPlaceholderActionItem = {
+        id: crypto.randomUUID(),
+        quoteDraftId: draftId,
+        lineItemId: placeholderId,
+        description: 'Confirm flooring material type — customer did not specify (laminate basic, laminate complex, vinyl, or hardwood). Replace this line item with the correct type before finalizing.',
+        completed: false,
+      };
+    }
 
     const lineItems = allItems.filter((i) => i.resolved);
     const unresolvedItems = allItems.filter((i) => !i.resolved);
 
     // Map AI action items to ActionItem objects by matching product names (case-insensitive)
     const actionItems: ActionItem[] = [];
+    // Add flooring placeholder action item if deduplication fired
+    if (flooringPlaceholderActionItem) {
+      actionItems.push(flooringPlaceholderActionItem);
+    }
     for (const aiAction of aiResult.actionItems ?? []) {
       if (!aiAction.lineItemProductName) continue;
       const normalizedName = aiAction.lineItemProductName.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -515,6 +694,7 @@ export class QuoteEngine {
       customerNote: rulesCustomerNote ?? null,
       actionItems: actionItems.length > 0 ? actionItems : undefined,
       similarQuotes: similarQuotes.length > 0 ? similarQuotes : undefined,
+      sqftResolution: sqftResolutionResult ?? null,
       createdAt: now,
       updatedAt: now,
     };
@@ -527,4 +707,103 @@ export class QuoteEngine {
   }
 
   // ── Rules section builder ─────────────────────────────────────────
+}
+
+// ---------------------------------------------------------------------------
+// Rationale helpers (module-level, pure functions)
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert a RuleCondition into a short human-readable sentence for display
+ * in the quote draft info panel.
+ */
+function summarizeCondition(condition: RuleCondition): string {
+  switch (condition.type) {
+    case 'always':
+      return 'Always applies';
+    case 'line_item_exists':
+      return `"${condition.productNamePattern}" is in the quote`;
+    case 'line_item_not_exists':
+      return `"${condition.productNamePattern}" is not in the quote`;
+    case 'line_item_name_contains':
+      return `A line item name contains "${condition.substring}"`;
+    case 'line_item_quantity_gte':
+      return `"${condition.productNamePattern}" quantity ≥ ${condition.threshold}`;
+    case 'line_item_quantity_lte':
+      return `"${condition.productNamePattern}" quantity ≤ ${condition.threshold}`;
+    case 'request_text_contains':
+      return `Customer request contains "${condition.substring}"`;
+    case 'request_text_extract':
+      return `Extracted "${condition.variableName}" from customer request`;
+    case 'compound':
+      return condition.conditions.map(summarizeCondition).join(' AND ');
+    default:
+      return 'Condition matched';
+  }
+}
+
+/**
+ * Build a LineItemRationale map keyed by line item ID from the audit trail.
+ * For each line item we capture:
+ *  - the rule that added it (add_line_item action)
+ *  - the compute_quantity formula and variable values (compute_quantity action)
+ */
+function buildRationaleMap(
+  auditTrail: AuditEntry[],
+  lineItemIds: Set<string>,
+): Map<string, LineItemRationale> {
+  const rationaleMap = new Map<string, LineItemRationale>();
+
+  for (const entry of auditTrail) {
+    // Track which item was added by this rule
+    if (entry.action.type === 'add_line_item') {
+      // Find the new item ID by diffing before/after snapshots
+      const beforeIds = new Set(entry.beforeSnapshot.map((s) => s.id));
+      const addedIds = entry.afterSnapshot
+        .filter((s) => !beforeIds.has(s.id))
+        .map((s) => s.id);
+
+      for (const itemId of addedIds) {
+        if (!lineItemIds.has(itemId)) continue;
+        const existing = rationaleMap.get(itemId) ?? {
+          addedByRuleName: null,
+          conditionSummary: null,
+          quantityFormula: null,
+          quantityVariables: null,
+          quantityBefore: null,
+          quantityAfter: null,
+        };
+        rationaleMap.set(itemId, {
+          ...existing,
+          addedByRuleName: entry.ruleName,
+          conditionSummary: summarizeCondition(entry.condition),
+        });
+      }
+    }
+
+    // Track compute_quantity formula details
+    if (entry.action.type === 'compute_quantity' && entry.computedQuantityMeta) {
+      const meta = entry.computedQuantityMeta;
+      for (const itemId of entry.matchingLineItemIds) {
+        if (!lineItemIds.has(itemId)) continue;
+        const existing = rationaleMap.get(itemId) ?? {
+          addedByRuleName: null,
+          conditionSummary: null,
+          quantityFormula: null,
+          quantityVariables: null,
+          quantityBefore: null,
+          quantityAfter: null,
+        };
+        rationaleMap.set(itemId, {
+          ...existing,
+          quantityFormula: meta.formula,
+          quantityVariables: meta.variableValues,
+          quantityBefore: meta.previousQuantity,
+          quantityAfter: meta.computedQuantity,
+        });
+      }
+    }
+  }
+
+  return rationaleMap;
 }

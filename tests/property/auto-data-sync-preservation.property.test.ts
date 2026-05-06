@@ -52,6 +52,7 @@ vi.mock('../../client/src/api', () => ({
     .fn()
     .mockResolvedValue({ synced: 0, skipped: 0, errors: [] }),
   fetchRules: vi.fn().mockResolvedValue([]),
+  fetchExtractionPresets: vi.fn().mockResolvedValue([]),
   createRule: vi.fn(),
   updateRule: vi.fn(),
   deactivateRule: vi.fn(),

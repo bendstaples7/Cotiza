@@ -61,6 +61,26 @@ export interface ActionItem {
   completed: boolean;
 }
 
+/**
+ * Human-readable rationale for why a line item was added and why its
+ * quantity is what it is. Derived from the rules engine audit trail at
+ * quote generation time and stored as a JSON blob on the line item row.
+ */
+export interface LineItemRationale {
+  /** Name of the rule that added this line item (null if AI-matched, not rule-added) */
+  addedByRuleName: string | null;
+  /** Human-readable summary of the condition that triggered the rule */
+  conditionSummary: string | null;
+  /** The compute_quantity formula used, if any (e.g. "sqft / drywall_rate") */
+  quantityFormula: string | null;
+  /** Variable values substituted into the formula (e.g. { sqft: 1200, drywall_rate: 40 }) */
+  quantityVariables: Record<string, number> | null;
+  /** The quantity before the compute_quantity action ran */
+  quantityBefore: number | null;
+  /** The quantity after the compute_quantity action ran */
+  quantityAfter: number | null;
+}
+
 /** A matched line item in a quote draft */
 export interface QuoteLineItem {
   id: string;
@@ -74,6 +94,9 @@ export interface QuoteLineItem {
   resolved: boolean;
   unmatchedReason?: string;
   ruleIdsApplied?: string[];
+  quantityPrediction?: QuantityPredictionMeta;
+  /** Rationale for why this item was added and why the quantity is what it is */
+  rationale?: LineItemRationale;
 }
 
 /** The full quote draft */
@@ -97,6 +120,8 @@ export interface QuoteDraft {
   similarQuotes?: SimilarQuote[];
   revisionHistory?: RevisionHistoryEntry[];
   customerNote: string | null;
+  /** Resolved square footage result, including any manual override */
+  sqftResolution?: SqftResolutionResult | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -166,6 +191,56 @@ export interface QuoteDraftUpdate {
   selectedTemplateId?: string | null;
   status?: 'draft' | 'finalized';
   customerNote?: string | null;
+  /** Set to a positive number to apply a manual sqft override; null to clear */
+  sqftOverride?: number | null;
+}
+
+// ---------------------------------------------------------------------------
+// Sqft Resolution Types
+// ---------------------------------------------------------------------------
+
+/** The source tier that produced a square footage resolution */
+export type ResolutionTier = 'text_extraction' | 'layout_diagram' | 'public_records' | 'manual_override';
+
+/** Confidence level of a square footage resolution */
+export type ResolutionConfidence = 'high' | 'medium' | 'low';
+
+/** Supporting metadata for a square footage resolution result */
+export interface ResolutionMetadata {
+  /** Tier 1: the matched text segment from the customer request */
+  matchedText?: string;
+  /** Tier 2: which image was analyzed */
+  imageId?: string;
+  /** Tier 2: AI explanation of the estimate */
+  aiReasoning?: string;
+  /** Tier 3: property address used for the public records lookup */
+  propertyAddress?: string;
+  /** Tier 3: Cook County assessor record identifier */
+  assessorRecordId?: string;
+}
+
+/** The result of a square footage resolution attempt */
+export interface ResolutionResult {
+  /** Whether a square footage value was successfully resolved */
+  resolved: boolean;
+  /** The resolved square footage value, or null if not resolved */
+  value: number | null;
+  /** The tier that produced the value, or null if not resolved */
+  tier: ResolutionTier | null;
+  /** Confidence level of the resolved value, or null if not resolved */
+  confidence: ResolutionConfidence | null;
+  /** Supporting metadata about how the value was determined */
+  metadata: ResolutionMetadata;
+}
+
+/** Full sqft resolution state for a quote draft, including optional manual override */
+export interface SqftResolutionResult {
+  /** The active resolution result (may reflect a manual override) */
+  resolution: ResolutionResult;
+  /** The user-entered manual override value, or null if no override is active */
+  manualOverride: number | null;
+  /** The original automated resolution, preserved when a manual override is applied */
+  originalResolution: ResolutionResult | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +261,8 @@ export type RuleConditionType =
   | 'line_item_quantity_gte'
   | 'line_item_quantity_lte'
   | 'request_text_contains'
+  | 'request_text_extract'
+  | 'compound'
   | 'always';
 
 /** A typed condition for a structured rule */
@@ -196,6 +273,8 @@ export type RuleCondition =
   | { type: 'line_item_quantity_gte'; productNamePattern: string; threshold: number; matchMode?: MatchMode }
   | { type: 'line_item_quantity_lte'; productNamePattern: string; threshold: number; matchMode?: MatchMode }
   | { type: 'request_text_contains'; substring: string }
+  | { type: 'request_text_extract'; pattern: string; variableName: string; preset?: string }
+  | { type: 'compound'; conditions: RuleCondition[] }
   | { type: 'always' };
 
 /** Action types supported by the rules engine */
@@ -210,7 +289,8 @@ export type RuleActionType =
   | 'append_description'
   | 'extract_request_context'
   | 'set_customer_note'
-  | 'append_customer_note';
+  | 'append_customer_note'
+  | 'compute_quantity';
 
 /** A typed action for a structured rule */
 export type RuleAction =
@@ -224,7 +304,8 @@ export type RuleAction =
   | { type: 'append_description'; productNamePattern: string; text: string; separator?: string; matchMode?: MatchMode }
   | { type: 'extract_request_context'; productNamePattern: string; extractionPrompt: string; separator?: string; matchMode?: MatchMode }
   | { type: 'set_customer_note'; text: string }
-  | { type: 'append_customer_note'; text: string; separator?: string };
+  | { type: 'append_customer_note'; text: string; separator?: string }
+  | { type: 'compute_quantity'; productNamePattern: string; formula: string; matchMode?: MatchMode };
 
 /** A structured rule with typed condition and actions */
 export interface StructuredRule {
@@ -234,6 +315,21 @@ export interface StructuredRule {
   triggerMode: TriggerMode;
   condition: RuleCondition;
   actions: RuleAction[];
+}
+
+// ---------------------------------------------------------------------------
+// Quantity Engine Types
+// ---------------------------------------------------------------------------
+
+/** Source of a line item's quantity value */
+export type QuantitySource = 'ai_estimate' | 'historical_prediction' | 'rule_override';
+
+/** Metadata about a quantity prediction applied to a line item */
+export interface QuantityPredictionMeta {
+  predictedQuantity: number;
+  confidenceScore: number;
+  sourceQuoteNumbers: string[];
+  quantitySource: QuantitySource;
 }
 
 /** Line item representation used internally by the rules engine */
@@ -247,6 +343,16 @@ export interface EngineLineItem {
   confidenceScore: number;
   originalText: string;
   ruleIdsApplied: string[];
+  quantityPrediction?: QuantityPredictionMeta;
+}
+
+/** Metadata about a computed quantity derivation */
+export interface ComputedQuantityMeta {
+  formula: string;
+  variableValues: Record<string, number>;
+  rawExtractedText: Record<string, string>;
+  previousQuantity: number;
+  computedQuantity: number;
 }
 
 /** An audit entry produced by the rules engine */
@@ -260,6 +366,15 @@ export interface AuditEntry {
   beforeSnapshot: Array<{ id: string; productName: string; description?: string; quantity: number; unitPrice: number }>;
   afterSnapshot: Array<{ id: string; productName: string; description?: string; quantity: number; unitPrice: number }>;
   warning?: string;
+  computedQuantityMeta?: ComputedQuantityMeta;
+}
+
+/** Result of evaluating a rule condition */
+export interface ConditionResult {
+  matched: boolean;
+  matchingLineItemIds: string[];
+  contextVariables?: Map<string, number>;
+  rawExtractedText?: Map<string, string>;
 }
 
 /** Result of a rules engine execution */
@@ -309,4 +424,26 @@ export interface RuleGroup {
 /** A rule group with its nested rules */
 export interface RuleGroupWithRules extends RuleGroup {
   rules: Rule[];
+}
+
+// ---------------------------------------------------------------------------
+// Productivity Rates Types
+// ---------------------------------------------------------------------------
+
+/** A global productivity rate used in compute_quantity formulas */
+export interface ProductivityRate {
+  id: string;
+  variableName: string;
+  displayName: string;
+  sqftPerHour: number;
+  description: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** Payload for updating a productivity rate */
+export interface UpdateProductivityRatePayload {
+  sqftPerHour: number;
+  displayName?: string;
+  description?: string;
 }

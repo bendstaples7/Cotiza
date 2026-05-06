@@ -8,6 +8,7 @@ import type {
   Rule, RuleGroup, RuleGroupWithRules, SystemsStatusResponse,
   RuleCondition, RuleAction, TriggerMode,
   ManualRequest, CreateManualRequestPayload,
+  ProductivityRate, UpdateProductivityRatePayload,
 } from 'shared';
 
 const TOKEN_KEY = 'session_token';
@@ -795,6 +796,47 @@ export async function pushDraftToJobber(draftId: string): Promise<{ jobberQuoteI
   const res = await fetch(API_BASE + '/api/quotes/drafts/' + draftId + '/push', {
     method: 'POST',
     headers: { ...authHeaders() },
+  });
+  return handleResponseWithToast(res);
+}
+
+// ── Extraction Presets ──
+
+export interface ExtractionPreset {
+  id: string;
+  name: string;
+  description: string;
+  pattern: string;
+  variableName: string;
+  exampleMatches: string[];
+}
+
+export async function fetchExtractionPresets(): Promise<ExtractionPreset[]> {
+  const res = await fetch(API_BASE + '/api/quotes/rules/extraction-presets', {
+    headers: { ...authHeaders() },
+  });
+  const data = await handleResponse<{ presets: ExtractionPreset[] }>(res);
+  return data.presets;
+}
+
+// ── Productivity Rates ──
+
+export async function fetchProductivityRates(): Promise<ProductivityRate[]> {
+  const res = await fetch(API_BASE + '/api/quotes/productivity-rates', {
+    headers: { ...authHeaders() },
+  });
+  const data = await handleResponse<{ rates: ProductivityRate[] }>(res);
+  return data.rates;
+}
+
+export async function updateProductivityRate(
+  id: string,
+  payload: UpdateProductivityRatePayload,
+): Promise<ProductivityRate> {
+  const res = await fetch(API_BASE + '/api/quotes/productivity-rates/' + id, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(payload),
   });
   return handleResponseWithToast(res);
 }
