@@ -224,7 +224,7 @@ export default function RulesPage() {
           style={activeTab === 'ordering' ? TAB_STYLE_ACTIVE : TAB_STYLE_BASE}
           onClick={() => {
             if (activeTab === 'ordering') return;
-            if (activeTab === 'ordering' && orderingDirty) {
+            if (orderingDirty) {
               if (!confirm('You have unsaved ordering changes. Discard them?')) return;
             }
             setActiveTab('ordering');
