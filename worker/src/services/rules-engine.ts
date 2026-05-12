@@ -529,9 +529,12 @@ export function validateAction(action: unknown): { valid: boolean; error?: strin
           return { valid: false, error: `set_deposit_schedule milestone[${i}].percentage must be between 1 and 100` };
         }
 
-        // Validate description is a non-empty string
+        // Validate description is a non-empty string with max 255 characters
         if (typeof milestone.description !== 'string' || milestone.description.trim().length === 0) {
-          return { valid: false, error: `set_deposit_schedule milestone[${i}].description must be a non-empty string` };
+          return { valid: false, error: `set_deposit_schedule milestone[${i}].description must be a non-empty string with max length 255` };
+        }
+        if (milestone.description.trim().length > 255) {
+          return { valid: false, error: `set_deposit_schedule milestone[${i}].description must be a non-empty string with max length 255` };
         }
 
         percentageSum += milestone.percentage as number;

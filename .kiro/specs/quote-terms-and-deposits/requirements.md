@@ -67,7 +67,7 @@ The `customerNote` field, rules engine `set_customer_note`/`append_customer_note
 
 1. THE Quote_Draft SHALL include a `depositSchedule` field of type `DepositSchedule` or `null`.
 2. THE `DepositSchedule` type SHALL contain a `milestones` array of between 1 and 10 `PaymentMilestone` objects (inclusive) and a `label` string of between 1 and 100 characters describing the schedule.
-3. THE `PaymentMilestone` type SHALL contain a `description` field of type `string` (maximum 255 characters) and a `percentage` field of type `number` between 0.01 and 100.00 (inclusive, up to two decimal places) representing the percentage of the total quote value due at that milestone.
+3. THE `PaymentMilestone` type SHALL contain a `description` field of type `string` (maximum 255 characters) and a `percentage` field of type `number` that is a whole integer between 1 and 100 inclusive, representing the percentage of the total quote value due at that milestone. All milestone percentages within a schedule must sum to exactly 100.
 4. WHEN a new Quote_Draft is created, THE QuoteDraftService SHALL default the `depositSchedule` field to `null`.
 5. WHEN a Quote_Draft is saved, THE QuoteDraftService SHALL persist the `depositSchedule` field to the `quote_drafts` D1 table as a JSON blob in a `deposit_schedule` column.
 6. WHEN a Quote_Draft is retrieved by the QuoteDraftService, THE QuoteDraftService SHALL include the persisted `depositSchedule` value in the returned object.
