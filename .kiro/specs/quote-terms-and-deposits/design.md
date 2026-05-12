@@ -199,7 +199,7 @@ return { lineItems, auditTrail, iterationCount, converged, pendingEnrichments, c
 
 ### Quote Draft Service (`worker/src/services/quote-draft-service.ts`)
 
-- `save`: add `deposit_schedule` to the INSERT statement, bound to `JSON.stringify(draft.depositSchedule) ?? null`.
+- `save`: add `deposit_schedule` to the INSERT statement, bound to `draft.depositSchedule ? JSON.stringify(draft.depositSchedule) : null` (stores SQL NULL when no schedule is set).
 - `getById` / `list`: add `deposit_schedule` to SELECT column lists.
 - `update`: handle `updates.depositSchedule !== undefined` — validate (if non-null), then add `deposit_schedule = ?` to SET clauses.
 - `mapDraftRow`: deserialize `deposit_schedule` JSON blob with try/catch, returning `null` on parse failure (graceful degradation consistent with `sqft_resolution_json`).
@@ -222,7 +222,7 @@ Updated `buildQuoteCreateInput` message assembly order:
 
 Each present segment is joined with `\n\n`. Absent segments are omitted entirely.
 
-Milestone percentages are rendered as `Math.round(milestone.percentage)` to ensure whole integers in the Jobber message.
+Milestone percentages are rendered as `Math.round(milestone.percentage)` to ensure whole integers in the Jobber message. API validation requires integer percentages (consistent with rules engine validation), so `Math.round` is a no-op for valid data and a safety net for any legacy float values.
 
 ### QuoteDraftPage (`client/src/pages/QuoteDraftPage.tsx`)
 
@@ -240,8 +240,9 @@ const formatUSD = (amount: number) =>
 
 **Section behavior:**
 - When `depositSchedule` is non-null: display the schedule `label` as a heading, list each milestone with its `description`, `percentage`, and calculated dollar amount.
-- When `depositSchedule` is null: display "No payment schedule has been assigned to this quote."
-- When `draft.status === 'finalized'`: section is read-only (no edit controls are planned for this section in any status).
+- When `depositSchedule` is null: display "No payment schedule has been assigned to this quote." with an option to add one.
+- When `draft.status !== 'finalized'`: edit controls are available — users can edit the schedule label, add/edit/remove milestones, and assign a new `depositSchedule`.
+- When `draft.status === 'finalized'`: the section is read-only with no edit controls.
 
 ---
 

@@ -180,13 +180,13 @@ export class QuoteDraftService {
           });
         }
         for (const milestone of schedule.milestones) {
-          if (milestone.percentage < 0.01 || milestone.percentage > 100) {
+          if (!Number.isInteger(milestone.percentage) || milestone.percentage < 1 || milestone.percentage > 100) {
             throw new PlatformError({
               severity: 'error',
               component: 'QuoteDraftService',
               operation: 'update',
-              description: `Milestone percentage ${milestone.percentage} is outside the valid range of 0.01 to 100.`,
-              recommendedActions: ['Ensure each milestone percentage is between 0.01 and 100'],
+              description: `Milestone percentage ${milestone.percentage} must be a whole integer between 1 and 100.`,
+              recommendedActions: ['Ensure each milestone percentage is a whole integer between 1 and 100'],
             });
           }
         }

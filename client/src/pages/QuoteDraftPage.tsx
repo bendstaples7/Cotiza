@@ -1225,8 +1225,8 @@ export default function QuoteDraftPage() {
               return;
             }
             const pct = parseFloat(scheduleMilestones[i].percentage);
-            if (isNaN(pct) || pct <= 0 || pct > 100) {
-              setScheduleError(`Milestone ${i + 1} percentage must be between 1 and 100.`);
+            if (isNaN(pct) || !Number.isInteger(pct) || pct < 1 || pct > 100) {
+              setScheduleError(`Milestone ${i + 1} percentage must be a whole integer between 1 and 100.`);
               return;
             }
           }
@@ -1318,6 +1318,7 @@ export default function QuoteDraftPage() {
                           placeholder="%"
                           min={1}
                           max={100}
+                          step={1}
                           style={{ width: 64, padding: '0.4rem 0.5rem', borderRadius: 5, border: '1px solid #ccc', fontSize: '0.85rem', textAlign: 'right' }}
                           aria-label={`Milestone ${i + 1} percentage`}
                         />
