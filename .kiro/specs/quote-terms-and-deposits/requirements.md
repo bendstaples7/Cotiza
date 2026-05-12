@@ -19,7 +19,7 @@ The `customerNote` field, rules engine `set_customer_note`/`append_customer_note
 - **Rules_Engine**: The deterministic rules engine (`RulesEngine`) that evaluates structured conditions against line items and executes typed actions after AI quote generation.
 - **RuleAction**: A typed action object executed by the Rules_Engine when a rule's condition matches.
 - **Default_Note_Rule**: A built-in rule with `always` condition and `set_customer_note` action that sets the standard permit-fee disclaimer on every quote.
-- **Standard_Deposit_Rule**: A built-in rule with `always` condition and `set_deposit_schedule` action that sets the 30% single-deposit schedule on every quote.
+- **Standard_Deposit_Rule**: A built-in rule with `always` condition and `set_deposit_schedule` action that sets a two-milestone 30%+70% deposit schedule (30% "Deposit due at signing" + 70% "Balance due at completion of work") on every quote.
 - **High_Value_Deposit_Rule**: A built-in rule with a `quote_total_gte` condition and `set_deposit_schedule` action that overrides the schedule with the four-milestone plan for quotes over $10,000.
 - **QuoteDraftPage**: The React page component (`client/src/pages/QuoteDraftPage.tsx`) where users view and edit a single quote draft.
 - **JobberQuotePushService**: The worker service (`worker/src/services/jobber-quote-push-service.ts`) that pushes a finalized quote draft to Jobber via the `quoteCreate` GraphQL mutation.
@@ -129,7 +129,7 @@ The `customerNote` field, rules engine `set_customer_note`/`append_customer_note
 
 1. WHEN a new Quote_Draft is created, THE Rules_Engine SHALL set the Deposit_Schedule to a two-milestone schedule with label `"Standard Deposit"` via the Standard_Deposit_Rule: 30% — `"Deposit due at signing"` and 70% — `"Balance due at completion of work"` (two milestones are required so percentages sum to 100, satisfying the sum-to-100 invariant while preserving the intent of a 30% upfront deposit).
 2. WHEN both the Standard_Deposit_Rule and the High_Value_Deposit_Rule fire on the same quote, THE Rules_Engine SHALL apply the High_Value_Deposit_Rule's schedule, and the Standard_Deposit_Rule's schedule SHALL be discarded.
-3. IF the High_Value_Deposit_Rule fires on the same quote as the Standard_Deposit_Rule, THEN the resulting Deposit_Schedule on the Quote_Draft SHALL be the High_Value_Deposit_Rule's four-milestone schedule, not the Standard_Deposit_Rule's single-milestone schedule.
+3. IF the High_Value_Deposit_Rule fires on the same quote as the Standard_Deposit_Rule, THEN the resulting Deposit_Schedule on the Quote_Draft SHALL be the High_Value_Deposit_Rule's four-milestone schedule, not the Standard_Deposit_Rule's two-milestone schedule.
 4. THE Standard_Deposit_Rule SHALL be stored as a standard structured rule in the rules database so that it can be edited or disabled through the existing rules management UI without a code deployment.
 
 ---

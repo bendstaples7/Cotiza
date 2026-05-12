@@ -92,7 +92,7 @@ New interfaces:
 export interface PaymentMilestone {
   /** Human-readable label for when this payment is due (max 255 chars) */
   description: string;
-  /** Percentage of total quote value due at this milestone (0.01–100.00, up to 2 decimal places) */
+  /** Whole integer percentage of total quote value due at this milestone (1–100 inclusive); all milestones must sum to exactly 100 */
   percentage: number;
 }
 

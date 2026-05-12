@@ -191,8 +191,8 @@ export class QuoteDraftService {
           }
         }
         const sum = schedule.milestones.reduce((acc, m) => acc + m.percentage, 0);
-        // Allow floating-point tolerance (round to 2 decimal places)
-        if (Math.round(sum * 100) !== 10000) {
+        // Percentages are whole integers; sum must equal exactly 100
+        if (sum !== 100) {
           throw new PlatformError({
             severity: 'error',
             component: 'QuoteDraftService',
