@@ -7,6 +7,7 @@ import type {
   RulesEngineResult,
   ProductCatalogEntry,
   PendingEnrichment,
+  DepositSchedule,
 } from 'shared';
 import { evaluateFormula, validateFormula, FormulaError } from './formula-evaluator.js';
 
@@ -71,6 +72,7 @@ interface ActionResult {
     matchingLineItemIds: string[];
   };
   customerNoteValue?: string;
+  depositScheduleValue?: DepositSchedule;
   computedQuantityMeta?: {
     formula: string;
     variableValues: Record<string, number>;
@@ -94,6 +96,7 @@ const CONDITION_TYPES = new Set([
   'request_text_extract',
   'compound',
   'always',
+  'quote_total_gte',
 ]);
 
 const ACTION_TYPES = new Set([
@@ -109,6 +112,7 @@ const ACTION_TYPES = new Set([
   'set_customer_note',
   'append_customer_note',
   'compute_quantity',
+  'set_deposit_schedule',
 ]);
 
 export function validateCondition(condition: unknown): { valid: boolean; error?: string } {
@@ -166,6 +170,15 @@ export function validateCondition(condition: unknown): { valid: boolean; error?:
         if (cond.matchMode !== 'exact' && cond.matchMode !== 'starts_with' && cond.matchMode !== 'contains') {
           return { valid: false, error: 'matchMode must be "exact", "starts_with", or "contains"' };
         }
+      }
+      break;
+
+    case 'quote_total_gte':
+      if (typeof cond.threshold !== 'number') {
+        return { valid: false, error: 'Condition type "quote_total_gte" requires a number "threshold" field' };
+      }
+      if (!Number.isFinite(cond.threshold) || cond.threshold < 0) {
+        return { valid: false, error: 'Condition type "quote_total_gte" threshold must be a finite non-negative number' };
       }
       break;
 
@@ -466,6 +479,74 @@ export function validateAction(action: unknown): { valid: boolean; error?: strin
         }
       }
       break;
+
+    case 'set_deposit_schedule': {
+      // Validate schedule is a non-null object
+      if (act.schedule === null || act.schedule === undefined || typeof act.schedule !== 'object') {
+        return { valid: false, error: 'Action type "set_deposit_schedule" requires a non-null object "schedule" field' };
+      }
+      const schedule = act.schedule as Record<string, unknown>;
+
+      // Validate schedule.label is a non-empty string of 1–100 characters
+      if (typeof schedule.label !== 'string' || schedule.label.trim().length === 0) {
+        return { valid: false, error: 'set_deposit_schedule "schedule.label" must be a non-empty string' };
+      }
+      if (schedule.label.length > 100) {
+        return { valid: false, error: 'set_deposit_schedule "schedule.label" must be 100 characters or fewer' };
+      }
+
+      // Validate schedule.milestones is an array of 1–10 entries
+      if (!Array.isArray(schedule.milestones)) {
+        return { valid: false, error: 'set_deposit_schedule "schedule.milestones" must be an array' };
+      }
+      if (schedule.milestones.length === 0) {
+        return { valid: false, error: 'set_deposit_schedule "schedule.milestones" must contain at least one entry' };
+      }
+      if (schedule.milestones.length > 10) {
+        return { valid: false, error: 'set_deposit_schedule "schedule.milestones" must contain 10 or fewer entries' };
+      }
+
+      // Validate each milestone
+      let percentageSum = 0;
+      for (let i = 0; i < schedule.milestones.length; i++) {
+        const rawMilestone = schedule.milestones[i];
+
+        // Guard: each milestone entry must be a non-null object
+        if (rawMilestone === null || rawMilestone === undefined || typeof rawMilestone !== 'object') {
+          return { valid: false, error: `set_deposit_schedule milestone[${i}] must be a non-null object` };
+        }
+
+        const milestone = rawMilestone as Record<string, unknown>;
+
+        // Validate percentage is a whole integer between 1 and 100
+        if (typeof milestone.percentage !== 'number' || !Number.isFinite(milestone.percentage)) {
+          return { valid: false, error: `set_deposit_schedule milestone[${i}].percentage must be a number` };
+        }
+        if (!Number.isInteger(milestone.percentage)) {
+          return { valid: false, error: `set_deposit_schedule milestone[${i}].percentage must be a whole integer` };
+        }
+        if (milestone.percentage < 1 || milestone.percentage > 100) {
+          return { valid: false, error: `set_deposit_schedule milestone[${i}].percentage must be between 1 and 100` };
+        }
+
+        // Validate description is a non-empty string with max 255 characters
+        if (typeof milestone.description !== 'string' || milestone.description.trim().length === 0) {
+          return { valid: false, error: `set_deposit_schedule milestone[${i}].description must be a non-empty string with max length 255` };
+        }
+        if (milestone.description.trim().length > 255) {
+          return { valid: false, error: `set_deposit_schedule milestone[${i}].description must be a non-empty string with max length 255` };
+        }
+
+        percentageSum += milestone.percentage as number;
+      }
+
+      // Validate that the sum of all percentage values equals exactly 100
+      if (percentageSum !== 100) {
+        return { valid: false, error: `set_deposit_schedule milestone percentages must sum to 100, got ${percentageSum}` };
+      }
+
+      break;
+    }
   }
 
   return { valid: true };
@@ -672,6 +753,15 @@ export function evaluateCondition(
       };
     }
 
+    case 'quote_total_gte': {
+      const total = lineItems.reduce((sum, li) => sum + li.quantity * li.unitPrice, 0);
+      const matched = total >= condition.threshold;
+      return {
+        matched,
+        matchingLineItemIds: matched ? lineItems.map((li) => li.id) : [],
+      };
+    }
+
     case 'always':
       return { matched: true, matchingLineItemIds: lineItems.map((li) => li.id) };
 
@@ -708,6 +798,7 @@ export function executeAction(
   customerNote: string | null,
   contextVariables?: Map<string, number>,
   rawExtractedText?: Map<string, string>,
+  depositSchedule?: DepositSchedule | null,
 ): ActionResult {
   switch (action.type) {
     case 'add_line_item': {
@@ -1103,6 +1194,30 @@ export function executeAction(
       };
     }
 
+    case 'set_deposit_schedule': {
+      const previousSchedule = depositSchedule ?? null;
+      const newSchedule = action.schedule;
+      return {
+        modified: true,
+        lineItems,
+        depositScheduleValue: newSchedule,
+        beforeSnapshot: [{
+          id: '__deposit_schedule__',
+          productName: 'Deposit Schedule',
+          description: previousSchedule !== null ? JSON.stringify(previousSchedule) : '',
+          quantity: 0,
+          unitPrice: 0,
+        }],
+        afterSnapshot: [{
+          id: '__deposit_schedule__',
+          productName: 'Deposit Schedule',
+          description: JSON.stringify(newSchedule),
+          quantity: 0,
+          unitPrice: 0,
+        }],
+      };
+    }
+
     case 'compute_quantity': {
       const vars = contextVariables ?? new Map<string, number>();
       const rawText = rawExtractedText ?? new Map<string, string>();
@@ -1222,10 +1337,12 @@ export function executeRules(input: RulesEngineInput): RulesEngineResult {
   const auditTrail: AuditEntry[] = [];
   const pendingEnrichments: PendingEnrichment[] = [];
   let customerNote: string | null = null;
+  let depositSchedule: DepositSchedule | null = null;
+  let depositSchedulePriority: number = Infinity;
 
   // Early exit: no rules → return unmodified
   if (rules.length === 0) {
-    return { lineItems, auditTrail, iterationCount: 0, converged: true, pendingEnrichments: [], customerNote: null };
+    return { lineItems, auditTrail, iterationCount: 0, converged: true, pendingEnrichments: [], customerNote: null, depositSchedule: null };
   }
 
   // Track which (ruleId, lineItemId) pairs have been applied to prevent
@@ -1308,12 +1425,20 @@ export function executeRules(input: RulesEngineInput): RulesEngineResult {
 
       // Execute each action
       for (const action of rule.actions) {
-        const actionResult = executeAction(action, lineItems, catalog, rule.id, customerNote, ruleContextVariables, ruleRawExtractedText);
+        const actionResult = executeAction(action, lineItems, catalog, rule.id, customerNote, ruleContextVariables, ruleRawExtractedText, depositSchedule);
         lineItems = actionResult.lineItems;
 
         // Update customer note state if the action produced a new value
         if (actionResult.customerNoteValue !== undefined) {
           customerNote = actionResult.customerNoteValue;
+        }
+
+        // Update deposit schedule state — lowest priorityOrder wins
+        if (actionResult.depositScheduleValue !== undefined) {
+          if (rule.priorityOrder < depositSchedulePriority) {
+            depositSchedule = actionResult.depositScheduleValue;
+            depositSchedulePriority = rule.priorityOrder;
+          }
         }
 
         if (actionResult.modified || actionResult.warning || actionResult.pendingEnrichment) {
@@ -1366,7 +1491,7 @@ export function executeRules(input: RulesEngineInput): RulesEngineResult {
 
     // Convergence: no modifications this iteration
     if (!anyModified) {
-      return { lineItems, auditTrail, iterationCount, converged: true, pendingEnrichments, customerNote };
+      return { lineItems, auditTrail, iterationCount, converged: true, pendingEnrichments, customerNote, depositSchedule };
     }
   }
 
@@ -1385,5 +1510,5 @@ export function executeRules(input: RulesEngineInput): RulesEngineResult {
     warning: `Rules engine did not converge after ${maxIterations} iterations`,
   });
 
-  return { lineItems, auditTrail, iterationCount, converged: false, pendingEnrichments, customerNote };
+  return { lineItems, auditTrail, iterationCount, converged: false, pendingEnrichments, customerNote, depositSchedule };
 }

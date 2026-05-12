@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Bindings } from '../bindings.js';
-import type { User, ProductCatalogEntry, QuoteTemplate, JobberCustomerRequest, SimilarQuote, StructuredRule, RuleCondition, RuleAction, TriggerMode, ActionItem, CreateManualRequestPayload, UpdateProductivityRatePayload } from 'shared';
+import type { User, ProductCatalogEntry, QuoteTemplate, JobberCustomerRequest, SimilarQuote, StructuredRule, RuleCondition, RuleAction, TriggerMode, ActionItem, CreateManualRequestPayload, UpdateProductivityRatePayload, DepositSchedule } from 'shared';
 import { sessionMiddleware } from '../middleware/session.js';
 import { PlatformError } from '../errors/index.js';
 import { JobberWebSession } from '../services/jobber-web-session.js';
@@ -556,6 +556,7 @@ app.put('/drafts/:id', async (c) => {
     selectedTemplateId?: string | null;
     status?: 'draft' | 'finalized';
     actionItems?: any[];
+    depositSchedule?: DepositSchedule | null;
   };
 
   // Validate action items if provided
@@ -649,6 +650,7 @@ app.put('/drafts/:id', async (c) => {
     selectedTemplateId: body.selectedTemplateId,
     status: body.status,
     actionItems: body.actionItems,
+    depositSchedule: body.depositSchedule,
   });
   return c.json(draft);
 });
@@ -870,6 +872,7 @@ app.post('/drafts/:id/revise', async (c) => {
     unresolvedItems: revised.unresolvedItems,
     actionItems: mergedActionItems,
     ...(revised.customerNote !== undefined && revised.customerNote !== null ? { customerNote: revised.customerNote } : {}),
+    ...(revised.depositSchedule !== undefined ? { depositSchedule: revised.depositSchedule } : {}),
   });
 
   // Persist the revision history entry (after successful update)
@@ -1414,19 +1417,77 @@ app.get('/corpus/status', async (c) => {
 /**
  * GET /jobber/requests/:id
  * Fetch stored details for a single Jobber request.
+ * If no webhook row exists, falls back to a live Jobber public API fetch and stores the result.
  * Re-fetches attachment URLs from Jobber API since stored URLs are signed and expire.
  */
 app.get('/jobber/requests/:id', async (c) => {
   const db = c.env.DB;
   const requestId = c.req.param('id');
 
-  const row = await db.prepare(
+  let row = await db.prepare(
     `SELECT jobber_request_id, title, client_name, description, image_urls, request_body
      FROM jobber_webhook_requests
      WHERE jobber_request_id = ?
      ORDER BY processed_at DESC, received_at DESC
      LIMIT 1`
   ).bind(requestId).first() as Record<string, unknown> | null;
+
+  // No webhook row — attempt a live fetch from the Jobber public API and store it
+  if (!row) {
+    try {
+      const { jobberIntegration } = await createJobberIntegration(db, c.env);
+      if (jobberIntegration.isAvailable()) {
+        const detail = await jobberIntegration.graphqlRequest<Record<string, unknown>>(
+          `query FetchRequestDetail($id: EncodedId!) {
+            request(id: $id) {
+              id title companyName contactName phone email requestStatus createdAt jobberWebUri
+              client { id firstName lastName companyName }
+              notes(first: 20) { edges { node { ... on RequestNote { message createdAt createdBy { __typename } } } } }
+              noteAttachments(first: 20) { edges { node { url fileName contentType } } }
+            }
+          }`,
+          { id: requestId },
+        );
+        const request = (detail as any)?.request;
+        if (request) {
+          const noteMessages = (request.notes?.edges ?? [])
+            .map((e: any) => e.node?.message)
+            .filter((m: unknown): m is string => typeof m === 'string' && (m as string).trim().length > 0);
+          const description = noteMessages.join('\n\n');
+          const imageUrls = (request.noteAttachments?.edges ?? [])
+            .filter((e: any) => e.node?.contentType?.startsWith('image/'))
+            .map((e: any) => e.node.url);
+          const clientName = request.companyName || request.contactName
+            || (request.client ? `${request.client.firstName || ''} ${request.client.lastName || ''}`.trim() || request.client.companyName : null)
+            || null;
+
+          await db.prepare(
+            `INSERT INTO jobber_webhook_requests
+              (id, jobber_request_id, topic, account_id, title, client_name, description, request_body, image_urls, raw_payload, processed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (jobber_request_id, topic) DO UPDATE SET
+               title = excluded.title, client_name = excluded.client_name, description = excluded.description,
+               request_body = excluded.request_body, image_urls = excluded.image_urls, processed_at = excluded.processed_at`
+          ).bind(
+            crypto.randomUUID(), requestId, 'API_FETCH', '',
+            request.title ?? null, clientName, description || null,
+            JSON.stringify(request), JSON.stringify(imageUrls),
+            JSON.stringify({ source: 'api_fetch' }), new Date().toISOString(),
+          ).run();
+
+          row = await db.prepare(
+            `SELECT jobber_request_id, title, client_name, description, image_urls, request_body
+             FROM jobber_webhook_requests
+             WHERE jobber_request_id = ?
+             ORDER BY processed_at DESC, received_at DESC
+             LIMIT 1`
+          ).bind(requestId).first() as Record<string, unknown> | null;
+        }
+      }
+    } catch (fetchErr) {
+      console.warn('[quotes/requests/:id] Live API fallback failed:', fetchErr instanceof Error ? fetchErr.message : fetchErr);
+    }
+  }
 
   if (!row) {
     return c.json({ request: null });

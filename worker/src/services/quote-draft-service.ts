@@ -1,5 +1,5 @@
 import { PlatformError } from '../errors/index.js';
-import type { ActionItem, LineItemRationale, QuoteDraft, QuoteDraftUpdate, QuoteLineItem, SqftResolutionResult } from 'shared';
+import type { ActionItem, DepositSchedule, LineItemRationale, QuoteDraft, QuoteDraftUpdate, QuoteLineItem, SqftResolutionResult } from 'shared';
 
 export class QuoteDraftService {
   private readonly db: D1Database;
@@ -21,8 +21,8 @@ export class QuoteDraftService {
         // Atomically compute next draft_number inside the INSERT so the
         // read and write happen in the same statement, avoiding TOCTOU races.
         this.db.prepare(
-          `INSERT INTO quote_drafts (id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, sqft_resolution_json, draft_number)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(draft_number), 0) + 1 FROM quote_drafts WHERE user_id = ?))`
+          `INSERT INTO quote_drafts (id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, sqft_resolution_json, deposit_schedule, draft_number)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(draft_number), 0) + 1 FROM quote_drafts WHERE user_id = ?))`
         ).bind(
           draft.id,
           draft.userId,
@@ -34,6 +34,7 @@ export class QuoteDraftService {
           draft.customerNote ?? null,
           draft.manualRequestId ?? null,
           draft.sqftResolution ? JSON.stringify(draft.sqftResolution) : null,
+          draft.depositSchedule ? JSON.stringify(draft.depositSchedule) : null,
           draft.userId,
         ),
       ];
@@ -96,7 +97,7 @@ export class QuoteDraftService {
     // Re-read the saved row to get DB-assigned fields (draft_number, timestamps).
     // We reuse the original draft's lineItems/unresolvedItems since they were just inserted.
     const row = await this.db.prepare(
-      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, created_at, updated_at FROM quote_drafts WHERE id = ?'
+      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, deposit_schedule, created_at, updated_at FROM quote_drafts WHERE id = ?'
     ).bind(draft.id).first() as any;
 
     return this.mapDraftRow(row, draft.lineItems, draft.unresolvedItems, draft.actionItems);
@@ -107,7 +108,7 @@ export class QuoteDraftService {
    */
   async getById(draftId: string, userId: string): Promise<QuoteDraft> {
     const row = await this.db.prepare(
-      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, created_at, updated_at FROM quote_drafts WHERE id = ? AND user_id = ?'
+      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, deposit_schedule, created_at, updated_at FROM quote_drafts WHERE id = ? AND user_id = ?'
     ).bind(draftId, userId).first() as any;
 
     if (!row) {
@@ -130,7 +131,7 @@ export class QuoteDraftService {
    */
   async list(userId: string): Promise<QuoteDraft[]> {
     const result = await this.db.prepare(
-      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, created_at, updated_at FROM quote_drafts WHERE user_id = ? ORDER BY created_at DESC'
+      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, deposit_schedule, created_at, updated_at FROM quote_drafts WHERE user_id = ? ORDER BY created_at DESC'
     ).bind(userId).all();
 
     const drafts: QuoteDraft[] = [];
@@ -163,6 +164,46 @@ export class QuoteDraftService {
     if (updates.customerNote !== undefined) {
       setClauses.push('customer_note = ?');
       values.push(updates.customerNote);
+    }
+
+    if (updates.depositSchedule !== undefined) {
+      if (updates.depositSchedule !== null) {
+        // Validate the schedule
+        const schedule = updates.depositSchedule;
+        if (!schedule.milestones || schedule.milestones.length < 1 || schedule.milestones.length > 10) {
+          throw new PlatformError({
+            severity: 'error',
+            component: 'QuoteDraftService',
+            operation: 'update',
+            description: 'Deposit schedule must have between 1 and 10 milestones.',
+            recommendedActions: ['Provide a deposit schedule with 1 to 10 milestones'],
+          });
+        }
+        for (const milestone of schedule.milestones) {
+          if (!Number.isInteger(milestone.percentage) || milestone.percentage < 1 || milestone.percentage > 100) {
+            throw new PlatformError({
+              severity: 'error',
+              component: 'QuoteDraftService',
+              operation: 'update',
+              description: `Milestone percentage ${milestone.percentage} must be a whole integer between 1 and 100.`,
+              recommendedActions: ['Ensure each milestone percentage is a whole integer between 1 and 100'],
+            });
+          }
+        }
+        const sum = schedule.milestones.reduce((acc, m) => acc + m.percentage, 0);
+        // Percentages are whole integers; sum must equal exactly 100
+        if (sum !== 100) {
+          throw new PlatformError({
+            severity: 'error',
+            component: 'QuoteDraftService',
+            operation: 'update',
+            description: `Deposit schedule milestone percentages must sum to 100, but they sum to ${sum}.`,
+            recommendedActions: ['Adjust milestone percentages so they sum to exactly 100'],
+          });
+        }
+      }
+      setClauses.push('deposit_schedule = ?');
+      values.push(updates.depositSchedule !== null ? JSON.stringify(updates.depositSchedule) : null);
     }
 
     values.push(draftId, userId);
@@ -230,7 +271,7 @@ export class QuoteDraftService {
     await this.db.batch(statements);
 
     const row = await this.db.prepare(
-      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, created_at, updated_at FROM quote_drafts WHERE id = ?'
+      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, deposit_schedule, created_at, updated_at FROM quote_drafts WHERE id = ?'
     ).bind(draftId).first() as any;
 
     const { lineItems, unresolvedItems } = await this.fetchLineItems(draftId);
@@ -440,6 +481,16 @@ export class QuoteDraftService {
       }
     }
 
+    // Deserialize deposit_schedule if present
+    let depositSchedule: DepositSchedule | null = null;
+    if (row.deposit_schedule) {
+      try {
+        depositSchedule = JSON.parse(row.deposit_schedule as string) as DepositSchedule;
+      } catch {
+        console.warn(`[QuoteDraftService] Failed to parse deposit_schedule for draft id=${row.id}`);
+      }
+    }
+
     return {
       id: row.id as string,
       draftNumber: (row.draft_number as number) ?? 0,
@@ -457,6 +508,7 @@ export class QuoteDraftService {
       status: row.status as QuoteDraft['status'],
       actionItems,
       customerNote: (row.customer_note as string) ?? null,
+      depositSchedule,
       sqftResolution,
       createdAt: new Date(row.created_at as string),
       updatedAt: new Date(row.updated_at as string),
