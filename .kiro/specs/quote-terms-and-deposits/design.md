@@ -100,7 +100,7 @@ export interface PaymentMilestone {
 export interface DepositSchedule {
   /** Human-readable name for the schedule (1–100 chars) */
   label: string;
-  /** Ordered list of payment milestones (1–10 entries); percentages must sum to 100.00 */
+  /** Ordered list of payment milestones (1–10 entries); percentages must be whole integers summing to exactly 100 */
   milestones: PaymentMilestone[];
 }
 ```
@@ -365,9 +365,9 @@ This reuses the existing `AuditEntry` shape without requiring a schema change.
 ### API Validation Errors
 
 - `PUT /api/quotes/drafts/:id` with a `depositSchedule` whose milestone percentages do not sum to 100 → HTTP 400: `"Deposit schedule milestone percentages must sum to 100"`.
-- `PUT /api/quotes/drafts/:id` with any individual milestone percentage outside 0.01–100.00 → HTTP 400 identifying the invalid percentage.
+- `PUT /api/quotes/drafts/:id` with any individual milestone percentage that is not a whole integer between 1 and 100 → HTTP 400 identifying the invalid percentage.
 - `PUT /api/quotes/drafts/:id` with a `milestones` array outside 1–10 entries → HTTP 400.
-- Note: API validation uses floating-point percentages (up to 2 decimal places); rules engine validation requires whole integers. These are separate validation contexts.
+- Note: Both the API and the rules engine require whole integer percentages (1–100). `Math.round` is applied when rendering percentages in the Jobber message as a safety net for any legacy data.
 
 ### Persistence Errors
 

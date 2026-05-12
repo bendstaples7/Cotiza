@@ -148,7 +148,7 @@ The `customerNote` field, rules engine `set_customer_note`/`append_customer_note
    - 10% — `"Due at customer sign-off of punch list"`
 3. THE High_Value_Deposit_Rule SHALL have a numerically lower priority value than the Standard_Deposit_Rule so that when both rules fire, the High_Value_Deposit_Rule's schedule is the one applied.
 4. THE High_Value_Deposit_Rule SHALL be stored as a standard structured rule in the rules database so that it can be edited or disabled through the existing rules management UI without a code deployment.
-5. WHEN the total value of a Quote_Draft's line items changes, THE QuoteEngine SHALL re-evaluate deposit schedule rules and replace the Deposit_Schedule with the output of the highest-precedence matching rule; if the updated total drops below $10,000, the Deposit_Schedule SHALL revert to the Standard_Deposit_Rule's single-milestone schedule.
+5. WHEN the total value of a Quote_Draft's line items changes, THE QuoteEngine SHALL re-evaluate deposit schedule rules and replace the Deposit_Schedule with the output of the highest-precedence matching rule; if the updated total drops below $10,000, the Deposit_Schedule SHALL revert to the Standard_Deposit_Rule's two-milestone schedule (30% + 70%).
 
 ---
 
@@ -174,7 +174,7 @@ The `customerNote` field, rules engine `set_customer_note`/`append_customer_note
 #### Acceptance Criteria
 
 1. WHEN a Quote_Draft with a non-null `depositSchedule` is pushed to Jobber, THE JobberQuotePushService SHALL append the deposit schedule information to the `message` field of the `quoteCreate` mutation, after any existing `customerNote` content, separated by two newline characters.
-2. THE deposit schedule text appended to the Jobber message SHALL be formatted as: the schedule `label` on the first line, followed by one line per milestone in the format `• {percentage}% — {description}`, where `percentage` is a whole integer between 0 and 100; if the `milestones` array is empty, no deposit schedule text SHALL be appended.
+2. THE deposit schedule text appended to the Jobber message SHALL be formatted as: the schedule `label` on the first line, followed by one line per milestone in the format `• {percentage}% — {description}`, where `percentage` is a whole integer between 1 and 100; if the `milestones` array is empty, no deposit schedule text SHALL be appended.
 3. WHEN a Quote_Draft has a `null` `depositSchedule`, THE JobberQuotePushService SHALL not append any deposit schedule text to the Jobber message.
 4. THE `message` field sent to Jobber SHALL be assembled in the following order, with each present segment separated by two newline characters: (1) `customerNote` if non-null, (2) deposit schedule text if `depositSchedule` is non-null, (3) unresolved items text if any unresolved line items exist; segments that are null or absent SHALL be omitted entirely.
 
@@ -198,7 +198,7 @@ The `customerNote` field, rules engine `set_customer_note`/`append_customer_note
 
 #### Acceptance Criteria
 
-1. THE `shared` package SHALL include a `PaymentMilestone` interface with `description: string` and `percentage: number` (0–100 inclusive) fields.
+1. THE `shared` package SHALL include a `PaymentMilestone` interface with `description: string` and `percentage: number` (whole integer 1–100 inclusive) fields.
 2. THE `shared` package SHALL include a `DepositSchedule` interface with `label: string` and `milestones: PaymentMilestone[]` fields.
 3. THE `QuoteDraft` interface in `shared/src/types/quote.ts` SHALL include a `depositSchedule` field of type `DepositSchedule | null`.
 4. THE `QuoteDraftUpdate` interface in `shared/src/types/quote.ts` SHALL include an optional `depositSchedule` field of type `DepositSchedule | null`.
