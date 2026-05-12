@@ -1,6 +1,43 @@
-import type { QuoteDraft } from 'shared';
+import type { QuoteDraft, DepositSchedule, QuoteLineItem } from 'shared';
 import { PlatformError } from '../errors/index.js';
 import type { JobberIntegration } from './jobber-integration.js';
+
+/**
+ * Assembles the Jobber quote message from its three optional segments:
+ *   1. customerNote (if non-null and non-empty)
+ *   2. deposit schedule text (if depositSchedule is non-null and has at least one milestone)
+ *   3. unresolved items text (if unresolvedItems is non-empty)
+ *
+ * Present segments are joined with `\n\n`. Absent segments are omitted entirely.
+ * Returns `undefined` when no segments are present.
+ *
+ * Milestone percentages are rendered as whole integers via Math.round.
+ */
+export function buildJobberMessage(
+  customerNote: string | null,
+  depositSchedule: DepositSchedule | null,
+  unresolvedItems: QuoteLineItem[],
+): string | undefined {
+  const messageParts: string[] = [];
+
+  if (customerNote?.trim()) {
+    messageParts.push(customerNote.trim());
+  }
+
+  if (depositSchedule && depositSchedule.milestones.length > 0) {
+    const milestoneLines = depositSchedule.milestones.map(
+      (m) => `• ${Math.round(m.percentage)}% — ${m.description}`,
+    );
+    messageParts.push(`${depositSchedule.label}\n${milestoneLines.join('\n')}`);
+  }
+
+  if (unresolvedItems && unresolvedItems.length > 0) {
+    const unresolvedTexts = unresolvedItems.map((item) => `• ${item.originalText}`);
+    messageParts.push(`Unresolved items from original request:\n${unresolvedTexts.join('\n')}`);
+  }
+
+  return messageParts.length > 0 ? messageParts.join('\n\n') : undefined;
+}
 
 export interface PushResult {
   jobberQuoteId: string;
@@ -185,19 +222,8 @@ export class JobberQuotePushService {
     const paddedNumber = String(draft.draftNumber ?? 0).padStart(3, '0');
     const title = `Draft D-${paddedNumber}`;
 
-    // Build message: customerNote first, then unresolved items
-    const messageParts: string[] = [];
-
-    if (draft.customerNote?.trim()) {
-      messageParts.push(draft.customerNote.trim());
-    }
-
-    if (draft.unresolvedItems && draft.unresolvedItems.length > 0) {
-      const unresolvedTexts = draft.unresolvedItems.map((item) => `• ${item.originalText}`);
-      messageParts.push(`Unresolved items from original request:\n${unresolvedTexts.join('\n')}`);
-    }
-
-    const message: string | undefined = messageParts.length > 0 ? messageParts.join('\n\n') : undefined;
+    // Build message in order: (1) customerNote, (2) deposit schedule, (3) unresolved items
+    const message = buildJobberMessage(draft.customerNote, draft.depositSchedule, draft.unresolvedItems ?? []);
 
     const input: Record<string, unknown> = {
       clientId,

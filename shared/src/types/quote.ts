@@ -99,6 +99,22 @@ export interface QuoteLineItem {
   rationale?: LineItemRationale;
 }
 
+/** A single payment milestone within a deposit schedule */
+export interface PaymentMilestone {
+  /** Human-readable label for when this payment is due (max 255 chars) */
+  description: string;
+  /** Percentage of total quote value due at this milestone (0.01–100.00, up to 2 decimal places) */
+  percentage: number;
+}
+
+/** A structured payment plan attached to a quote draft */
+export interface DepositSchedule {
+  /** Human-readable name for the schedule (1–100 chars) */
+  label: string;
+  /** Ordered list of payment milestones (1–10 entries); percentages must sum to 100.00 */
+  milestones: PaymentMilestone[];
+}
+
 /** The full quote draft */
 export interface QuoteDraft {
   id: string;
@@ -120,6 +136,8 @@ export interface QuoteDraft {
   similarQuotes?: SimilarQuote[];
   revisionHistory?: RevisionHistoryEntry[];
   customerNote: string | null;
+  /** Deposit schedule assigned to this quote draft, or null if none has been set */
+  depositSchedule: DepositSchedule | null;
   /** Resolved square footage result, including any manual override */
   sqftResolution?: SqftResolutionResult | null;
   createdAt: Date;
@@ -191,6 +209,8 @@ export interface QuoteDraftUpdate {
   selectedTemplateId?: string | null;
   status?: 'draft' | 'finalized';
   customerNote?: string | null;
+  /** Deposit schedule to assign; omit to leave unchanged, null to clear */
+  depositSchedule?: DepositSchedule | null;
   /** Set to a positive number to apply a manual sqft override; null to clear */
   sqftOverride?: number | null;
 }
@@ -263,7 +283,8 @@ export type RuleConditionType =
   | 'request_text_contains'
   | 'request_text_extract'
   | 'compound'
-  | 'always';
+  | 'always'
+  | 'quote_total_gte';
 
 /** A typed condition for a structured rule */
 export type RuleCondition =
@@ -275,7 +296,8 @@ export type RuleCondition =
   | { type: 'request_text_contains'; substring: string }
   | { type: 'request_text_extract'; pattern: string; variableName: string; preset?: string }
   | { type: 'compound'; conditions: RuleCondition[] }
-  | { type: 'always' };
+  | { type: 'always' }
+  | { type: 'quote_total_gte'; threshold: number };
 
 /** Action types supported by the rules engine */
 export type RuleActionType =
@@ -290,7 +312,8 @@ export type RuleActionType =
   | 'extract_request_context'
   | 'set_customer_note'
   | 'append_customer_note'
-  | 'compute_quantity';
+  | 'compute_quantity'
+  | 'set_deposit_schedule';
 
 /** A typed action for a structured rule */
 export type RuleAction =
@@ -305,7 +328,8 @@ export type RuleAction =
   | { type: 'extract_request_context'; productNamePattern: string; extractionPrompt: string; separator?: string; matchMode?: MatchMode }
   | { type: 'set_customer_note'; text: string }
   | { type: 'append_customer_note'; text: string; separator?: string }
-  | { type: 'compute_quantity'; productNamePattern: string; formula: string; matchMode?: MatchMode };
+  | { type: 'compute_quantity'; productNamePattern: string; formula: string; matchMode?: MatchMode }
+  | { type: 'set_deposit_schedule'; schedule: DepositSchedule };
 
 /** A structured rule with typed condition and actions */
 export interface StructuredRule {
@@ -385,6 +409,7 @@ export interface RulesEngineResult {
   converged: boolean;
   pendingEnrichments: PendingEnrichment[];
   customerNote: string | null;
+  depositSchedule: DepositSchedule | null;
 }
 
 /** A pending AI enrichment for a line item description */

@@ -5,7 +5,7 @@ import { QuantityEngine } from './quantity-engine.js';
 import { SqftResolutionService } from './sqft-resolution-service.js';
 import type { SqftResolutionResult } from './sqft-resolution-service.js';
 import { ProductivityRatesService } from './productivity-rates-service.js';
-import type { ProductCatalogEntry, QuoteTemplate, QuoteDraft, QuoteLineItem, LineItemRationale, SimilarQuote, StructuredRule, AuditEntry, EngineLineItem, ActionItem, QuantityPredictionMeta, RuleCondition } from 'shared';
+import type { ProductCatalogEntry, QuoteTemplate, QuoteDraft, QuoteLineItem, LineItemRationale, SimilarQuote, StructuredRule, AuditEntry, EngineLineItem, ActionItem, QuantityPredictionMeta, RuleCondition, DepositSchedule } from 'shared';
 
 const GENERATION_TIMEOUT_MS = 120_000;
 const CONFIDENCE_THRESHOLD = 70;
@@ -298,6 +298,7 @@ export class QuoteEngine {
       // deterministic rules engine, then convert back for deduplication.
       let auditTrail: AuditEntry[] | undefined;
       let rulesCustomerNote: string | null = null;
+      let rulesDepositSchedule: DepositSchedule | null = null;
 
       if (structuredRules && structuredRules.length > 0) {
         const engineLineItems: EngineLineItem[] = aiResult.lineItems.map((item) => ({
@@ -323,6 +324,7 @@ export class QuoteEngine {
 
         auditTrail = engineResult.auditTrail;
         rulesCustomerNote = engineResult.customerNote;
+        rulesDepositSchedule = engineResult.depositSchedule;
 
         // Process AI enrichments synchronously (extract_request_context actions)
         if (engineResult.pendingEnrichments.length > 0 && input.customerText?.trim()) {
@@ -365,7 +367,7 @@ export class QuoteEngine {
       // placeBefore) is reflected in the catalog sort_order values.
       aiResult.lineItems = sortLineItemsByCatalog(aiResult.lineItems, catalog);
 
-      return this.buildDraft(input, aiResult, auditTrail, rulesCustomerNote, sqftResolutionResult);
+      return this.buildDraft(input, aiResult, auditTrail, rulesCustomerNote, sqftResolutionResult, rulesDepositSchedule);
     } catch (err) {
       if (err instanceof PlatformError) throw err;
 
@@ -582,6 +584,7 @@ export class QuoteEngine {
     auditTrail?: AuditEntry[],
     rulesCustomerNote?: string | null,
     sqftResolutionResult?: SqftResolutionResult | null,
+    depositSchedule?: DepositSchedule | null,
   ): QuoteEngineOutput {
     const now = new Date();
     const draftId = crypto.randomUUID();
@@ -695,6 +698,7 @@ export class QuoteEngine {
       jobberRequestId: null,
       status: 'draft',
       customerNote: rulesCustomerNote ?? null,
+      depositSchedule: depositSchedule ?? null,
       actionItems: actionItems.length > 0 ? actionItems : undefined,
       similarQuotes: similarQuotes.length > 0 ? similarQuotes : undefined,
       sqftResolution: sqftResolutionResult ?? null,

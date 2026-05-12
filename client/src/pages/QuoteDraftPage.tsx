@@ -53,6 +53,13 @@ export default function QuoteDraftPage() {
   const [customerNoteValue, setCustomerNoteValue] = useState('');
   const [customerNoteSaved, setCustomerNoteSaved] = useState('');
 
+  // Payment schedule edit state
+  const [editingSchedule, setEditingSchedule] = useState(false);
+  const [scheduleLabel, setScheduleLabel] = useState('');
+  const [scheduleMilestones, setScheduleMilestones] = useState<Array<{ description: string; percentage: string }>>([]);
+  const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+
   // Push to Jobber state
   const [pushing, setPushing] = useState(false);
   const [pushError, setPushError] = useState<string | null>(null);
@@ -575,6 +582,116 @@ export default function QuoteDraftPage() {
         <SimilarQuotesPanel similarQuotes={draft.similarQuotes} />
       )}
 
+      {/* Square Footage Resolution */}
+      <div style={sqftResolutionSectionStyle}>
+        <h2 style={sectionTitleStyle}>📐 Square Footage</h2>
+        {draft.sqftResolution?.resolution.resolved ? (
+          <>
+            {/* Active resolution display */}
+            <div style={sqftResolutionRowStyle}>
+              <span style={sqftValueStyle}>
+                {(draft.sqftResolution.manualOverride ?? draft.sqftResolution.resolution.value)?.toLocaleString()} sq ft
+              </span>
+              <span style={sqftTierLabelStyle}>
+                {getTierLabel(draft.sqftResolution.resolution.tier)}
+              </span>
+              {draft.sqftResolution.resolution.confidence && (
+                <span style={sqftConfidenceBadgeStyle(draft.sqftResolution.resolution.confidence)}>
+                  {draft.sqftResolution.resolution.confidence}
+                </span>
+              )}
+            </div>
+
+            {/* Tier-specific metadata */}
+            {draft.sqftResolution.resolution.tier === 'text_extraction' && draft.sqftResolution.resolution.metadata.matchedText && (
+              <p style={sqftMetaTextStyle}>
+                Matched: &ldquo;{draft.sqftResolution.resolution.metadata.matchedText}&rdquo;
+              </p>
+            )}
+            {draft.sqftResolution.resolution.tier === 'layout_diagram' && (
+              <div style={sqftMetaTextStyle}>
+                {draft.sqftResolution.resolution.metadata.imageId && (
+                  <span>Image: {draft.sqftResolution.resolution.metadata.imageId}</span>
+                )}
+                {draft.sqftResolution.resolution.metadata.aiReasoning && (
+                  <p style={{ margin: '0.25rem 0 0', fontStyle: 'italic' }}>
+                    {draft.sqftResolution.resolution.metadata.aiReasoning}
+                  </p>
+                )}
+              </div>
+            )}
+            {draft.sqftResolution.resolution.tier === 'public_records' && draft.sqftResolution.resolution.metadata.propertyAddress && (
+              <p style={sqftMetaTextStyle}>
+                Property: {draft.sqftResolution.resolution.metadata.propertyAddress}
+              </p>
+            )}
+
+            {/* Original resolution when override is active */}
+            {draft.sqftResolution.manualOverride !== null && draft.sqftResolution.originalResolution?.resolved && (
+              <div style={sqftOriginalResolutionStyle}>
+                <span style={{ fontWeight: 600, fontSize: '0.75rem', color: '#888' }}>Original: </span>
+                <span style={{ fontSize: '0.8rem', color: '#666' }}>
+                  {draft.sqftResolution.originalResolution.value?.toLocaleString()} sq ft
+                  {' '}({getTierLabel(draft.sqftResolution.originalResolution.tier)})
+                </span>
+                <button
+                  onClick={handleClearSqftOverride}
+                  disabled={sqftOverrideSaving}
+                  style={sqftClearBtnStyle}
+                  aria-label="Clear manual override and restore original resolution"
+                >
+                  {sqftOverrideSaving ? 'Clearing…' : 'Clear override'}
+                </button>
+              </div>
+            )}
+          </>
+        ) : (
+          <p style={sqftUnavailableStyle} role="status">
+            Square footage unavailable — quantity rules requiring it will use default values.
+          </p>
+        )}
+
+        {/* Manual override input — only shown when no override is currently active */}
+        {(draft.sqftResolution?.manualOverride === null || draft.sqftResolution?.manualOverride === undefined) && (
+          <div style={sqftOverrideFormStyle}>
+            <label htmlFor="sqft-override-input" style={sqftOverrideLabelStyle}>
+              {draft.sqftResolution?.resolution.resolved ? 'Override square footage:' : 'Set square footage manually:'}
+            </label>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                id="sqft-override-input"
+                type="number"
+                min={1}
+                max={100000}
+                step={1}
+                value={sqftOverrideInput}
+                onChange={(e) => { setSqftOverrideInput(e.target.value); setSqftOverrideError(null); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSaveSqftOverride(); }}
+                placeholder="e.g. 1500"
+                style={sqftOverrideInputStyle}
+                aria-label="Manual square footage override value"
+                disabled={sqftOverrideSaving}
+              />
+              <button
+                onClick={handleSaveSqftOverride}
+                disabled={!sqftOverrideInput.trim() || sqftOverrideSaving}
+                style={{
+                  ...sqftSaveBtnStyle,
+                  opacity: sqftOverrideInput.trim() && !sqftOverrideSaving ? 1 : 0.5,
+                  cursor: sqftOverrideInput.trim() && !sqftOverrideSaving ? 'pointer' : 'not-allowed',
+                }}
+                aria-label="Save manual square footage override"
+              >
+                {sqftOverrideSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+            {sqftOverrideError && (
+              <p style={sqftOverrideErrorStyle} role="alert">{sqftOverrideError}</p>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Matched line items table */}
       <div style={sectionStyle}>
         <h2 style={sectionTitleStyle}>Matched Line Items</h2>
@@ -1035,118 +1152,268 @@ export default function QuoteDraftPage() {
         );
       })()}
 
-      {/* Square Footage Resolution */}
-      <div style={sqftResolutionSectionStyle}>
-        <h2 style={sectionTitleStyle}>📐 Square Footage</h2>
-        {draft.sqftResolution?.resolution.resolved ? (
-          <>
-            {/* Active resolution display */}
-            <div style={sqftResolutionRowStyle}>
-              <span style={sqftValueStyle}>
-                {(draft.sqftResolution.manualOverride ?? draft.sqftResolution.resolution.value)?.toLocaleString()} sq ft
-              </span>
-              <span style={sqftTierLabelStyle}>
-                {getTierLabel(draft.sqftResolution.resolution.tier)}
-              </span>
-              {draft.sqftResolution.resolution.confidence && (
-                <span style={sqftConfidenceBadgeStyle(draft.sqftResolution.resolution.confidence)}>
-                  {draft.sqftResolution.resolution.confidence}
-                </span>
+      {/* Note to Customer */}
+      <div style={{ marginTop: '1.5rem' }}>
+        <label htmlFor="customer-note" style={{ fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>
+          Note to Customer
+        </label>
+        <textarea
+          id="customer-note"
+          rows={4}
+          placeholder="Optional note visible to the customer on the published quote..."
+          value={customerNoteValue}
+          onChange={(e) => setCustomerNoteValue(e.target.value)}
+          onBlur={handleCustomerNoteBlur}
+          disabled={draft.status === 'finalized'}
+          readOnly={draft.status === 'finalized'}
+          style={{ ...feedbackInputStyle, resize: 'vertical' }}
+        />
+      </div>
+
+      {/* Payment Schedule section */}
+      {(() => {
+        const quoteTotal = draft.lineItems.reduce(
+          (sum, item) => sum + item.quantity * item.unitPrice,
+          0,
+        );
+        const formatUSD = (amount: number) =>
+          new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
+
+        const isFinalized = draft.status === 'finalized';
+
+        const handleEditSchedule = () => {
+          const current = draft.depositSchedule;
+          setScheduleLabel(current?.label ?? 'Payment Schedule');
+          setScheduleMilestones(
+            current?.milestones.map((m) => ({
+              description: m.description,
+              percentage: String(m.percentage),
+            })) ?? [{ description: '', percentage: '' }],
+          );
+          setScheduleError(null);
+          setEditingSchedule(true);
+        };
+
+        const handleCancelSchedule = () => {
+          setEditingSchedule(false);
+          setScheduleError(null);
+        };
+
+        const handleSaveSchedule = async () => {
+          if (!id) return;
+          setScheduleError(null);
+
+          if (!scheduleLabel.trim()) {
+            setScheduleError('Schedule name is required.');
+            return;
+          }
+          if (scheduleMilestones.length === 0) {
+            setScheduleError('At least one milestone is required.');
+            return;
+          }
+          for (let i = 0; i < scheduleMilestones.length; i++) {
+            if (!scheduleMilestones[i].description.trim()) {
+              setScheduleError(`Milestone ${i + 1} description is required.`);
+              return;
+            }
+            const pct = parseFloat(scheduleMilestones[i].percentage);
+            if (isNaN(pct) || pct <= 0 || pct > 100) {
+              setScheduleError(`Milestone ${i + 1} percentage must be between 1 and 100.`);
+              return;
+            }
+          }
+          const total = scheduleMilestones.reduce((sum, m) => sum + parseFloat(m.percentage || '0'), 0);
+          if (Math.round(total * 100) !== 10000) {
+            setScheduleError(`Percentages must sum to 100. Current total: ${total.toFixed(2)}%.`);
+            return;
+          }
+
+          setScheduleSaving(true);
+          try {
+            const updated = await updateDraft(id, {
+              depositSchedule: {
+                label: scheduleLabel.trim(),
+                milestones: scheduleMilestones.map((m) => ({
+                  description: m.description.trim(),
+                  percentage: parseFloat(m.percentage),
+                })),
+              },
+            });
+            setDraft(updated);
+            setEditingSchedule(false);
+          } catch {
+            setScheduleError('Failed to save payment schedule. Please try again.');
+          } finally {
+            setScheduleSaving(false);
+          }
+        };
+
+        const percentageTotal = scheduleMilestones.reduce(
+          (sum, m) => sum + (parseFloat(m.percentage) || 0),
+          0,
+        );
+        const percentageTotalOk = Math.round(percentageTotal * 100) === 10000;
+
+        return (
+          <div style={{ ...sectionStyle, marginTop: '1rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+              <h2 style={{ ...sectionTitleStyle, margin: 0 }}>Payment Schedule</h2>
+              {!isFinalized && !editingSchedule && (
+                <button
+                  onClick={handleEditSchedule}
+                  style={{ background: 'none', border: '1px solid #ccc', borderRadius: 5, padding: '0.25rem 0.75rem', fontSize: '0.8rem', cursor: 'pointer', color: '#555' }}
+                >
+                  ✏️ Edit
+                </button>
               )}
             </div>
 
-            {/* Tier-specific metadata */}
-            {draft.sqftResolution.resolution.tier === 'text_extraction' && draft.sqftResolution.resolution.metadata.matchedText && (
-              <p style={sqftMetaTextStyle}>
-                Matched: &ldquo;{draft.sqftResolution.resolution.metadata.matchedText}&rdquo;
-              </p>
-            )}
-            {draft.sqftResolution.resolution.tier === 'layout_diagram' && (
-              <div style={sqftMetaTextStyle}>
-                {draft.sqftResolution.resolution.metadata.imageId && (
-                  <span>Image: {draft.sqftResolution.resolution.metadata.imageId}</span>
+            {editingSchedule ? (
+              <div>
+                <div style={{ marginBottom: '0.75rem' }}>
+                  <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#555', display: 'block', marginBottom: '0.25rem' }}>
+                    Schedule Name
+                  </label>
+                  <input
+                    type="text"
+                    value={scheduleLabel}
+                    onChange={(e) => setScheduleLabel(e.target.value)}
+                    style={{ width: '100%', padding: '0.4rem 0.6rem', borderRadius: 5, border: '1px solid #ccc', fontSize: '0.9rem', boxSizing: 'border-box' }}
+                    placeholder="e.g. Standard Deposit"
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                  {scheduleMilestones.map((m, i) => (
+                    <div key={i} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <input
+                        type="text"
+                        value={m.description}
+                        onChange={(e) => {
+                          const updated = [...scheduleMilestones];
+                          updated[i] = { ...updated[i], description: e.target.value };
+                          setScheduleMilestones(updated);
+                        }}
+                        placeholder="Milestone description"
+                        style={{ flex: 1, padding: '0.4rem 0.6rem', borderRadius: 5, border: '1px solid #ccc', fontSize: '0.85rem' }}
+                        aria-label={`Milestone ${i + 1} description`}
+                      />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                        <input
+                          type="number"
+                          value={m.percentage}
+                          onChange={(e) => {
+                            const updated = [...scheduleMilestones];
+                            updated[i] = { ...updated[i], percentage: e.target.value };
+                            setScheduleMilestones(updated);
+                          }}
+                          placeholder="%"
+                          min={1}
+                          max={100}
+                          style={{ width: 64, padding: '0.4rem 0.5rem', borderRadius: 5, border: '1px solid #ccc', fontSize: '0.85rem', textAlign: 'right' }}
+                          aria-label={`Milestone ${i + 1} percentage`}
+                        />
+                        <span style={{ fontSize: '0.85rem', color: '#555' }}>%</span>
+                        <span style={{ fontSize: '0.8rem', color: '#888', minWidth: 72, textAlign: 'right' }}>
+                          {(() => {
+                            const pct = parseFloat(m.percentage);
+                            return isNaN(pct) ? '—' : formatUSD((pct / 100) * quoteTotal);
+                          })()}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => setScheduleMilestones(scheduleMilestones.filter((_, j) => j !== i))}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#c00', fontSize: '1rem', padding: '0 0.25rem' }}
+                        aria-label={`Remove milestone ${i + 1}`}
+                        title="Remove milestone"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', color: percentageTotalOk ? '#2a7a2a' : '#c00', fontWeight: 600 }}>
+                  Total: {percentageTotal.toFixed(2)}% {percentageTotalOk ? '✓' : '(must equal 100%)'}
+                </p>
+
+                {scheduleMilestones.length < 10 && (
+                  <button
+                    onClick={() => setScheduleMilestones([...scheduleMilestones, { description: '', percentage: '' }])}
+                    style={{ background: 'none', border: '1px dashed #aaa', borderRadius: 5, padding: '0.3rem 0.75rem', fontSize: '0.8rem', cursor: 'pointer', color: '#555', marginBottom: '0.75rem' }}
+                  >
+                    + Add Milestone
+                  </button>
                 )}
-                {draft.sqftResolution.resolution.metadata.aiReasoning && (
-                  <p style={{ margin: '0.25rem 0 0', fontStyle: 'italic' }}>
-                    {draft.sqftResolution.resolution.metadata.aiReasoning}
-                  </p>
+
+                {scheduleError && (
+                  <p style={{ margin: '0 0 0.5rem', fontSize: '0.85rem', color: '#c00' }} role="alert">{scheduleError}</p>
+                )}
+
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    onClick={handleSaveSchedule}
+                    disabled={scheduleSaving}
+                    style={{ padding: '0.4rem 1rem', borderRadius: 5, border: 'none', background: '#00a89d', color: '#fff', fontWeight: 600, fontSize: '0.85rem', cursor: scheduleSaving ? 'not-allowed' : 'pointer', opacity: scheduleSaving ? 0.6 : 1 }}
+                  >
+                    {scheduleSaving ? 'Saving…' : 'Save'}
+                  </button>
+                  <button
+                    onClick={handleCancelSchedule}
+                    disabled={scheduleSaving}
+                    style={{ padding: '0.4rem 1rem', borderRadius: 5, border: '1px solid #ccc', background: '#fff', fontSize: '0.85rem', cursor: 'pointer', color: '#555' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : draft.depositSchedule ? (
+              <>
+                <p style={{ margin: '0 0 0.75rem', fontWeight: 600, fontSize: '0.95rem', color: '#333' }}>
+                  {draft.depositSchedule.label}
+                </p>
+                <table style={tableStyle}>
+                  <thead>
+                    <tr>
+                      <th style={thStyle}>Milestone</th>
+                      <th style={{ ...thStyle, textAlign: 'right' }}>%</th>
+                      <th style={{ ...thStyle, textAlign: 'right' }}>Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {draft.depositSchedule.milestones.map((milestone, idx) => (
+                      <tr key={idx}>
+                        <td style={tdStyle}>{milestone.description}</td>
+                        <td style={{ ...tdStyle, textAlign: 'right' }}>{milestone.percentage}%</td>
+                        <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 600 }}>
+                          {formatUSD((milestone.percentage / 100) * quoteTotal)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            ) : (
+              <div>
+                <p style={{ margin: '0 0 0.75rem', fontSize: '0.9rem', color: '#888' }}>
+                  No payment schedule has been assigned to this quote.
+                </p>
+                {!isFinalized && (
+                  <button
+                    onClick={handleEditSchedule}
+                    style={{ background: 'none', border: '1px dashed #aaa', borderRadius: 5, padding: '0.3rem 0.75rem', fontSize: '0.8rem', cursor: 'pointer', color: '#555' }}
+                  >
+                    + Add Payment Schedule
+                  </button>
                 )}
               </div>
-            )}
-            {draft.sqftResolution.resolution.tier === 'public_records' && draft.sqftResolution.resolution.metadata.propertyAddress && (
-              <p style={sqftMetaTextStyle}>
-                Property: {draft.sqftResolution.resolution.metadata.propertyAddress}
-              </p>
-            )}
-
-            {/* Original resolution when override is active */}
-            {draft.sqftResolution.manualOverride !== null && draft.sqftResolution.originalResolution?.resolved && (
-              <div style={sqftOriginalResolutionStyle}>
-                <span style={{ fontWeight: 600, fontSize: '0.75rem', color: '#888' }}>Original: </span>
-                <span style={{ fontSize: '0.8rem', color: '#666' }}>
-                  {draft.sqftResolution.originalResolution.value?.toLocaleString()} sq ft
-                  {' '}({getTierLabel(draft.sqftResolution.originalResolution.tier)})
-                </span>
-                <button
-                  onClick={handleClearSqftOverride}
-                  disabled={sqftOverrideSaving}
-                  style={sqftClearBtnStyle}
-                  aria-label="Clear manual override and restore original resolution"
-                >
-                  {sqftOverrideSaving ? 'Clearing…' : 'Clear override'}
-                </button>
-              </div>
-            )}
-          </>
-        ) : (
-          <p style={sqftUnavailableStyle} role="status">
-            Square footage unavailable — quantity rules requiring it will use default values.
-          </p>
-        )}
-
-        {/* Manual override input — only shown when no override is currently active */}
-        {(draft.sqftResolution?.manualOverride === null || draft.sqftResolution?.manualOverride === undefined) && (
-          <div style={sqftOverrideFormStyle}>
-            <label htmlFor="sqft-override-input" style={sqftOverrideLabelStyle}>
-              {draft.sqftResolution?.resolution.resolved ? 'Override square footage:' : 'Set square footage manually:'}
-            </label>
-            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-              <input
-                id="sqft-override-input"
-                type="number"
-                min={1}
-                max={100000}
-                step={1}
-                value={sqftOverrideInput}
-                onChange={(e) => { setSqftOverrideInput(e.target.value); setSqftOverrideError(null); }}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleSaveSqftOverride(); }}
-                placeholder="e.g. 1500"
-                style={sqftOverrideInputStyle}
-                aria-label="Manual square footage override value"
-                disabled={sqftOverrideSaving}
-              />
-              <button
-                onClick={handleSaveSqftOverride}
-                disabled={!sqftOverrideInput.trim() || sqftOverrideSaving}
-                style={{
-                  ...sqftSaveBtnStyle,
-                  opacity: sqftOverrideInput.trim() && !sqftOverrideSaving ? 1 : 0.5,
-                  cursor: sqftOverrideInput.trim() && !sqftOverrideSaving ? 'pointer' : 'not-allowed',
-                }}
-                aria-label="Save manual square footage override"
-              >
-                {sqftOverrideSaving ? 'Saving…' : 'Save'}
-              </button>
-            </div>
-            {sqftOverrideError && (
-              <p style={sqftOverrideErrorStyle} role="alert">{sqftOverrideError}</p>
             )}
           </div>
-        )}
-      </div>
+        );
+      })()}
 
       {/* Feedback input */}
-      <div style={sectionStyle}>
+      <div style={{ ...sectionStyle, marginTop: '1rem' }}>
         <h2 style={sectionTitleStyle}>Revise This Quote</h2>
         <p style={{ margin: '0 0 0.5rem', fontSize: '0.85rem', color: '#666' }}>
           Describe the changes you want (e.g., "increase drywall to 12 sheets", "remove painting").
@@ -1235,24 +1502,6 @@ export default function QuoteDraftPage() {
       {/* Draft metadata */}
       <div style={{ fontSize: '0.8rem', color: '#888', marginTop: '1.5rem' }}>
         Created: {new Date(draft.createdAt).toLocaleString()}
-      </div>
-
-      {/* Note to Customer */}
-      <div style={{ marginTop: '1.5rem' }}>
-        <label htmlFor="customer-note" style={{ fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>
-          Note to Customer
-        </label>
-        <textarea
-          id="customer-note"
-          rows={4}
-          placeholder="Optional note visible to the customer on the published quote..."
-          value={customerNoteValue}
-          onChange={(e) => setCustomerNoteValue(e.target.value)}
-          onBlur={handleCustomerNoteBlur}
-          disabled={draft.status === 'finalized'}
-          readOnly={draft.status === 'finalized'}
-          style={{ ...feedbackInputStyle, resize: 'vertical' }}
-        />
       </div>
 
       {/* Push to Jobber section */}

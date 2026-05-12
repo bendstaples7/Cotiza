@@ -1,7 +1,7 @@
 import { PlatformError } from '../errors/index.js';
 import { deduplicateLineItems, sortLineItemsByCatalog } from './line-item-utils.js';
 import { executeRules } from './rules-engine.js';
-import type { ProductCatalogEntry, QuoteLineItem, StructuredRule, AuditEntry, EngineLineItem } from 'shared';
+import type { ProductCatalogEntry, QuoteLineItem, StructuredRule, AuditEntry, EngineLineItem, DepositSchedule } from 'shared';
 
 export interface AIActionItem {
   lineItemProductName: string;
@@ -31,6 +31,8 @@ export interface RevisionOutput {
   rulesEngineAuditTrail?: AuditEntry[];
   /** Customer note produced by the rules engine, if any customer note actions fired. */
   customerNote?: string | null;
+  /** Deposit schedule produced by the rules engine, if any set_deposit_schedule actions fired. */
+  depositSchedule?: DepositSchedule | null;
 }
 
 interface AILineItem {
@@ -346,6 +348,7 @@ export class RevisionEngine {
     // deterministic rules engine, then convert back for deduplication.
     let auditTrail: AuditEntry[] | undefined;
     let rulesCustomerNote: string | null = null;
+    let rulesDepositSchedule: DepositSchedule | null = null;
 
     // Capture original unmatchedReasons before the rules engine may rebuild allItems
     const unmatchedReasonById = new Map<string, string>();
@@ -377,6 +380,7 @@ export class RevisionEngine {
 
       auditTrail = engineResult.auditTrail;
       rulesCustomerNote = engineResult.customerNote;
+      rulesDepositSchedule = engineResult.depositSchedule;
 
       // Process AI enrichments synchronously (extract_request_context actions)
       if (engineResult.pendingEnrichments.length > 0 && customerRequestText?.trim()) {
@@ -433,6 +437,7 @@ export class RevisionEngine {
       actionItems: actionItems && actionItems.length > 0 ? actionItems : undefined,
       rulesEngineAuditTrail: auditTrail && auditTrail.length > 0 ? auditTrail : undefined,
       customerNote: rulesCustomerNote,
+      depositSchedule: rulesDepositSchedule,
     };
   }
 
