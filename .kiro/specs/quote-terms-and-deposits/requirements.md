@@ -99,7 +99,7 @@ The `customerNote` field, rules engine `set_customer_note`/`append_customer_note
 3. WHEN a `GET /api/quotes/drafts/:id` response is returned, THE API SHALL include the `depositSchedule` field in the response body, as `null` when no schedule has been set.
 4. WHEN a `GET /api/quotes/drafts` response is returned, THE API SHALL include the `depositSchedule` field on each Quote_Draft in the response body, as `null` for drafts with no schedule set.
 5. IF a `PUT /api/quotes/drafts/:id` request includes a `depositSchedule` whose milestone percentages do not sum to 100, THEN THE API SHALL return a 400 error with a message stating that milestone percentages must sum to 100.
-6. IF a `PUT /api/quotes/drafts/:id` request includes a `depositSchedule` with any individual milestone percentage outside the range of 0.01 to 100 inclusive, THEN THE API SHALL return a 400 error with a message identifying the invalid milestone percentage.
+6. IF a `PUT /api/quotes/drafts/:id` request includes a `depositSchedule` with any individual milestone percentage that is not a whole integer between 1 and 100 inclusive, THEN THE API SHALL return a 400 error with a message identifying the invalid milestone percentage.
 7. IF a `PUT /api/quotes/drafts/:id` or `GET /api/quotes/drafts/:id` request references an `:id` that does not match any existing Quote_Draft, THEN THE API SHALL return a 404 error.
 
 ---
