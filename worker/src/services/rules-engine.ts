@@ -509,7 +509,14 @@ export function validateAction(action: unknown): { valid: boolean; error?: strin
       // Validate each milestone
       let percentageSum = 0;
       for (let i = 0; i < schedule.milestones.length; i++) {
-        const milestone = schedule.milestones[i] as Record<string, unknown>;
+        const rawMilestone = schedule.milestones[i];
+
+        // Guard: each milestone entry must be a non-null object
+        if (rawMilestone === null || rawMilestone === undefined || typeof rawMilestone !== 'object') {
+          return { valid: false, error: `set_deposit_schedule milestone[${i}] must be a non-null object` };
+        }
+
+        const milestone = rawMilestone as Record<string, unknown>;
 
         // Validate percentage is a whole integer between 1 and 100
         if (typeof milestone.percentage !== 'number' || !Number.isFinite(milestone.percentage)) {
