@@ -334,12 +334,12 @@ describe('Property 4: Jobber message assembly order invariant', () => {
       freq: 3,
     });
 
-    // Use a counter to ensure unique IDs for unresolved items
-    let unresolvedCounter = 0;
+    // Use fc.uuid() to generate unique IDs inside the arbitrary chain (pure, no external mutable state)
     const arbUnresolvedItems = fc.array(
-      fc
-        .string({ minLength: 1, maxLength: 50, unit: 'grapheme-ascii' })
-        .map((text) => makeUnresolvedItem(`unresolved-${unresolvedCounter++}`, text)),
+      fc.tuple(
+        fc.uuid(),
+        fc.string({ minLength: 1, maxLength: 50, unit: 'grapheme-ascii' }),
+      ).map(([id, text]) => makeUnresolvedItem(id, text)),
       { minLength: 0, maxLength: 5 },
     );
 

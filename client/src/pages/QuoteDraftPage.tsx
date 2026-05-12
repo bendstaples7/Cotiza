@@ -627,13 +627,17 @@ export default function QuoteDraftPage() {
             )}
 
             {/* Original resolution when override is active */}
-            {draft.sqftResolution.manualOverride !== null && draft.sqftResolution.originalResolution?.resolved && (
+            {draft.sqftResolution.manualOverride !== null && (
               <div style={sqftOriginalResolutionStyle}>
-                <span style={{ fontWeight: 600, fontSize: '0.75rem', color: '#888' }}>Original: </span>
-                <span style={{ fontSize: '0.8rem', color: '#666' }}>
-                  {draft.sqftResolution.originalResolution.value?.toLocaleString()} sq ft
-                  {' '}({getTierLabel(draft.sqftResolution.originalResolution.tier)})
-                </span>
+                {draft.sqftResolution.originalResolution?.resolved && (
+                  <>
+                    <span style={{ fontWeight: 600, fontSize: '0.75rem', color: '#888' }}>Original: </span>
+                    <span style={{ fontSize: '0.8rem', color: '#666' }}>
+                      {draft.sqftResolution.originalResolution.value?.toLocaleString()} sq ft
+                      {' '}({getTierLabel(draft.sqftResolution.originalResolution.tier)})
+                    </span>
+                  </>
+                )}
                 <button
                   onClick={handleClearSqftOverride}
                   disabled={sqftOverrideSaving}
@@ -1201,6 +1205,10 @@ export default function QuoteDraftPage() {
 
         const handleSaveSchedule = async () => {
           if (!id) return;
+          if (isFinalized) {
+            setScheduleError('Cannot modify a finalized draft.');
+            return;
+          }
           setScheduleError(null);
 
           if (!scheduleLabel.trim()) {

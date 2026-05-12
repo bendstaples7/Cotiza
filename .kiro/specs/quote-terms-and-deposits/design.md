@@ -23,7 +23,7 @@ Requirement 6.1 describes the Standard Deposit Rule as having a single milestone
 
 The feature touches four layers:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │  Shared Types (shared/src/types/quote.ts)                   │
 │  + PaymentMilestone, DepositSchedule                        │
