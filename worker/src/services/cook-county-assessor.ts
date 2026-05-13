@@ -58,7 +58,8 @@ export class CookCountyAssessorClient {
 
     const { houseNumber, street } = parsed;
 
-    console.log(`[CookCountyAssessorClient] Looking up address: "${address}" → query: "${houseNumber} ${street}"`);
+    // Log only the normalized query — not the raw address — to avoid writing PII to logs
+    console.log(`[CookCountyAssessorClient] Querying assessor: "${houseNumber} ${street}"`);
 
     // Escape single quotes in street name to prevent SoQL injection
     // (e.g., "O'BRIEN ST" → "O''BRIEN ST" in SoQL string literals)
@@ -125,10 +126,14 @@ export class CookCountyAssessorClient {
 
       const totalSqft = getSqft(match);
       const unitCount = match.apts !== undefined ? parseInt(match.apts, 10) : 0;
+      // hd_sf is a unit-level (heated/habitable) sqft field used for condos/co-ops.
+      // When it was the source of totalSqft, the value is already per-unit — do not divide again.
+      const usedUnitLevelField = match.bldg_sf === undefined || parseInt(match.bldg_sf ?? '0', 10) === 0;
 
       // Determine the effective sqft for this specific unit/sub-structure.
       let buildingSqft: number;
-      if (parsed.isSubUnit) {
+      if (parsed.isSubUnit && !usedUnitLevelField) {
+        // Only apply divisors when sqft came from bldg_sf (whole-building total)
         if (unitCount > 1) {
           // Assessor record has unit count — divide evenly
           buildingSqft = Math.round(totalSqft / unitCount);
@@ -140,6 +145,7 @@ export class CookCountyAssessorClient {
           buildingSqft = Math.round(totalSqft / 2);
         }
       } else {
+        // Either not a sub-unit, or sqft already came from a unit-level field (hd_sf)
         buildingSqft = totalSqft;
       }
 
@@ -221,16 +227,20 @@ export class CookCountyAssessorClient {
     const tokens = street.trim().split(/\s+/);
     if (tokens.length === 0) return street;
 
+    // Strip trailing dots and normalize case before map lookup
+    // so dotted abbreviations like "N." → "N" and "ST." → "ST" are recognized
+    const normalize = (token: string) => token.replace(/\.+$/, '').toUpperCase();
+
     // Normalize leading directional word (first token only)
-    const firstToken = tokens[0];
-    if (CookCountyAssessorClient.DIRECTION_MAP[firstToken]) {
-      tokens[0] = CookCountyAssessorClient.DIRECTION_MAP[firstToken];
+    const firstNorm = normalize(tokens[0]);
+    if (CookCountyAssessorClient.DIRECTION_MAP[firstNorm]) {
+      tokens[0] = CookCountyAssessorClient.DIRECTION_MAP[firstNorm];
     }
 
     // Normalize trailing street-type word (last token only)
-    const lastToken = tokens[tokens.length - 1];
-    if (CookCountyAssessorClient.STREET_TYPE_MAP[lastToken]) {
-      tokens[tokens.length - 1] = CookCountyAssessorClient.STREET_TYPE_MAP[lastToken];
+    const lastNorm = normalize(tokens[tokens.length - 1]);
+    if (CookCountyAssessorClient.STREET_TYPE_MAP[lastNorm]) {
+      tokens[tokens.length - 1] = CookCountyAssessorClient.STREET_TYPE_MAP[lastNorm];
     }
 
     return tokens.join(' ');

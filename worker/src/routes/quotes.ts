@@ -390,7 +390,10 @@ app.post('/generate', async (c) => {
     manualRequestId?: string;
   };
 
-  if (!body.customerText && (!body.mediaItemIds || body.mediaItemIds.length === 0)) {
+  // Validate that the request has enough input to generate a quote.
+  // Allow through if jobberRequestId is provided — Jobber image URLs will be
+  // fetched during enrichment and may be the sole image source.
+  if (!body.customerText && (!body.mediaItemIds || body.mediaItemIds.length === 0) && !body.jobberRequestId) {
     throw new PlatformError({
       severity: 'error',
       component: 'QuoteRoutes',

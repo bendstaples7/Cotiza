@@ -259,11 +259,13 @@ export class SqftResolutionService {
       ...jobberImageUrls.map((url): ImageSource => ({ type: 'url', url })),
     ];
 
-    for (const source of sources) {
+    for (let sourceIdx = 0; sourceIdx < sources.length; sourceIdx++) {
+      const source = sources[sourceIdx];
       try {
         let base64: string;
         let contentType: string;
-        let imageLabel: string;
+        // Use a stable non-sensitive ordinal rather than the raw R2 key or signed URL
+        const imageLabel = `attachment-${sourceIdx + 1}`;
 
         if (source.type === 'r2') {
           // Fetch image from R2 by object key
@@ -280,7 +282,6 @@ export class SqftResolutionService {
           }
           base64 = btoa(binary);
           contentType = object.httpMetadata?.contentType ?? 'image/jpeg';
-          imageLabel = source.id;
         } else {
           // Fetch image from URL (e.g. Jobber signed S3 attachment URL)
           const resp = await fetch(source.url, { signal: AbortSignal.timeout(10_000) });
@@ -297,7 +298,6 @@ export class SqftResolutionService {
           }
           base64 = btoa(binary);
           contentType = resp.headers.get('content-type') ?? 'image/jpeg';
-          imageLabel = source.url;
         }
 
         // Send to OpenAI vision API
