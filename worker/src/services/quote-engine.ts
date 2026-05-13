@@ -13,6 +13,8 @@ const CONFIDENCE_THRESHOLD = 70;
 export interface QuoteEngineInput {
   customerText: string;
   mediaItemIds: string[];
+  /** Jobber request attachment image URLs for Tier 2 vision analysis */
+  jobberImageUrls?: string[];
   userId: string;
   manualCatalog?: ProductCatalogEntry[];
   manualTemplates?: QuoteTemplate[];
@@ -254,6 +256,7 @@ export class QuoteEngine {
           const resolutionResult = await resolutionService.resolve({
             customerText: input.customerText,
             mediaItemIds: input.mediaItemIds,
+            jobberImageUrls: input.jobberImageUrls ?? [],
             jobberPropertyAddress: input.jobberPropertyAddress ?? null,
             manualRequestAddress: input.manualRequestAddress ?? null,
           });
