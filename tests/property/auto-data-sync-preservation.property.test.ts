@@ -418,8 +418,17 @@ describe('Property 4 — Jobber Fallback Preservation', () => {
 
     // The route handler uses fetchCatalog to read from the unified product_catalog table
     expect(handlerBody).toMatch(/fetchCatalog\(db,\s*userId\)/);
-    // It no longer branches on Jobber availability for catalog fetching
-    expect(handlerBody).not.toMatch(/jobberIntegration\.isAvailable\(\)/);
+    // It no longer branches on Jobber availability for catalog fetching —
+    // note: jobberIntegration.isAvailable() IS used later in the handler for
+    // the sqft address resolution pipeline, but NOT for catalog/template fetching.
+    // Verify the catalog fetch comes before any jobberIntegration.isAvailable() call.
+    const catalogFetchPos = handlerBody.search(/fetchCatalog\(db,\s*userId\)/);
+    const jobberAvailablePos = handlerBody.search(/jobberIntegration\.isAvailable\(\)/);
+    expect(catalogFetchPos).toBeGreaterThan(-1);
+    // If jobberIntegration.isAvailable() appears at all, it must be AFTER the catalog fetch
+    if (jobberAvailablePos > -1) {
+      expect(catalogFetchPos).toBeLessThan(jobberAvailablePos);
+    }
     expect(handlerBody).not.toMatch(/fetchManualCatalog/);
   });
 
