@@ -118,6 +118,8 @@ function extractAddressFromText(text: string): string | null {
 export interface ResolutionContext {
   customerText: string;
   mediaItemIds: string[];
+  /** Jobber request attachment URLs — fetched via URL when not found as R2 keys */
+  jobberImageUrls?: string[];
   jobberPropertyAddress?: string | null;
   manualRequestAddress?: string | null;
 }
@@ -158,9 +160,9 @@ export class SqftResolutionService {
     }
 
     // Tier 2: Layout diagram analysis (AI vision)
-    if (context.mediaItemIds.length > 0) {
+    if (context.mediaItemIds.length > 0 || (context.jobberImageUrls && context.jobberImageUrls.length > 0)) {
       try {
-        const visionResult = await this.analyzeLayoutDiagrams(context.mediaItemIds);
+        const visionResult = await this.analyzeLayoutDiagrams(context.mediaItemIds, context.jobberImageUrls ?? []);
         if (visionResult) {
           return visionResult;
         }
@@ -243,28 +245,60 @@ export class SqftResolutionService {
 
   /**
    * Tier 2: Analyze attached images for floor plans via AI vision.
+   * Processes R2 keys first, then falls through to URL-based images (e.g. Jobber attachments).
    * Returns null if no floor plan is detected or on any error.
    */
-  private async analyzeLayoutDiagrams(mediaItemIds: string[]): Promise<ResolutionResult | null> {
-    for (const imageId of mediaItemIds) {
-      try {
-        // Fetch image from R2
-        const object = await this.r2Bucket.get(imageId);
-        if (!object) {
-          continue;
-        }
+  private async analyzeLayoutDiagrams(mediaItemIds: string[], jobberImageUrls: string[] = []): Promise<ResolutionResult | null> {
+    // Build a unified list of image sources: R2 keys first, then URLs
+    type ImageSource =
+      | { type: 'r2'; id: string }
+      | { type: 'url'; url: string };
 
-        const imageData = await object.arrayBuffer();
-        // Convert to base64 in chunks to avoid stack overflow for large images
-        // (spreading large Uint8Array into String.fromCharCode can exceed call stack)
-        const bytes = new Uint8Array(imageData);
-        const CHUNK_SIZE = 8192;
-        let binary = '';
-        for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
-          binary += String.fromCharCode(...bytes.subarray(offset, offset + CHUNK_SIZE));
+    const sources: ImageSource[] = [
+      ...mediaItemIds.map((id): ImageSource => ({ type: 'r2', id })),
+      ...jobberImageUrls.map((url): ImageSource => ({ type: 'url', url })),
+    ];
+
+    for (const source of sources) {
+      try {
+        let base64: string;
+        let contentType: string;
+        let imageLabel: string;
+
+        if (source.type === 'r2') {
+          // Fetch image from R2 by object key
+          const object = await this.r2Bucket.get(source.id);
+          if (!object) {
+            continue;
+          }
+          const imageData = await object.arrayBuffer();
+          const bytes = new Uint8Array(imageData);
+          const CHUNK_SIZE = 8192;
+          let binary = '';
+          for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
+            binary += String.fromCharCode(...bytes.subarray(offset, offset + CHUNK_SIZE));
+          }
+          base64 = btoa(binary);
+          contentType = object.httpMetadata?.contentType ?? 'image/jpeg';
+          imageLabel = source.id;
+        } else {
+          // Fetch image from URL (e.g. Jobber signed S3 attachment URL)
+          const resp = await fetch(source.url, { signal: AbortSignal.timeout(10_000) });
+          if (!resp.ok) {
+            console.warn(`SqftResolutionService: HTTP ${resp.status} fetching image URL`);
+            continue;
+          }
+          const imageData = await resp.arrayBuffer();
+          const bytes = new Uint8Array(imageData);
+          const CHUNK_SIZE = 8192;
+          let binary = '';
+          for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
+            binary += String.fromCharCode(...bytes.subarray(offset, offset + CHUNK_SIZE));
+          }
+          base64 = btoa(binary);
+          contentType = resp.headers.get('content-type') ?? 'image/jpeg';
+          imageLabel = source.url;
         }
-        const base64 = btoa(binary);
-        const contentType = object.httpMetadata?.contentType ?? 'image/jpeg';
 
         // Send to OpenAI vision API
         const response = await fetch(`${this.apiUrl}/chat/completions`, {
@@ -298,7 +332,7 @@ export class SqftResolutionService {
         });
 
         if (!response.ok) {
-          console.warn(`SqftResolutionService: Vision API HTTP ${response.status} for image ${imageId}`);
+          console.warn(`SqftResolutionService: Vision API HTTP ${response.status} for image ${imageLabel}`);
           continue;
         }
 
@@ -318,7 +352,7 @@ export class SqftResolutionService {
           const jsonText = content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
           parsed = JSON.parse(jsonText) as typeof parsed;
         } catch {
-          console.warn(`SqftResolutionService: Failed to parse vision response for image ${imageId}`);
+          console.warn(`SqftResolutionService: Failed to parse vision response for image ${imageLabel}`);
           continue;
         }
 
@@ -332,13 +366,13 @@ export class SqftResolutionService {
           tier: 'layout_diagram',
           confidence: 'medium',
           metadata: {
-            imageId,
+            imageId: imageLabel,
             aiReasoning: parsed.reasoning ?? '',
           },
         };
       } catch (err) {
         console.warn(
-          `SqftResolutionService: Error analyzing image ${imageId}: ${err instanceof Error ? err.message : String(err)}`,
+          `SqftResolutionService: Error analyzing image: ${err instanceof Error ? err.message : String(err)}`,
         );
         // Continue to next image
       }
@@ -366,6 +400,8 @@ export class SqftResolutionService {
       metadata: {
         propertyAddress: record.address,
         assessorRecordId: record.pin,
+        isSubUnit: record.isSubUnit || undefined,
+        unitCount: record.unitCount,
       },
     };
   }

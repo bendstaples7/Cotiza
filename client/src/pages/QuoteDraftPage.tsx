@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import type { QuoteDraft, QuoteLineItem, LineItemRationale, ErrorResponse, RuleGroupWithRules, Rule, ProductCatalogEntry, ActionItem, QuantityPredictionMeta, QuantitySource, ResolutionConfidence, ResolutionTier } from 'shared';
-import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, fetchCatalog, updateCatalogEntry, pushDraftToJobber } from '../api';
+import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber } from '../api';
 import type { JobberRequestDetail } from '../api';
 import SimilarQuotesPanel from './SimilarQuotesPanel';
 
@@ -260,7 +260,7 @@ export default function QuoteDraftPage() {
     }
     setSqftOverrideSaving(true);
     try {
-      const updated = await updateDraft(id, { sqftOverride: val });
+      const updated = await patchDraftSqft(id, val);
       setDraft(updated);
       setSqftOverrideInput('');
     } catch {
@@ -275,7 +275,7 @@ export default function QuoteDraftPage() {
     setSqftOverrideSaving(true);
     setSqftOverrideError(null);
     try {
-      const updated = await updateDraft(id, { sqftOverride: null });
+      const updated = await patchDraftSqft(id, null);
       setDraft(updated);
       setSqftOverrideInput('');
     } catch {
@@ -624,6 +624,14 @@ export default function QuoteDraftPage() {
               <p style={sqftMetaTextStyle}>
                 Property: {draft.sqftResolution.resolution.metadata.propertyAddress}
               </p>
+            )}
+            {draft.sqftResolution.resolution.tier === 'public_records' && draft.sqftResolution.resolution.metadata.isSubUnit && (
+              <div role="alert" style={{ marginTop: '0.5rem', padding: '0.5rem 0.75rem', background: '#fff8e1', border: '1px solid #ffe082', borderRadius: 6, fontSize: '0.82rem', color: '#7a5c00' }}>
+                {draft.sqftResolution.resolution.metadata.unitCount && draft.sqftResolution.resolution.metadata.unitCount > 1
+                  ? `⚠️ This address includes a sub-structure qualifier. The square footage shown is an average unit size estimated from a ${draft.sqftResolution.resolution.metadata.unitCount}-unit building — verify and override if needed.`
+                  : '⚠️ This address includes a unit or sub-structure qualifier (e.g. rear coach house, apt, unit). The square footage shown is an estimate — verify and override if needed.'
+                }
+              </div>
             )}
 
             {/* Original resolution when override is active */}
@@ -1585,6 +1593,14 @@ export default function QuoteDraftPage() {
             <div style={{ marginBottom: '0.75rem' }}>
               <h3 style={sidePanelLabelStyle}>Client</h3>
               <p style={sidePanelTextStyle}>{requestDetail.clientName}</p>
+            </div>
+          )}
+
+          {/* Property address — used for sqft Tier 3 public records lookup */}
+          {(requestDetail?.propertyAddress) && (
+            <div style={{ marginBottom: '0.75rem' }}>
+              <h3 style={sidePanelLabelStyle}>Property Address</h3>
+              <p style={{ ...sidePanelTextStyle, fontWeight: 500 }}>📍 {requestDetail.propertyAddress}</p>
             </div>
           )}
 
