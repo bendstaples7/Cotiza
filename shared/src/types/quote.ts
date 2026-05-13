@@ -240,8 +240,11 @@ export interface ResolutionMetadata {
   /**
    * Tier 3: true when the address contained a sub-unit qualifier (APT, UNIT, REAR,
    * COACH HOUSE, GARDEN, etc.).
-   * When unitCount > 1, the sqft value has already been divided by unitCount (average unit size).
-   * When unitCount is absent or 1, the sqft value reflects the full building — verify and override if needed.
+   * When unitCount > 1, buildingSqft is divided by unitCount (average unit size).
+   * When unitCount is absent or 1, a heuristic divisor is applied:
+   *   - structural qualifiers (REAR, COACH HOUSE, etc.) → ÷ 3
+   *   - generic qualifiers (APT, UNIT, #, etc.) → ÷ 2
+   * Exception: if the assessor record used hd_sf (unit-level field), no divisor is applied.
    */
   isSubUnit?: boolean;
   /**

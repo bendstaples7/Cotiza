@@ -137,8 +137,8 @@ export class CookCountyAssessorClient {
         if (unitCount > 1) {
           // Assessor record has unit count — divide evenly
           buildingSqft = Math.round(totalSqft / unitCount);
-        } else if (/\b(REAR|FRONT|GARDEN|BASEMENT|COACH\s+HOUSE|CARRIAGE\s+HOUSE)\b/i.test(address)) {
-          // Structural secondary unit (coach house, carriage house, etc.) — assume ~1/3 of parcel
+        } else if (parsed.structuralQualifier) {
+          // Structural secondary unit (coach house, carriage house, rear, etc.) — assume ~1/3 of parcel
           buildingSqft = Math.round(totalSqft / 3);
         } else {
           // Generic unit qualifier (APT, UNIT, #, etc.) with no unit count — assume duplex (1/2)
@@ -266,7 +266,7 @@ export class CookCountyAssessorClient {
    *   "PO Box 123"                              → null
    *   "No number here"                          → null
    */
-  private parseAddress(address: string): { houseNumber: string; street: string; isSubUnit: boolean } | null {
+  private parseAddress(address: string): { houseNumber: string; street: string; isSubUnit: boolean; structuralQualifier: boolean } | null {
     const upper = address.trim().toUpperCase();
 
     // Reject PO Boxes
@@ -286,8 +286,17 @@ export class CookCountyAssessorClient {
     // Detect sub-unit qualifiers BEFORE stripping them, so we can flag the result.
     // Covers: APT, APARTMENT, UNIT, SUITE, STE, FL, FLOOR, NO., #
     // and structural qualifiers: REAR, FRONT, GARDEN, BASEMENT, COACH HOUSE, CARRIAGE HOUSE
+    //
+    // IMPORTANT: test only `remainder` (the part after the house number), NOT the full address,
+    // to avoid false positives from street names like "Front Street" or "Garden Avenue".
     const subUnitPattern = /\b(APT|APARTMENT|UNIT|SUITE|STE|FL|FLOOR|NO\.?|REAR|FRONT|GARDEN|BASEMENT|COACH\s+HOUSE|CARRIAGE\s+HOUSE)\b|#\s*[\w-]+/i;
     const isSubUnit = subUnitPattern.test(remainder);
+
+    // Detect structural secondary-unit qualifiers specifically (for the 1/3 heuristic).
+    // These must appear as standalone words in the qualifier portion, not as part of the street name.
+    // We test `remainder` before city/state stripping so the qualifier is still present.
+    const structuralQualifierPattern = /\b(REAR|FRONT|GARDEN|BASEMENT|COACH\s+HOUSE|CARRIAGE\s+HOUSE)\b/i;
+    const structuralQualifier = structuralQualifierPattern.test(remainder);
 
     // Strip trailing comma-separated city/state/zip:
     //   "N MAIN ST, CHICAGO, IL 60601" → "N MAIN ST"
@@ -353,6 +362,6 @@ export class CookCountyAssessorClient {
     // Normalize to USPS abbreviations so the LIKE query matches Cook County records
     street = this.normalizeStreetForAssessor(street);
 
-    return { houseNumber, street, isSubUnit };
+    return { houseNumber, street, isSubUnit, structuralQualifier };
   }
 }
