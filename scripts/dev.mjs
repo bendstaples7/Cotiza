@@ -29,6 +29,7 @@ function step(label, cmd, cwd = workerDir) {
 // NOTE: migrations, token sync, and cookie sync are handled by the worker's
 // own `npm run dev` script, so they run on every worker startup automatically.
 
+step('Building shared types', 'npm run build --workspace=shared', root);
 step('Syncing rules from production', 'node scripts/sync-rules.mjs');
 step('Syncing product catalog from production', 'node scripts/sync-catalog.mjs');
 step('Applying catalog ordering', 'node scripts/apply-catalog-order.mjs --local');

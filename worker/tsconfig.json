@@ -1,13 +1,13 @@
 {
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "./dist",
-    "rootDir": "./src",
     "types": ["@cloudflare/workers-types"],
-    "lib": ["ES2023"]
+    "lib": ["ES2023"],
+    "paths": {
+      "shared": ["../shared/src/index.ts"],
+      "shared/*": ["../shared/src/*"]
+    },
+    "noEmit": true
   },
-  "include": ["src/**/*.ts"],
-  "references": [
-    { "path": "../shared" }
-  ]
+  "include": ["src/**/*.ts"]
 }

@@ -35,6 +35,10 @@ category: Tech Stack
 - Pure TypeScript types — no runtime dependencies
 - Exports all types from `shared/src/types/`
 - Used by both client and worker via workspace dependency
+- **The worker resolves `shared` via a TypeScript `paths` mapping in `worker/tsconfig.json` pointing to `../shared/src/index.ts`, so it reads directly from `shared/src/` — no build into `shared/dist/` is required.**
+- The client (Vite) resolves `shared` via `package.json` `exports` pointing to `./src/index.ts` — same source-direct resolution.
+- Neither the worker nor the client requires a `shared` rebuild when types change; both pick up changes from `shared/src/` directly.
+- `dev.mjs` still runs `npm run build --workspace=shared` on startup as a safety step, but this is not required for the worker or client to see type changes.
 
 ## Testing
 - **Vitest** (v2) as test runner, configured at repo root
@@ -56,8 +60,9 @@ npm run dev:client    # Vite dev server on :5173, proxies /api to :8787
 npm run dev:worker    # applies D1 migrations then starts wrangler dev on :8787
 
 # Build
+npm run build:shared  # builds shared/dist/ (not required for worker/client, but used by deploy pipeline)
 npm run build:client
-npm run build:worker
+npm run build:worker  # automatically builds shared first
 
 # Worker (from worker/ directory)
 npm run dev           # applies local D1 migrations + wrangler dev

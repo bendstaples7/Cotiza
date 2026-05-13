@@ -18,7 +18,7 @@ app.use('*', sessionMiddleware);
  */
 app.get('/', async (c) => {
   const rawContentType = (c.req.query('contentType') || '').trim();
-  if (!rawContentType || !VALID_CONTENT_TYPES.includes(rawContentType)) {
+  if (!rawContentType || !(VALID_CONTENT_TYPES as string[]).includes(rawContentType)) {
     throw new PlatformError({
       severity: 'warning',
       component: 'ContentIdeas',
@@ -50,7 +50,7 @@ app.post('/generate', async (c) => {
     });
   }
   const rawContentType = (typeof body.contentType === 'string' ? body.contentType : '').trim();
-  if (!rawContentType || !VALID_CONTENT_TYPES.includes(rawContentType)) {
+  if (!rawContentType || !(VALID_CONTENT_TYPES as string[]).includes(rawContentType)) {
     throw new PlatformError({
       severity: 'warning',
       component: 'ContentIdeas',
