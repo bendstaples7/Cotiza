@@ -128,7 +128,10 @@ export class CookCountyAssessorClient {
       const unitCount = match.apts !== undefined ? parseInt(match.apts, 10) : 0;
       // hd_sf is a unit-level (heated/habitable) sqft field used for condos/co-ops.
       // When it was the source of totalSqft, the value is already per-unit — do not divide again.
-      const usedUnitLevelField = match.bldg_sf === undefined || parseInt(match.bldg_sf ?? '0', 10) === 0;
+      // Use Number.isFinite to guard against non-numeric bldg_sf values (e.g. "" or "N/A")
+      // which parseInt would return NaN for, causing a false negative on the === 0 check.
+      const bldgSfParsed = parseInt(match.bldg_sf ?? '', 10);
+      const usedUnitLevelField = match.bldg_sf === undefined || !Number.isFinite(bldgSfParsed) || bldgSfParsed <= 0;
 
       // Determine the effective sqft for this specific unit/sub-structure.
       let buildingSqft: number;

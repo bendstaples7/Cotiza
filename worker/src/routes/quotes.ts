@@ -391,9 +391,12 @@ app.post('/generate', async (c) => {
   };
 
   // Validate that the request has enough input to generate a quote.
+  // Trim string inputs so whitespace-only values don't bypass validation.
   // Allow through if jobberRequestId is provided — Jobber image URLs will be
   // fetched during enrichment and may be the sole image source.
-  if (!body.customerText && (!body.mediaItemIds || body.mediaItemIds.length === 0) && !body.jobberRequestId) {
+  const trimmedCustomerTextForValidation = (body.customerText ?? '').trim();
+  const trimmedJobberRequestId = (body.jobberRequestId ?? '').trim();
+  if (!trimmedCustomerTextForValidation && (!body.mediaItemIds || body.mediaItemIds.length === 0) && !trimmedJobberRequestId) {
     throw new PlatformError({
       severity: 'error',
       component: 'QuoteRoutes',
