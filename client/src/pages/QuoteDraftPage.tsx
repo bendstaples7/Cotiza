@@ -627,10 +627,33 @@ export default function QuoteDraftPage() {
             )}
             {draft.sqftResolution.resolution.tier === 'public_records' && draft.sqftResolution.resolution.metadata.isSubUnit && (
               <div role="alert" style={{ marginTop: '0.5rem', padding: '0.5rem 0.75rem', background: '#fff8e1', border: '1px solid #ffe082', borderRadius: 6, fontSize: '0.82rem', color: '#7a5c00' }}>
-                {draft.sqftResolution.resolution.metadata.unitCount && draft.sqftResolution.resolution.metadata.unitCount > 1
-                  ? `⚠️ This address includes a sub-structure qualifier. The square footage shown is an average unit size estimated from a ${draft.sqftResolution.resolution.metadata.unitCount}-unit building — verify and override if needed.`
-                  : '⚠️ This address includes a unit or sub-structure qualifier (e.g. rear coach house, apt, unit). The square footage shown is an estimate — verify and override if needed.'
-                }
+                {(() => {
+                  const meta = draft.sqftResolution.resolution.metadata;
+                  const unitSqft = (draft.sqftResolution.manualOverride ?? draft.sqftResolution.resolution.value)?.toLocaleString();
+                  const totalSqft = meta.totalPropertySqft?.toLocaleString();
+                  const unitLabel = meta.structuralQualifier ? 'est. coach house' : meta.unitCount && meta.unitCount > 1 ? `est. unit (1 of ${meta.unitCount})` : 'est. unit';
+
+                  if (totalSqft) {
+                    return (
+                      <>
+                        <span>⚠️ Sub-structure detected — showing estimated unit area only.</span>
+                        <div style={{ marginTop: '0.35rem', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                          <span><strong>{unitSqft} sq ft</strong> ({unitLabel})</span>
+                          <span style={{ color: '#a07800' }}>·</span>
+                          <span><strong>{totalSqft} sq ft</strong> total property</span>
+                        </div>
+                        <div style={{ marginTop: '0.25rem', fontSize: '0.78rem', color: '#9a6e00' }}>
+                          Verify and override if the scope covers a different area.
+                        </div>
+                      </>
+                    );
+                  }
+
+                  // Fallback: no total available (e.g. hd_sf source, no divisor applied)
+                  return meta.unitCount && meta.unitCount > 1
+                    ? `⚠️ This address includes a sub-structure qualifier. The square footage shown is an average unit size estimated from a ${meta.unitCount}-unit building — verify and override if needed.`
+                    : '⚠️ This address includes a unit or sub-structure qualifier (e.g. rear coach house, apt, unit). The square footage shown is an estimate — verify and override if needed.';
+                })()}
               </div>
             )}
 

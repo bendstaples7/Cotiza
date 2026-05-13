@@ -252,6 +252,19 @@ export interface ResolutionMetadata {
    * When present and > 1, the sqft value is an average (total ÷ units).
    */
   unitCount?: number;
+  /**
+   * Tier 3: the full building/parcel sqft from the assessor record, before any
+   * sub-unit divisor was applied. Only present when isSubUnit is true and a
+   * divisor was applied (i.e. the displayed value is less than the total).
+   * Use this to show "X sq ft (est. unit) · Y sq ft total property" in the UI.
+   */
+  totalPropertySqft?: number;
+  /**
+   * Tier 3: true when the sub-unit qualifier was a structural secondary unit
+   * (coach house, carriage house, rear, front, garden, basement).
+   * False/absent for generic qualifiers (APT, UNIT, #, etc.).
+   */
+  structuralQualifier?: boolean;
 }
 
 /** The result of a square footage resolution attempt */

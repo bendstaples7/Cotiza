@@ -13,7 +13,8 @@
     "dev:worker": "npm run dev --workspace=worker",
     "dev:all": "node scripts/dev.mjs",
     "build:client": "npm run build --workspace=client",
-    "build:worker": "npm run build --workspace=worker",
+    "build:shared": "npm run build --workspace=shared",
+    "build:worker": "npm run build --workspace=shared && npm run build --workspace=worker",
     "test:e2e": "npx playwright test",
     "test:e2e:headed": "npx playwright test --headed"
   },

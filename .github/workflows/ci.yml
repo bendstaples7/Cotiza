@@ -33,7 +33,6 @@ jobs:
 
       - name: Typecheck worker
         run: npx tsc -p worker/tsconfig.json --noEmit
-        continue-on-error: true
 
       - name: Typecheck client
         run: npx tsc -p client/tsconfig.json --noEmit

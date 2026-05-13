@@ -11,36 +11,16 @@
  */
 
 import { CookCountyAssessorClient } from './cook-county-assessor.js';
+import type {
+  ResolutionTier,
+  ResolutionConfidence,
+  ResolutionMetadata,
+  ResolutionResult,
+  SqftResolutionResult,
+} from 'shared';
 
-// ---------------------------------------------------------------------------
-// Types (mirrored in shared/src/types/quote.ts for client consumption)
-// ---------------------------------------------------------------------------
-
-export type ResolutionTier = 'text_extraction' | 'layout_diagram' | 'public_records' | 'manual_override';
-export type ResolutionConfidence = 'high' | 'medium' | 'low';
-
-export interface ResolutionMetadata {
-  matchedText?: string;       // Tier 1: the matched text segment
-  imageId?: string;           // Tier 2: which image was analyzed
-  aiReasoning?: string;       // Tier 2: AI explanation
-  propertyAddress?: string;   // Tier 3: address used for lookup
-  assessorRecordId?: string;  // Tier 3: Cook County record identifier (PIN)
-}
-
-export interface ResolutionResult {
-  resolved: boolean;
-  value: number | null;
-  tier: ResolutionTier | null;
-  confidence: ResolutionConfidence | null;
-  metadata: ResolutionMetadata;
-}
-
-export interface SqftResolutionResult {
-  resolution: ResolutionResult;
-  manualOverride: number | null;
-  /** Preserved when a manual override is applied so the original can be restored */
-  originalResolution: ResolutionResult | null;
-}
+// Re-export so existing imports from this module continue to work
+export type { ResolutionTier, ResolutionConfidence, ResolutionMetadata, ResolutionResult, SqftResolutionResult };
 
 // ---------------------------------------------------------------------------
 // Address Resolution Helper
@@ -402,6 +382,8 @@ export class SqftResolutionService {
         assessorRecordId: record.pin,
         isSubUnit: record.isSubUnit || undefined,
         unitCount: record.unitCount,
+        totalPropertySqft: record.totalSqft,
+        structuralQualifier: record.structuralQualifier,
       },
     };
   }

@@ -104,7 +104,7 @@ app.post('/', async (c) => {
 
   // Validate contentType
   const validContentTypes = Object.values(ContentType);
-  if (!body.contentType || !validContentTypes.includes(body.contentType)) {
+  if (!body.contentType || !(validContentTypes as string[]).includes(body.contentType)) {
     return c.json({
       severity: 'warning',
       component: 'PostService',

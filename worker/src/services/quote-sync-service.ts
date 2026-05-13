@@ -254,14 +254,19 @@ export class QuoteSyncService {
     const PAGE_SIZE = 25;
 
     do {
-      const data = await this.jobberIntegration.graphqlRequest<{
+      const data: {
+        quotes: {
+          edges: Array<{ node: JobberQuoteNode }>;
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        };
+      } | null = await this.jobberIntegration.graphqlRequest<{
         quotes: {
           edges: Array<{ node: JobberQuoteNode }>;
           pageInfo: { hasNextPage: boolean; endCursor: string | null };
         };
       }>(QUOTES_QUERY, { first: PAGE_SIZE, after });
 
-      const connection = data?.quotes;
+      const connection: { edges: Array<{ node: JobberQuoteNode }>; pageInfo: { hasNextPage: boolean; endCursor: string | null } } | undefined = data?.quotes;
       if (!connection || !connection.edges) break;
 
       for (const edge of connection.edges) {
