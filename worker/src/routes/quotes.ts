@@ -390,7 +390,13 @@ app.post('/generate', async (c) => {
     manualRequestId?: string;
   };
 
-  if (!body.customerText && (!body.mediaItemIds || body.mediaItemIds.length === 0)) {
+  // Validate that the request has enough input to generate a quote.
+  // Trim string inputs so whitespace-only values don't bypass validation.
+  // Allow through if jobberRequestId is provided — Jobber image URLs will be
+  // fetched during enrichment and may be the sole image source.
+  const trimmedCustomerTextForValidation = (body.customerText ?? '').trim();
+  const trimmedJobberRequestId = (body.jobberRequestId ?? '').trim();
+  if (!trimmedCustomerTextForValidation && (!body.mediaItemIds || body.mediaItemIds.length === 0) && !trimmedJobberRequestId) {
     throw new PlatformError({
       severity: 'error',
       component: 'QuoteRoutes',
@@ -437,9 +443,10 @@ app.post('/generate', async (c) => {
     }
   }
 
-  // Resolve property address for sqft public records lookup (graceful degradation)
+  // Resolve property address and Jobber image URLs for sqft pipeline (graceful degradation)
   let jobberPropertyAddress: string | null = null;
   let manualRequestAddress: string | null = null;
+  let jobberImageUrls: string[] = [];
 
   if (body.jobberRequestId) {
     try {
@@ -468,6 +475,79 @@ app.post('/generate', async (c) => {
     } catch {
       // Graceful degradation — address resolution failure must not block quote generation
     }
+
+    // Always fetch live from Jobber API to get fresh attachment URLs (Tier 2 vision)
+    // and to fill in property address if the webhook row didn't have it (Tier 3).
+    try {
+      const { jobberIntegration } = await createJobberIntegration(db, c.env);
+      if (jobberIntegration.isAvailable()) {
+        const liveData = await jobberIntegration.graphqlRequest<Record<string, unknown>>(
+          `query FetchRequestForSqft($id: EncodedId!) {
+            request(id: $id) {
+              noteAttachments(first: 20) { edges { node { url contentType } } }
+              property {
+                address { street1 street2 city province postalCode }
+              }
+              client {
+                clientProperties(first: 1) {
+                  nodes {
+                    address { street1 street2 city province postalCode }
+                  }
+                }
+              }
+            }
+          }`,
+          { id: body.jobberRequestId },
+        );
+
+        // Prefer request.property.address (the job-site address on the request) over
+        // client.clientProperties (the client's billing/home address on their account).
+        const requestPropertyAddress = (liveData as any)?.request?.property?.address;
+        const clientPropertyAddress = (liveData as any)?.request?.client?.clientProperties?.nodes?.[0]?.address;
+        const liveAddress = requestPropertyAddress ?? clientPropertyAddress;
+        if (liveAddress) {
+          const parts = [
+            liveAddress.street1,
+            liveAddress.street2,
+            liveAddress.city,
+            liveAddress.province,
+            liveAddress.postalCode,
+          ].filter((p): p is string => typeof p === 'string' && p.trim().length > 0);
+          if (parts.length > 0) {
+            jobberPropertyAddress = parts.join(', ');
+            // Write back to webhook row so future calls don't need a live fetch
+            try {
+              const existingRow = await db.prepare(
+                `SELECT id, request_body FROM jobber_webhook_requests WHERE jobber_request_id = ? ORDER BY processed_at DESC LIMIT 1`
+              ).bind(body.jobberRequestId).first() as Record<string, unknown> | null;
+              if (existingRow?.request_body) {
+                const parsed = JSON.parse(existingRow.request_body as string);
+                parsed.property = {
+                  street1: liveAddress.street1 ?? null,
+                  street2: liveAddress.street2 ?? null,
+                  city: liveAddress.city ?? null,
+                  province: liveAddress.province ?? null,
+                  postalCode: liveAddress.postalCode ?? null,
+                };
+                await db.prepare(
+                  `UPDATE jobber_webhook_requests SET request_body = ? WHERE id = ?`
+                ).bind(JSON.stringify(parsed), existingRow.id as string).run();
+              }
+            } catch {
+              // Enrichment write failure must not block generation
+            }
+          }
+        }
+
+        // Collect image URLs for Tier 2 vision analysis
+        const attachmentEdges = (liveData as any)?.request?.noteAttachments?.edges ?? [];
+        jobberImageUrls = attachmentEdges
+          .filter((e: any) => e.node?.contentType?.startsWith('image/'))
+          .map((e: any) => e.node.url as string);
+      }
+    } catch {
+      // Graceful degradation — live fetch failure must not block quote generation
+    }
   }
 
   if (body.manualRequestId) {
@@ -484,6 +564,7 @@ app.post('/generate', async (c) => {
     {
       customerText: body.customerText ?? '',
       mediaItemIds: body.mediaItemIds ?? [],
+      jobberImageUrls,
       userId,
       manualCatalog: catalog,
       manualTemplates: templates,
@@ -1495,6 +1576,7 @@ app.get('/jobber/requests/:id', async (c) => {
 
   // Extract notes from the stored request_body
   let notes: Array<{ message: string; createdBy: string; createdAt: string }> = [];
+  let propertyAddress: string | null = null;
   if (row.request_body) {
     try {
       const detail = JSON.parse(row.request_body as string);
@@ -1513,6 +1595,21 @@ app.get('/jobber/requests/:id', async (c) => {
             createdAt: n.createdAt ?? '',
           };
         });
+
+      // Extract property address (same logic as POST /generate)
+      const property = detail?.property;
+      if (property) {
+        const parts = [
+          property.street1,
+          property.street2,
+          property.city,
+          property.province,
+          property.postalCode,
+        ].filter((p): p is string => typeof p === 'string' && p.trim().length > 0);
+        if (parts.length > 0) {
+          propertyAddress = parts.join(', ');
+        }
+      }
     } catch { /* ignore parse errors */ }
   }
 
@@ -1528,9 +1625,19 @@ app.get('/jobber/requests/:id', async (c) => {
       // If the timeout wins, push the orphaned promise into waitUntil so the Worker
       // lets it finish in the background rather than abandoning it mid-flight.
       const apiPromise = jobberIntegration.graphqlRequest<Record<string, unknown>>(
-        `query FetchAttachments($id: EncodedId!) {
+        `query FetchAttachmentsAndProperty($id: EncodedId!) {
           request(id: $id) {
             noteAttachments(first: 20) { edges { node { url fileName contentType } } }
+            property {
+              address { street1 street2 city province postalCode }
+            }
+            client {
+              clientProperties(first: 1) {
+                nodes {
+                  address { street1 street2 city province postalCode }
+                }
+              }
+            }
           }
         }`,
         { id: requestId },
@@ -1551,6 +1658,24 @@ app.get('/jobber/requests/:id', async (c) => {
         await db.prepare(
           'UPDATE jobber_webhook_requests SET image_urls = ? WHERE jobber_request_id = ?'
         ).bind(JSON.stringify(imageUrls), requestId).run();
+
+        // Prefer request.property.address (the job-site address on the request) over
+        // client.clientProperties (the client's billing/home address on their account).
+        const requestPropertyAddress = (freshResult as any)?.request?.property?.address;
+        const clientPropertyAddress = (freshResult as any)?.request?.client?.clientProperties?.nodes?.[0]?.address;
+        const liveAddress = requestPropertyAddress ?? clientPropertyAddress;
+        if (liveAddress) {
+          const parts = [
+            liveAddress.street1,
+            liveAddress.street2,
+            liveAddress.city,
+            liveAddress.province,
+            liveAddress.postalCode,
+          ].filter((p): p is string => typeof p === 'string' && p.trim().length > 0);
+          if (parts.length > 0) {
+            propertyAddress = parts.join(', ');
+          }
+        }
       }
     }
   } catch {
@@ -1576,6 +1701,7 @@ app.get('/jobber/requests/:id', async (c) => {
       description: (row.description as string) ?? '',
       imageUrls,
       notes,
+      propertyAddress,
     },
   });
 });

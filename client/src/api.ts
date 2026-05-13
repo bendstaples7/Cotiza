@@ -478,6 +478,15 @@ export async function updateDraft(id: string, updates: QuoteDraftUpdate): Promis
   return handleResponseWithToast(res);
 }
 
+export async function patchDraftSqft(id: string, sqftOverride: number | null): Promise<QuoteDraft> {
+  const res = await fetch(API_BASE + '/api/quotes/drafts/' + id, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ sqftOverride }),
+  });
+  return handleResponseWithToast(res);
+}
+
 export async function reviseDraft(
   draftId: string,
   feedbackText: string,
@@ -617,6 +626,7 @@ export interface JobberRequestDetail {
   description: string;
   imageUrls: string[];
   notes: Array<{ message: string; createdBy: string; createdAt: string }>;
+  propertyAddress: string | null;
 }
 
 export async function fetchJobberRequestDetail(requestId: string): Promise<{ request: JobberRequestDetail | null }> {

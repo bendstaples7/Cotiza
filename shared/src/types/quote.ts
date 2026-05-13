@@ -237,6 +237,21 @@ export interface ResolutionMetadata {
   propertyAddress?: string;
   /** Tier 3: Cook County assessor record identifier */
   assessorRecordId?: string;
+  /**
+   * Tier 3: true when the address contained a sub-unit qualifier (APT, UNIT, REAR,
+   * COACH HOUSE, GARDEN, etc.).
+   * When unitCount > 1, buildingSqft is divided by unitCount (average unit size).
+   * When unitCount is absent or 1, a heuristic divisor is applied:
+   *   - structural qualifiers (REAR, COACH HOUSE, etc.) → ÷ 3
+   *   - generic qualifiers (APT, UNIT, #, etc.) → ÷ 2
+   * Exception: if the assessor record used hd_sf (unit-level field), no divisor is applied.
+   */
+  isSubUnit?: boolean;
+  /**
+   * Tier 3: number of apartment units from the assessor record.
+   * When present and > 1, the sqft value is an average (total ÷ units).
+   */
+  unitCount?: number;
 }
 
 /** The result of a square footage resolution attempt */
