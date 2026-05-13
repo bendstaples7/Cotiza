@@ -13,12 +13,23 @@ function makeR2Bucket(): R2Bucket {
   } as unknown as R2Bucket;
 }
 
-/** Mock fetch to return a Cook County Assessor SODA response */
+/** Mock fetch to return a Cook County Assessor SODA response.
+ *
+ * URL-aware: the Census geocoder URL gets a no-match response so the
+ * assessor client falls through to the address-string fallback, which
+ * then receives the provided records. This ensures the tests exercise
+ * the full resolution path rather than accidentally short-circuiting.
+ */
 function mockAssessorFetch(records: object[]) {
-  return vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-    ok: true,
-    json: async () => records,
-  } as Response);
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const url = typeof input === 'string' ? input : (input as Request).url;
+    // Census geocoder — return no match so the fallback path runs
+    if (url.includes('geocoding.geo.census.gov')) {
+      return { ok: true, json: async () => ({ result: { addressMatches: [] } }) } as Response;
+    }
+    // All other calls (parcel lookup, assessor) — return the provided records
+    return { ok: true, json: async () => records } as Response;
+  });
 }
 
 // ---------------------------------------------------------------------------

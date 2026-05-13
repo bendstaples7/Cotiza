@@ -171,7 +171,7 @@ export class CookCountyAssessorClient {
     const params = new URLSearchParams({
       $where: whereClause,
       $select: 'pin,property_address,latitude,longitude',
-      $limit: '10',
+      $limit: '50',
     });
 
     const url = `${CookCountyAssessorClient.BASE_URL}/${CookCountyAssessorClient.PARCEL_DATASET_ID}.json?${params.toString()}`;
