@@ -237,17 +237,26 @@ export class CookCountyAssessorClient {
     try {
       const response = await fetch(url, { signal: controller.signal });
       if (!response.ok) {
+        console.warn(
+          `CookCountyAssessorClient: lookupByPin HTTP ${response.status} for pin "${pin}" (${parsed.houseNumber} ${parsed.street})`,
+        );
         return null;
       }
 
       let records: SodaRecord[];
       try {
         records = (await response.json()) as SodaRecord[];
-      } catch {
+      } catch (parseErr) {
+        console.warn(
+          `CookCountyAssessorClient: lookupByPin failed to parse JSON for pin "${pin}": ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`,
+        );
         return null;
       }
 
       if (!Array.isArray(records)) {
+        console.warn(
+          `CookCountyAssessorClient: lookupByPin unexpected response shape for pin "${pin}" (${parsed.houseNumber} ${parsed.street})`,
+        );
         return null;
       }
 
@@ -259,14 +268,21 @@ export class CookCountyAssessorClient {
 
       const match = records.find((r) => getSqft(r) > 0);
       if (!match) {
+        console.warn(
+          `CookCountyAssessorClient: lookupByPin no sqft record found for pin "${pin}" (${parsed.houseNumber} ${parsed.street})`,
+        );
         return null;
       }
 
       return this.buildRecord(match, parsed, pin);
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
+        // Timeout — silently return null so the fallback runs
         return null;
       }
+      console.warn(
+        `CookCountyAssessorClient: lookupByPin network error for pin "${pin}": ${err instanceof Error ? err.message : String(err)}`,
+      );
       return null;
     } finally {
       clearTimeout(timeout);
