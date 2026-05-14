@@ -1264,11 +1264,14 @@ async function reviewLineItemsAgainstCompletedWork(
     return flagged;
   }
 
-  for (const entry of parsed as Array<Record<string, unknown>>) {
-    if (typeof entry.id === 'string' && typeof entry.reason === 'string' && entry.id && entry.reason) {
+  for (const entry of parsed as Array<unknown>) {
+    // Guard: skip null, non-object, or array elements from AI-generated JSON
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.id === 'string' && typeof e.reason === 'string' && e.id && e.reason) {
       flagged.set(
-        entry.id,
-        `Reviewer: work may already be completed — ${entry.reason}. Please verify before finalizing.`,
+        e.id,
+        `Reviewer: work may already be completed — ${e.reason}. Please verify before finalizing.`,
       );
     }
   }

@@ -27,7 +27,10 @@ export interface CompletedWorkContext {
  */
 const COMPLETED_WORK_PATTERNS: RegExp[] = [
   // "I recently/just/already had X done/installed/completed/spray foamed/finished"
-  /(?:i|we)\s+(?:recently|just|already|previously)\s+had\s+(?:my|our|the)?\s*(.+?)\s+(?:done|installed|completed|spray\s*foamed|spray\s*foam(?:ed)?|finished|put\s+in|applied|added)/gi,
+  // Capture group bounded to ≤8 words to prevent spanning clause boundaries
+  // (e.g. "I need drywall and I recently had my roof spray foamed" must not capture
+  // "drywall and I recently had my roof spray foam").
+  /(?:i|we)\s+(?:recently|just|already|previously)\s+had\s+(?:my|our|the)?\s*((?:\S+\s+){0,7}\S+?)\s+(?:done|installed|completed|spray\s*foamed|spray\s*foam(?:ed)?|finished|put\s+in|applied|added)/gi,
   // "X was/were already done/installed/completed" — anchored to sentence start to prevent cross-sentence capture
   /(?:^|[.!?]\s+)(.+?)\s+(?:was|were|has\s+been|have\s+been)\s+already\s+(?:done|installed|completed|finished|applied|added)/gi,
   // "X is/are already in place/installed/done" — anchored to sentence start
