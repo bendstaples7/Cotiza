@@ -6,6 +6,7 @@ import { SqftResolutionService } from './sqft-resolution-service.js';
 import type { SqftResolutionResult } from './sqft-resolution-service.js';
 import { ProductivityRatesService } from './productivity-rates-service.js';
 import { SPACE_ALLOCATIONS } from './space-allocation-service.js';
+import { CompletedWorkService, filterCompletedWork } from './completed-work-service.js';
 import type { ProductCatalogEntry, QuoteTemplate, QuoteDraft, QuoteLineItem, LineItemRationale, SimilarQuote, StructuredRule, AuditEntry, EngineLineItem, ActionItem, QuantityPredictionMeta, RuleCondition, DepositSchedule } from 'shared';
 
 const GENERATION_TIMEOUT_MS = 120_000;
@@ -65,6 +66,7 @@ const SYSTEM_PROMPT = [
   'RULES:',
   '- CRITICAL: Do NOT include line items for work the customer did not ask about. Every line item must be directly traceable to something in the customer request text.',
   '- CRITICAL: "Clearly implied" means the work is physically unavoidable given what the customer asked for — NOT that it is commonly done alongside the requested work. Examples of what is NOT implied: a customer asking for ceiling drywall does NOT imply baseboard trim (different surface); a customer asking for floor tile does NOT imply wall painting; a customer asking for one room does NOT imply work in adjacent rooms.',
+  '- CRITICAL: Do NOT include line items for work the customer states has ALREADY been completed. Past-tense phrases like "I recently had X done", "we just finished X", "X was already installed", "X has been completed", or "I had X spray foamed/installed/repaired" indicate completed work — not work to be quoted. If you are uncertain whether work is completed or requested, assign a confidence score below 70 and explain in unmatchedReason.',
   '- SCOPE CONSTRAINTS: If the customer specifies a surface (ceiling, floor, walls), a room, or a limited scope, restrict all line items strictly to that scope. Do not add companion items that belong to a different surface, elevation, or area than what the customer described.',
   '- Only match to products that exist in the provided catalog — never invent new products.',
   '- If the catalog contains items unrelated to the customer request, ignore them.',
@@ -178,9 +180,29 @@ export class QuoteEngine {
       scopeMismatchCount: 0,
       scopeMismatchedProducts: [],
       fallbackEnrichmentCount: 0,
+      completedWork: [],
+      contextualFacts: [],
+      completedWorkFromAI: false,
+      reviewerFlaggedCount: 0,
+      reviewerFlaggedProducts: [],
     };
 
-    const userPrompt = this.buildPrompt(input, scopedCatalog, templates);
+    // --- Options 4 + 5: Completed Work Extraction (Pass 1) ---
+    // Run before the main AI call so the result can be injected into the prompt.
+    // CompletedWorkService never throws — any failure returns empty lists.
+    const completedWorkService = new CompletedWorkService(this.apiKey, this.apiUrl);
+    const completedWorkContext = await completedWorkService.extract(input.customerText);
+
+    // Fix 2: Filter overly generic entries (e.g. "roof") before they reach the
+    // reviewer. Single/two-word entries and entries subsumed by longer ones are
+    // dropped to prevent false-positive flagging of requested work items.
+    completedWorkContext.completedWork = filterCompletedWork(completedWorkContext.completedWork);
+
+    trace.completedWork = completedWorkContext.completedWork;
+    trace.contextualFacts = completedWorkContext.contextualFacts;
+    trace.completedWorkFromAI = completedWorkContext.fromAI;
+
+    const userPrompt = this.buildPrompt(input, scopedCatalog, templates, completedWorkContext);
     const systemPrompt = SYSTEM_PROMPT;
 
     const controller = new AbortController();
@@ -364,6 +386,27 @@ export class QuoteEngine {
         sqftIsExplicit: sc.sqftIsExplicit,
       }));
 
+      // --- Option 3: Inject total_space_sqft into preResolvedContext ---
+      // Sum the sqft of all extracted spaces so rules can use `total_space_sqft`
+      // in compute_quantity formulas (e.g. `total_space_sqft / paint_rate`).
+      // This correctly handles multi-room requests where a single rule-added line
+      // item (e.g. Interior Painting added by the drywall rule) should cover all
+      // mentioned rooms rather than just the first one matched by regex extraction.
+      // Only spaces with a known sqft value (explicit or estimated) contribute.
+      if (spaceContexts.length > 0) {
+        const totalSpaceSqft = spaceContexts.reduce(
+          (sum, sc) => sum + (sc.explicitSqft ?? sc.estimatedSqft ?? 0),
+          0,
+        );
+        if (totalSpaceSqft > 0) {
+          if (!preResolvedContext) preResolvedContext = new Map();
+          // Non-overwrite: only set if not already present
+          if (!preResolvedContext.has('total_space_sqft')) {
+            preResolvedContext.set('total_space_sqft', totalSpaceSqft);
+          }
+        }
+      }
+
       // --- Description Prefix Logic (Task 12) ---
       // For each AI line item, find the matching SpaceContext by checking if
       // item.originalText (case-insensitive) contains any space name from spaceContexts.
@@ -445,14 +488,18 @@ export class QuoteEngine {
       if (structuredRules && structuredRules.length > 0) {
         const engineLineItems: EngineLineItem[] = aiResult.lineItems.map((item) => {
           // Resolve this item's space-specific sqft by matching originalText against
-          // extracted space names. First match wins.
+          // extracted space names. Sum across ALL matching spaces so that an item
+          // covering multiple rooms (e.g. "drywall in two bedrooms") gets the combined
+          // sqft rather than just the first room matched. (Option 1 fix)
           const originalTextLower = (item.originalText ?? '').toLowerCase();
-          const matchedSpace = spaceContexts.find((sc) =>
+          const matchedSpaces = spaceContexts.filter((sc) =>
             originalTextLower.includes(sc.spaceName.toLowerCase()),
           );
-          const spaceSqft = matchedSpace
-            ? (matchedSpace.explicitSqft ?? matchedSpace.estimatedSqft ?? undefined)
-            : undefined;
+          const totalMatchedSqft = matchedSpaces.reduce(
+            (sum, sc) => sum + (sc.explicitSqft ?? sc.estimatedSqft ?? 0),
+            0,
+          );
+          const spaceSqft = totalMatchedSqft > 0 ? totalMatchedSqft : undefined;
 
           return {
             id: crypto.randomUUID(),
@@ -622,6 +669,40 @@ export class QuoteEngine {
         }
       }
 
+      // --- Option 6: Post-generation reviewer ---
+      // After all enrichment passes, run a lightweight AI reviewer that checks each
+      // line item against the completedWork list. Items that match are flagged by
+      // dropping their confidenceScore below threshold so they land in unresolvedItems
+      // with a clear unmatchedReason. This catches what the main AI missed.
+      if (completedWorkContext.completedWork.length > 0 && aiResult.lineItems.length > 0) {
+        try {
+          const flagged = await reviewLineItemsAgainstCompletedWork(
+            this.apiKey,
+            this.apiUrl,
+            aiResult.lineItems,
+            completedWorkContext.completedWork,
+            input.customerText,
+          );
+          if (flagged.size > 0) {
+            for (const item of aiResult.lineItems) {
+              const reason = flagged.get(item.id ?? '');
+              if (reason) {
+                item.confidenceScore = 0;
+                item.productCatalogEntryId = null;
+                item.unmatchedReason = reason;
+              }
+            }
+            trace.reviewerFlaggedCount = flagged.size;
+            trace.reviewerFlaggedProducts = aiResult.lineItems
+              .filter((li) => flagged.has(li.id ?? ''))
+              .map((li) => li.productName);
+          }
+        } catch (err) {
+          // Graceful degradation — reviewer failure must not block quote generation
+          console.warn('[QuoteEngine] Post-generation reviewer failed:', err instanceof Error ? err.message : String(err));
+        }
+      }
+
       // Deduplicate after rules engine has had a chance to add/modify items
       aiResult.lineItems = deduplicateLineItems(aiResult.lineItems);
 
@@ -654,6 +735,7 @@ export class QuoteEngine {
     input: QuoteEngineInput,
     catalog: ProductCatalogEntry[],
     templates: QuoteTemplate[],
+    completedWorkContext?: import('./completed-work-service.js').CompletedWorkContext,
   ): string {
     const parts: string[] = [];
 
@@ -662,6 +744,25 @@ export class QuoteEngine {
 
     if (input.mediaItemIds.length > 0) {
       parts.push(`\nATTACHED IMAGES: ${input.mediaItemIds.length} image(s) provided as reference.`);
+    }
+
+    // --- Option 5: Inject COMPLETED WORK section ---
+    // Explicitly tell the AI what has already been done so it doesn't quote it.
+    // Contextual facts are preserved as useful background context.
+    if (completedWorkContext && (completedWorkContext.completedWork.length > 0 || completedWorkContext.contextualFacts.length > 0)) {
+      if (completedWorkContext.completedWork.length > 0) {
+        parts.push('\nCOMPLETED WORK (already done — do NOT generate line items for these):');
+        for (const item of completedWorkContext.completedWork) {
+          parts.push(`- ${item}`);
+        }
+        parts.push('You MAY use the above as context to inform HOW other work is done, but do not add them as line items.');
+      }
+      if (completedWorkContext.contextualFacts.length > 0) {
+        parts.push('\nCONTEXTUAL FACTS (background information — use to inform line items, not to add new ones):');
+        for (const fact of completedWorkContext.contextualFacts) {
+          parts.push(`- ${fact}`);
+        }
+      }
     }
 
     parts.push('\nPRODUCT CATALOG:');
@@ -981,6 +1082,174 @@ export class QuoteEngine {
   }
 
   // ── Rules section builder ─────────────────────────────────────────
+}
+
+// ---------------------------------------------------------------------------
+// Option 6: Post-generation reviewer (module-level, async)
+// ---------------------------------------------------------------------------
+
+/**
+ * Calls GPT-4o-mini to review generated line items against the completed work list.
+ *
+ * Fix 1: Tighter prompt with explicit forward-request override rule and worked example.
+ * Fix 3: originalText-first logic — items with forward-looking originalText are never
+ *        flagged regardless of the completedWork list. Only items with empty originalText
+ *        (rule-added items) are checked against the completedWork list semantically.
+ *
+ * Returns a Map of itemId → reason string for any items that should be flagged.
+ * Flagged items get confidenceScore = 0 → land in unresolvedItems for human review.
+ *
+ * Never throws — caller handles graceful degradation.
+ */
+async function reviewLineItemsAgainstCompletedWork(
+  apiKey: string,
+  apiUrl: string,
+  lineItems: Array<{ id?: string; productName: string; originalText: string }>,
+  completedWork: string[],
+  customerText: string,
+): Promise<Map<string, string>> {
+  const flagged = new Map<string, string>();
+
+  if (!apiKey || lineItems.length === 0 || completedWork.length === 0) {
+    return flagged;
+  }
+
+  // Fix 3: Pre-filter — items with non-empty originalText containing forward-looking
+  // request language are NEVER candidates for flagging. Only pass items to the AI
+  // reviewer that could plausibly be already-done work.
+  const FORWARD_REQUEST_PATTERNS = [
+    /\bneed\s+to\b/i,
+    /\bwant\s+to\b/i,
+    /\bwould\s+like\b/i,
+    /\bplease\b/i,
+    /\binstall\b/i,
+    /\breplace\b/i,
+    /\brepair\b/i,
+    /\bbuild\b/i,
+    /\badd\b/i,
+    /\bcreate\b/i,
+    /\bput\s+in\b/i,
+    /\bset\s+up\b/i,
+  ];
+
+  const reviewCandidates = lineItems.filter((li) => {
+    const ot = (li.originalText ?? '').trim();
+    // Items with no originalText (rule-added) are candidates
+    if (!ot) return true;
+    // Items whose originalText contains forward-looking language are NOT candidates
+    const hasForwardRequest = FORWARD_REQUEST_PATTERNS.some((p) => p.test(ot));
+    return !hasForwardRequest;
+  });
+
+  // If all items have forward-looking originalText, nothing to review
+  if (reviewCandidates.length === 0) {
+    return flagged;
+  }
+
+  const itemList = reviewCandidates
+    .filter((li) => li.id)
+    .map((li) => `- id: ${li.id} | product: ${li.productName} | originalText: ${li.originalText || '(none — rule-added item)'}`)
+    .join('\n');
+
+  const completedList = completedWork.map((w) => `- ${w}`).join('\n');
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+
+  let response: Response;
+  try {
+    response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + apiKey,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: [
+              'You are reviewing quote line items to check if they match work the customer already completed.',
+              '',
+              'RULES (follow strictly):',
+              '1. FORWARD REQUEST OVERRIDE: If the originalText contains any forward-looking request language',
+              '   ("need to", "want to", "install", "replace", "repair", "please", "would like"), do NOT flag',
+              '   the item — the customer is requesting this work, not stating it is done.',
+              '2. EMPTY ORIGINAL TEXT: Items with no originalText were added by business rules, not the AI.',
+              '   For these, check if the product name closely matches a completedWork entry.',
+              '3. HIGH CONFIDENCE ONLY: Only flag if you are highly confident (>90%) the work is already done.',
+              '   When in doubt, do NOT flag.',
+              '4. SELF-CHECK: Before flagging, ask yourself: "Does the customer text explicitly request this work?"',
+              '   If yes, do NOT flag.',
+              '',
+              'EXAMPLE:',
+              '  completedWork = ["roof spray foam insulation"]',
+              '  - product: "Drywall: Installation of New Drywall", originalText: "install drywall on the ceiling"',
+              '    → DO NOT FLAG — originalText contains "install" (forward request)',
+              '  - product: "Insulation: Insulate One Interior Ceiling", originalText: ""',
+              '    → FLAG — no originalText, product name matches completed work "roof spray foam insulation"',
+              '',
+              'Return ONLY valid JSON: an array of flagged items (empty array if none).',
+              '[{ "id": "item-id", "reason": "brief explanation" }]',
+              'Return ONLY valid JSON. No markdown, no explanation.',
+            ].join('\n'),
+          },
+          {
+            role: 'user',
+            content: [
+              'CUSTOMER REQUEST:',
+              customerText,
+              '',
+              'COMPLETED WORK (already done per customer):',
+              completedList,
+              '',
+              'LINE ITEMS TO REVIEW:',
+              itemList,
+            ].join('\n'),
+          },
+        ],
+        temperature: 0.1,
+        max_tokens: 500,
+      }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!response.ok) {
+    throw new Error(`Reviewer API returned ${response.status}`);
+  }
+
+  const data = (await response.json()) as {
+    choices: Array<{ message: { content: string } }>;
+  };
+
+  const raw = data.choices?.[0]?.message?.content?.trim() ?? '';
+  const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    throw new Error('Reviewer: invalid JSON response');
+  }
+
+  if (!Array.isArray(parsed)) {
+    return flagged;
+  }
+
+  for (const entry of parsed as Array<Record<string, unknown>>) {
+    if (typeof entry.id === 'string' && typeof entry.reason === 'string' && entry.id && entry.reason) {
+      flagged.set(
+        entry.id,
+        `Reviewer: work may already be completed — ${entry.reason}. Please verify before finalizing.`,
+      );
+    }
+  }
+
+  return flagged;
 }
 
 // ---------------------------------------------------------------------------
