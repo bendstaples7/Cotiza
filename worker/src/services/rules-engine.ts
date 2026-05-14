@@ -1480,20 +1480,23 @@ export function executeRules(input: RulesEngineInput): RulesEngineResult {
         continue;
       }
 
-      // Compute effective sqft override from any line item that has one.
-      // Search ALL line items (not just condResult.matchingLineItemIds) so that
-      // rules where the first condition check would fail without the override
-      // still get a chance to re-evaluate with the per-item sqft value.
-      const effectiveSqftOverride = lineItems.find(
-        (li) => li.sqftOverride !== undefined,
-      )?.sqftOverride;
-
-      // Evaluate condition — use sqftOverride if available so request_text_extract
-      // for sqft uses the per-item value rather than preResolvedContext.
+      // Evaluate condition without a single sqftOverride — compute_quantity already
+      // handles per-item sqft correctly via li.sqftOverride in the action executor.
+      // Passing a single override here would use the wrong space's sqft for rules
+      // that match items from multiple spaces.
       const condResultWithSqft = evaluateCondition(
-        rule.condition, lineItems, customerRequestText, preResolvedContext, effectiveSqftOverride,
+        rule.condition, lineItems, customerRequestText, preResolvedContext,
       );
       if (!condResultWithSqft.matched) continue;
+
+      // For add_line_item inheritance: derive sqftOverride from the matching items
+      // so newly added items inherit the correct space's sqft.
+      const matchingItemsForInheritance = condResultWithSqft.matchingLineItemIds
+        .map((mid) => lineItems.find((li) => li.id === mid))
+        .filter((li): li is EngineLineItem => li !== undefined);
+      const effectiveSqftOverride = matchingItemsForInheritance.find(
+        (li) => li.sqftOverride !== undefined,
+      )?.sqftOverride;
       // Capture context variables scoped to this rule only.
       // Merge preResolvedContext as a baseline so compute_quantity formulas can
       // reference pre-resolved variables (e.g. sqft) even when no condition
