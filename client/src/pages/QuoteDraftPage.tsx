@@ -374,7 +374,7 @@ export default function QuoteDraftPage() {
     if (pendingDelete) {
       clearTimeout(pendingDelete.timerId);
       const prevItem = pendingDelete.item;
-      const withoutPrev = draft.lineItems.filter((i) => i.id !== prevItem.id && i.id !== itemId);
+      const withoutPrev = draft.lineItems.filter((i) => i.id !== prevItem.id);
       updateDraft(id, { lineItems: withoutPrev, unresolvedItems: draft.unresolvedItems }).catch(() => {});
     }
 

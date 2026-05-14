@@ -35,7 +35,7 @@ export class QuoteDraftService {
           draft.manualRequestId ?? null,
           draft.sqftResolution ? JSON.stringify(draft.sqftResolution) : null,
           draft.depositSchedule ? JSON.stringify(draft.depositSchedule) : null,
-          JSON.stringify(draft.spaceContext ?? null),
+          draft.spaceContext ? JSON.stringify(draft.spaceContext) : null,
           draft.generationTrace ? JSON.stringify(draft.generationTrace) : null,
           draft.userId,
         ),

@@ -347,7 +347,7 @@ async function fetchCatalog(db: D1Database, userId: string): Promise<ProductCata
     category: (row.category as string) ?? undefined,
     sortOrder: Number(row.sort_order ?? 500),
     keywords: (row.keywords as string) ?? undefined,
-    scope: (row.scope as string) ?? null,
+    scope: (row.scope as import('shared').Scope) ?? null,
     source: (row.source as 'jobber' | 'manual') ?? 'manual',
   }));
 }

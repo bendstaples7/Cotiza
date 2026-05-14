@@ -98,7 +98,7 @@ export class SpaceExtractionService {
     try {
       parsed = JSON.parse(raw);
     } catch {
-      throw new Error(`SpaceExtractionService: invalid JSON from AI: ${raw.slice(0, 200)}`);
+      throw new Error('SpaceExtractionService: invalid JSON from AI');
     }
 
     if (!Array.isArray(parsed)) {
@@ -120,15 +120,17 @@ export class SpaceExtractionService {
 
     const sqftIsExplicit = explicitSqft !== null;
 
+    const trimmedName = entry.spaceName.trim();
+
     // Only attempt allocation estimate when we have a whole-property sqft and no explicit value
     const allocation =
       !sqftIsExplicit && totalSqft !== null
-        ? resolveSpaceAllocation(entry.spaceName, totalSqft)
+        ? resolveSpaceAllocation(trimmedName, totalSqft)
         : null;
 
     return {
-      spaceName: entry.spaceName,
-      normalizedLabel: allocation?.normalizedLabel ?? entry.spaceName,
+      spaceName: trimmedName,
+      normalizedLabel: allocation?.normalizedLabel ?? trimmedName,
       explicitSqft,
       estimatedSqft: allocation?.estimatedSqft ?? null,
       sqftIsExplicit,

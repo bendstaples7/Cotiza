@@ -427,8 +427,8 @@ export function validateAction(action: unknown): { valid: boolean; error?: strin
       if (typeof act.productNamePattern !== 'string' || act.productNamePattern.trim().length === 0) {
         return { valid: false, error: 'Action type "append_description" requires a non-empty string "productNamePattern" field' };
       }
-      if (typeof act.text !== 'string') {
-        return { valid: false, error: 'Action type "append_description" requires a string "text" field' };
+      if (typeof act.text !== 'string' || act.text.trim().length === 0) {
+        return { valid: false, error: 'Action type "append_description" requires a non-empty string "text" field' };
       }
       if (act.separator !== undefined && typeof act.separator !== 'string') {
         return { valid: false, error: 'Action type "append_description" optional "separator" must be a string' };
@@ -1167,6 +1167,11 @@ export function executeAction(
       let modified = false;
       const affected: EngineLineItem[] = [];
 
+      // Guard: skip if text is empty (shouldn't reach here after validation, but be safe)
+      if (!action.text || !action.text.trim()) {
+        return { modified: false, lineItems };
+      }
+
       const updated = lineItems.map((li) => {
         if (matchesProductName(li.productName, action.productNamePattern, action.matchMode)) {
           affected.push(li);
@@ -1475,28 +1480,20 @@ export function executeRules(input: RulesEngineInput): RulesEngineResult {
         continue;
       }
 
-      // Evaluate condition
-      const condResult = evaluateCondition(rule.condition, lineItems, customerRequestText, preResolvedContext);
-      if (!condResult.matched) continue;
-
-      // Compute the effective sqft override for this rule execution.
-      // Find the first matching line item that has a sqftOverride set — this is the
-      // space-specific sqft that should propagate to conditions, compute_quantity,
-      // and any new items added by this rule (Option 3 fix).
-      const matchingItemsForSqft = condResult.matchingLineItemIds
-        .map((mid) => lineItems.find((li) => li.id === mid))
-        .filter((li): li is EngineLineItem => li !== undefined);
-      const effectiveSqftOverride = matchingItemsForSqft.find(
+      // Compute effective sqft override from any line item that has one.
+      // Search ALL line items (not just condResult.matchingLineItemIds) so that
+      // rules where the first condition check would fail without the override
+      // still get a chance to re-evaluate with the per-item sqft value.
+      const effectiveSqftOverride = lineItems.find(
         (li) => li.sqftOverride !== undefined,
       )?.sqftOverride;
 
-      // Re-evaluate condition with the effective sqft override so that
-      // request_text_extract for sqft uses the per-item value.
-      const condResultWithSqft = effectiveSqftOverride !== undefined
-        ? evaluateCondition(rule.condition, lineItems, customerRequestText, preResolvedContext, effectiveSqftOverride)
-        : condResult;
+      // Evaluate condition — use sqftOverride if available so request_text_extract
+      // for sqft uses the per-item value rather than preResolvedContext.
+      const condResultWithSqft = evaluateCondition(
+        rule.condition, lineItems, customerRequestText, preResolvedContext, effectiveSqftOverride,
+      );
       if (!condResultWithSqft.matched) continue;
-
       // Capture context variables scoped to this rule only.
       // Merge preResolvedContext as a baseline so compute_quantity formulas can
       // reference pre-resolved variables (e.g. sqft) even when no condition

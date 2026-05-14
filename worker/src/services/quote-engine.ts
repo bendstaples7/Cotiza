@@ -227,11 +227,13 @@ export class QuoteEngine {
       // belong (e.g., matched via fuzzy logic or hallucinated). Filter out any
       // item whose catalog scope doesn't match the detected scopes.
       // Mismatched items are moved to unresolvedItems rather than silently dropped.
+      // scopeMismatched is declared here (outside the if block) so it can be pushed
+      // to aiResult.lineItems AFTER the rules engine runs (Fix 6b).
+      const scopeMismatched: typeof aiResult.lineItems = [];
       if (detectedScopes.size > 0) {
         const fullCatalogByName = new Map(
           catalog.map((p) => [p.name.trim().toLowerCase(), p]),
         );
-        const scopeMismatched: typeof aiResult.lineItems = [];
         aiResult.lineItems = aiResult.lineItems.filter((item) => {
           const nameLower = item.productName.trim().toLowerCase();
           const catalogEntry = fullCatalogByName.get(nameLower);
@@ -247,8 +249,6 @@ export class QuoteEngine {
           }
           return true;
         });
-        // Append scope-mismatched items as unresolved so they're visible for review
-        aiResult.lineItems.push(...scopeMismatched);
 
         // Populate trace
         trace.scopeMismatchCount = scopeMismatched.length;
@@ -530,17 +530,27 @@ export class QuoteEngine {
             ruleName: 'Space Fallback Enrichment',
           }));
 
-          const { EnrichmentService } = await import('./enrichment-service.js');
-          const enrichmentService = new EnrichmentService(this.apiKey, this.apiUrl);
-          const fallbackDescriptions = await enrichmentService.processEnrichments(
-            fallbackEnrichments,
-            input.customerText,
-            mergedEngineLineItems.map(eli => ({ id: eli.id, productName: eli.productName, description: eli.description })),
-          );
+          try {
+            const { EnrichmentService } = await import('./enrichment-service.js');
+            const enrichmentService = new EnrichmentService(this.apiKey, this.apiUrl);
+            const fallbackDescriptions = await enrichmentService.processEnrichments(
+              fallbackEnrichments,
+              input.customerText,
+              mergedEngineLineItems.map(eli => ({ id: eli.id, productName: eli.productName, description: eli.description })),
+            );
 
-          for (const li of mergedEngineLineItems) {
-            const newDesc = fallbackDescriptions.get(li.id);
-            if (newDesc) li.description = newDesc;
+            let enrichedCount = 0;
+            for (const li of mergedEngineLineItems) {
+              const newDesc = fallbackDescriptions.get(li.id);
+              if (newDesc) {
+                li.description = newDesc;
+                enrichedCount++;
+              }
+            }
+            trace.fallbackEnrichmentCount += enrichedCount;
+          } catch (err) {
+            // Graceful degradation — fallback enrichment failure must not block quote generation
+            console.warn('[QuoteEngine] Fallback enrichment (rules-path) failed:', err instanceof Error ? err.message : String(err));
           }
         }
 
@@ -559,6 +569,16 @@ export class QuoteEngine {
         }));
       }
 
+      // Append scope-mismatched items AFTER the rules engine has finished so they
+      // cannot trigger rules (Fix 6b). scopeMismatched is [] when detectedScopes is empty.
+      aiResult.lineItems.push(...scopeMismatched);
+
+      // --- Assign stable IDs to AI line items that don't have one (Fix 6e) ---
+      // This ensures the no-rules fallback enrichment can match items by ID.
+      for (const item of aiResult.lineItems) {
+        if (!item.id) item.id = crypto.randomUUID();
+      }
+
       // --- Fallback Enrichment for Missing Location Context (no-rules path, REQ-6.4) ---
       // When the rules engine did not run (no structuredRules), apply the same fallback
       // enrichment directly on the AI line items.
@@ -569,34 +589,36 @@ export class QuoteEngine {
 
         if (aiItemsNeedingLocation.length > 0) {
           const fallbackEnrichments = aiItemsNeedingLocation.map(li => ({
-            lineItemId: li.id ?? '',
+            lineItemId: li.id!,
             productNamePattern: li.productName,
             extractionPrompt: 'Extract the room, area, or location where this work is being done. If no specific location is mentioned, return N/A.',
             separator: ' — ',
             ruleId: '__space_fallback__',
             ruleName: 'Space Fallback Enrichment',
-          })).filter(e => e.lineItemId !== '');
+          }));
 
-          if (fallbackEnrichments.length > 0) {
-            try {
+          try {
               const { EnrichmentService } = await import('./enrichment-service.js');
               const enrichmentService = new EnrichmentService(this.apiKey, this.apiUrl);
               const fallbackDescriptions = await enrichmentService.processEnrichments(
                 fallbackEnrichments,
                 input.customerText,
-                aiResult.lineItems.map(li => ({ id: li.id ?? '', productName: li.productName, description: li.description ?? '' })),
+                aiResult.lineItems.map(li => ({ id: li.id!, productName: li.productName, description: li.description ?? '' })),
               );
 
+              let enrichedCount = 0;
               for (const li of aiResult.lineItems) {
-                if (!li.id) continue;
-                const newDesc = fallbackDescriptions.get(li.id);
-                if (newDesc) li.description = newDesc;
+                const newDesc = fallbackDescriptions.get(li.id!);
+                if (newDesc) {
+                  li.description = newDesc;
+                  enrichedCount++;
+                }
               }
+              trace.fallbackEnrichmentCount += enrichedCount;
             } catch (err) {
               // Graceful degradation — fallback enrichment failure must not block quote generation
               console.warn('[QuoteEngine] Fallback enrichment (no-rules path) failed:', err instanceof Error ? err.message : String(err));
             }
-          }
         }
       }
 
@@ -1003,8 +1025,7 @@ function detectRequestScopes(customerText: string): Set<string> {
   // wall work is explicitly mentioned without being qualified as ceiling work.
   const hasCeiling = scopes.has('ceiling');
   const hasDrywallOnWalls = /\bwall\b|\bwalls\b|\bsheetrock\b|\bplaster\b|\bwainscot\b/.test(text) ||
-    (/\bdrywall\b/.test(text) && !hasCeiling) ||
-    (/\bdrywall\b/.test(text) && hasCeiling && /\bwall\b|\bwalls\b/.test(text));
+    (/\bdrywall\b/.test(text) && !hasCeiling);
   if (hasDrywallOnWalls) {
     scopes.add('wall');
   }
@@ -1049,7 +1070,7 @@ function hasLocationContext(description: string): boolean {
   const lower = description.toLowerCase();
 
   // Check common location words
-  const commonLocationWords = ['room', 'area', 'floor', 'level', 'space'];
+  const commonLocationWords = ['room', 'area'];
   for (const word of commonLocationWords) {
     if (lower.includes(word)) return true;
   }

@@ -17,9 +17,14 @@ export function extractSpacePrefix(description: string): string | null {
   const lower = description.toLowerCase();
   for (const entry of SPACE_ALLOCATIONS) {
     const labelLower = entry.label.toLowerCase();
-    // Match if description starts with the label (optionally followed by any separator)
+    // Match if description starts with the label followed by a separator character
+    // (or end of string). This prevents "Bathroom" from matching "Bathroom Tile"
+    // when "Bathroom" is not a known space label prefix in that context.
     if (lower.startsWith(labelLower)) {
-      return entry.label;
+      const nextChar = lower[labelLower.length];
+      if (nextChar === undefined || /[\s\-—:,()\/]/.test(nextChar)) {
+        return entry.label;
+      }
     }
   }
   return null;

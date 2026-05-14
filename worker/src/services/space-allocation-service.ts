@@ -29,8 +29,10 @@ export const SPACE_ALLOCATIONS: SpaceAllocationEntry[] = [
  * Resolves a space name to an allocation fraction and estimated sqft.
  *
  * Matching rules (case-insensitive, after stripping leading "the "):
- *   - keyword is a substring of spaceName, OR
- *   - spaceName is a substring of keyword
+ *   - spaceName contains keyword (normalized input contains the keyword)
+ *
+ * The table is ordered most-specific first so "master bedroom" matches before
+ * "bedroom" when the customer says "master bedroom".
  *
  * Returns the first match (table is ordered most-specific first), or null if no match.
  */
@@ -38,12 +40,18 @@ export function resolveSpaceAllocation(
   spaceName: string,
   totalSqft: number,
 ): SpaceAllocationResult | null {
-  // Normalize: lowercase and strip leading "the "
+  // Guard: empty or invalid input
+  if (!spaceName) return null;
   const normalized = spaceName.toLowerCase().replace(/^the\s+/, '').trim();
+  if (normalized === '') return null;
+  if (!Number.isFinite(totalSqft) || totalSqft <= 0) return null;
 
   for (const entry of SPACE_ALLOCATIONS) {
+    // Only check normalized.includes(keyword) — spaceName contains the keyword.
+    // The reverse (keyword.includes(normalized)) caused "bedroom" to match
+    // "master bedroom" entries because "bedroom" ⊆ "master bedroom".
     const matched = entry.keywords.some(
-      (keyword) => keyword.includes(normalized) || normalized.includes(keyword),
+      (keyword) => normalized.includes(keyword),
     );
 
     if (matched) {

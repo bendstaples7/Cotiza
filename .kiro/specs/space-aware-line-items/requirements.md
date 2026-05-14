@@ -27,7 +27,7 @@ This spec defines a space-aware extraction layer that sits on top of the existin
 
 **1.6** Space extraction MUST be gracefully degraded — any failure MUST NOT block quote generation. On failure, the system falls back to existing behavior.
 
-**1.7** The extracted space context MUST be stored on the `QuoteDraft` as `spaceContext: SpaceContext[]`.
+**1.7** The extracted space context MUST be stored on the `QuoteDraft` as `spaceContext?: SpaceContext[] | null`. This field MAY be null or omitted to support legacy drafts created before space extraction was introduced and drafts where extraction failed.
 
 ---
 

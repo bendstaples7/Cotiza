@@ -100,7 +100,7 @@ function buildUpsertSql(groups, rules, skipLocallyModified = false) {
     // When skipLocallyModified=true (pull from production), skip rules that have been
     // locally modified (locally_modified_at IS NOT NULL) to preserve local migration changes.
     const updateWhere = skipLocallyModified
-      ? `WHERE name = ${sqlVal(r.name)} AND rule_group_id = ${groupIdExpr} AND (locally_modified_at IS NULL OR locally_modified_at = 'null')`
+      ? `WHERE name = ${sqlVal(r.name)} AND rule_group_id = ${groupIdExpr} AND locally_modified_at IS NULL`
       : `WHERE name = ${sqlVal(r.name)} AND rule_group_id = ${groupIdExpr}`;
     sqlLines.push(
       `UPDATE rules SET description = ${sqlVal(r.description)}, priority_order = ${r.priority_order}, is_active = ${r.is_active}, condition_json = ${sqlVal(r.condition_json)}, action_json = ${sqlVal(r.action_json)}, trigger_mode = ${sqlVal(r.trigger_mode)}, updated_at = ${sqlVal(r.updated_at)} ${updateWhere};`

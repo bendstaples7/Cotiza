@@ -161,7 +161,7 @@ export class RulesService {
           triggerMode: (row.trigger_mode as TriggerMode) ?? 'chained',
           condition: conditionRaw as RuleCondition,
           actions: actionsRaw as RuleAction[],
-          scopeConstraint: (row.scope_constraint as string) ?? null,
+          scopeConstraint: (row.scope_constraint as import('shared').Scope) ?? null,
         });
       } catch {
         console.warn(`Skipping rule ${row.id}: failed to parse condition/action JSON`);

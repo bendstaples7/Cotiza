@@ -38,7 +38,7 @@ export interface ProductCatalogEntry {
    * When set, the AI will only include this product when the customer's request involves the matching scope.
    * Null/undefined means no constraint (same as 'any').
    */
-  scope?: string | null;
+  scope?: Scope | null;
 }
 
 /** A line item within a quote template */
@@ -368,6 +368,9 @@ export interface SqftResolutionResult {
 // Rules Engine Types
 // ---------------------------------------------------------------------------
 
+/** Scope constraint values for catalog products and rules */
+export type Scope = 'any' | 'ceiling' | 'wall' | 'floor' | 'perimeter' | 'exterior' | 'plumbing' | 'electrical';
+
 /** Trigger mode for structured rules */
 export type TriggerMode = 'on_create' | 'chained';
 
@@ -420,7 +423,7 @@ export type RuleActionType =
 
 /** A typed action for a structured rule */
 export type RuleAction =
-  | { type: 'add_line_item'; productName: string; quantity: number; unitPrice: number; description?: string; placeAfter?: string; placeBefore?: string; scopeConstraint?: string | null }
+  | { type: 'add_line_item'; productName: string; quantity: number; unitPrice: number; description?: string; placeAfter?: string; placeBefore?: string; scopeConstraint?: Scope | null }
   | { type: 'remove_line_item'; productNamePattern: string; matchMode?: MatchMode }
   | { type: 'move_line_item'; productNamePattern: string; position: 'start' | 'end' | `before:${string}` | `after:${string}`; matchMode?: MatchMode }
   | { type: 'set_quantity'; productNamePattern: string; quantity: number; matchMode?: MatchMode }
@@ -443,7 +446,7 @@ export interface StructuredRule {
   condition: RuleCondition;
   actions: RuleAction[];
   /** Optional scope constraint — if set, rule only fires when detectedScopes contains this value */
-  scopeConstraint?: string | null;
+  scopeConstraint?: Scope | null;
 }
 
 // ---------------------------------------------------------------------------
