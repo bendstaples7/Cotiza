@@ -32,6 +32,13 @@ export interface ProductCatalogEntry {
   sortOrder?: number;
   keywords?: string;
   source: 'jobber' | 'manual';
+  /**
+   * Scope constraint for AI line item generation.
+   * Values: 'any' | 'ceiling' | 'wall' | 'floor' | 'perimeter' | 'exterior' | 'plumbing' | 'electrical'
+   * When set, the AI will only include this product when the customer's request involves the matching scope.
+   * Null/undefined means no constraint (same as 'any').
+   */
+  scope?: string | null;
 }
 
 /** A line item within a quote template */
@@ -50,6 +57,22 @@ export interface QuoteTemplate {
   category?: string;
   lineItems: TemplateLineItem[];
   source: 'manual';
+}
+
+/** A space extracted from the customer request text */
+export interface SpaceContext {
+  /** Space name as written by the customer (e.g., "the basement", "master bedroom") */
+  spaceName: string;
+  /** Normalized label for display (e.g., "Basement", "Master Bedroom") */
+  normalizedLabel: string;
+  /** Explicit sqft stated by the customer, or null if not mentioned */
+  explicitSqft: number | null;
+  /** Estimated sqft from the lookup table, or null if space not recognized */
+  estimatedSqft: number | null;
+  /** Whether the sqft was explicitly stated (true) or estimated (false) */
+  sqftIsExplicit: boolean;
+  /** The fraction of total building sqft used for estimation, or null */
+  allocationFraction: number | null;
 }
 
 /** An action item requiring user input before a line item can be finalized */
@@ -79,6 +102,52 @@ export interface LineItemRationale {
   quantityBefore: number | null;
   /** The quantity after the compute_quantity action ran */
   quantityAfter: number | null;
+  /** The space context that drove the sqft used in this item's formula, if any */
+  spaceContext?: {
+    spaceName: string;
+    normalizedLabel: string;
+    sqftUsed: number;
+    sqftSource: 'explicit' | 'estimated' | 'whole_property';
+  } | null;
+  /** The catalog scope value for this product, if set */
+  catalogScope?: string | null;
+  /** The description set by the enrichment pass, if any */
+  enrichmentApplied?: string | null;
+}
+
+/**
+ * Quote-level generation trace capturing the full pipeline for a quote.
+ * Stored as a JSON blob on the draft for debugging and triage.
+ */
+export interface GenerationTrace {
+  /** Scopes detected from the customer request text */
+  detectedScopes: string[];
+  /** Number of catalog products filtered out due to scope mismatch before the AI call */
+  catalogFilteredCount: number;
+  /** Names of products filtered out of the catalog before the AI call */
+  catalogFilteredProducts: string[];
+  /** The whole-property sqft resolved (null if not resolved) */
+  wholePropSqft: number | null;
+  /** The sqft resolution tier used */
+  sqftResolutionTier: string | null;
+  /** Space contexts extracted from the customer text */
+  spaceContexts: Array<{
+    spaceName: string;
+    normalizedLabel: string;
+    explicitSqft: number | null;
+    estimatedSqft: number | null;
+    sqftIsExplicit: boolean;
+  }>;
+  /** Number of rules that fired during generation */
+  rulesFiredCount: number;
+  /** Names of rules that fired */
+  rulesFired: string[];
+  /** Number of items moved to unresolved due to scope mismatch post-generation */
+  scopeMismatchCount: number;
+  /** Names of items moved to unresolved due to scope mismatch */
+  scopeMismatchedProducts: string[];
+  /** Whether the fallback enrichment pass ran and how many items it enriched */
+  fallbackEnrichmentCount: number;
 }
 
 /** A matched line item in a quote draft */
@@ -140,6 +209,10 @@ export interface QuoteDraft {
   depositSchedule: DepositSchedule | null;
   /** Resolved square footage result, including any manual override */
   sqftResolution?: SqftResolutionResult | null;
+  /** Spaces extracted from the customer request text, with sqft context */
+  spaceContext?: SpaceContext[] | null;
+  /** Full generation pipeline trace for debugging and triage */
+  generationTrace?: GenerationTrace | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -309,6 +382,7 @@ export type RuleConditionType =
   | 'line_item_quantity_gte'
   | 'line_item_quantity_lte'
   | 'request_text_contains'
+  | 'request_text_not_contains'
   | 'request_text_extract'
   | 'compound'
   | 'always'
@@ -322,6 +396,7 @@ export type RuleCondition =
   | { type: 'line_item_quantity_gte'; productNamePattern: string; threshold: number; matchMode?: MatchMode }
   | { type: 'line_item_quantity_lte'; productNamePattern: string; threshold: number; matchMode?: MatchMode }
   | { type: 'request_text_contains'; substring: string }
+  | { type: 'request_text_not_contains'; substring: string }
   | { type: 'request_text_extract'; pattern: string; variableName: string; preset?: string }
   | { type: 'compound'; conditions: RuleCondition[] }
   | { type: 'always' }
@@ -345,7 +420,7 @@ export type RuleActionType =
 
 /** A typed action for a structured rule */
 export type RuleAction =
-  | { type: 'add_line_item'; productName: string; quantity: number; unitPrice: number; description?: string; placeAfter?: string; placeBefore?: string }
+  | { type: 'add_line_item'; productName: string; quantity: number; unitPrice: number; description?: string; placeAfter?: string; placeBefore?: string; scopeConstraint?: string | null }
   | { type: 'remove_line_item'; productNamePattern: string; matchMode?: MatchMode }
   | { type: 'move_line_item'; productNamePattern: string; position: 'start' | 'end' | `before:${string}` | `after:${string}`; matchMode?: MatchMode }
   | { type: 'set_quantity'; productNamePattern: string; quantity: number; matchMode?: MatchMode }
@@ -367,6 +442,8 @@ export interface StructuredRule {
   triggerMode: TriggerMode;
   condition: RuleCondition;
   actions: RuleAction[];
+  /** Optional scope constraint — if set, rule only fires when detectedScopes contains this value */
+  scopeConstraint?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -396,6 +473,12 @@ export interface EngineLineItem {
   originalText: string;
   ruleIdsApplied: string[];
   quantityPrediction?: QuantityPredictionMeta;
+  /**
+   * Per-item sqft override resolved from space extraction context.
+   * When set, this value takes precedence over the whole-property sqft in
+   * preResolvedContext for compute_quantity formula evaluation.
+   */
+  sqftOverride?: number;
 }
 
 /** Metadata about a computed quantity derivation */

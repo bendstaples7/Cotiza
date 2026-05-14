@@ -46,6 +46,8 @@ export interface RulesEngineInput {
   maxIterations?: number;
   /** Pre-populated context variables (e.g. resolved sqft) injected before rule evaluation */
   preResolvedContext?: Map<string, number>;
+  /** Scopes detected from the customer request text (e.g. 'wall', 'ceiling', 'floor') */
+  detectedScopes?: Set<string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -93,6 +95,7 @@ const CONDITION_TYPES = new Set([
   'line_item_quantity_gte',
   'line_item_quantity_lte',
   'request_text_contains',
+  'request_text_not_contains',
   'request_text_extract',
   'compound',
   'always',
@@ -152,6 +155,12 @@ export function validateCondition(condition: unknown): { valid: boolean; error?:
     case 'request_text_contains':
       if (typeof cond.substring !== 'string') {
         return { valid: false, error: 'Condition type "request_text_contains" requires a string "substring" field' };
+      }
+      break;
+
+    case 'request_text_not_contains':
+      if (typeof cond.substring !== 'string') {
+        return { valid: false, error: 'Condition type "request_text_not_contains" requires a string "substring" field' };
       }
       break;
 
@@ -306,6 +315,9 @@ export function validateAction(action: unknown): { valid: boolean; error?: strin
       }
       if (act.placeBefore !== undefined && typeof act.placeBefore !== 'string') {
         return { valid: false, error: 'Action type "add_line_item" optional "placeBefore" must be a string' };
+      }
+      if (act.scopeConstraint !== undefined && act.scopeConstraint !== null && typeof act.scopeConstraint !== 'string') {
+        return { valid: false, error: 'Action type "add_line_item" optional "scopeConstraint" must be a string or null' };
       }
       break;
 
@@ -581,6 +593,7 @@ export function evaluateCondition(
   lineItems: EngineLineItem[],
   customerRequestText?: string,
   preResolvedContext?: Map<string, number>,
+  effectiveSqftOverride?: number,
 ): ConditionResult {
   switch (condition.type) {
     case 'line_item_exists': {
@@ -649,7 +662,32 @@ export function evaluateCondition(
       };
     }
 
+    case 'request_text_not_contains': {
+      const sub = condition.substring.toLowerCase();
+      const text = (customerRequestText ?? '').toLowerCase();
+      const matched = !text.includes(sub);
+      return {
+        matched,
+        matchingLineItemIds: matched ? lineItems.map((li) => li.id) : [],
+      };
+    }
+
     case 'request_text_extract': {
+      // Resolution hierarchy for sqft (and any variable):
+      //   1. effectiveSqftOverride — per-item space-specific sqft (highest priority)
+      //   2. preResolvedContext — whole-property sqft from tiered resolution pipeline
+      //   3. regex extraction from customer text (fallback)
+      if (condition.variableName === 'sqft' && effectiveSqftOverride !== undefined) {
+        const contextVariables = new Map<string, number>([[condition.variableName, effectiveSqftOverride]]);
+        const rawExtractedText = new Map<string, string>([[condition.variableName, String(effectiveSqftOverride)]]);
+        return {
+          matched: true,
+          matchingLineItemIds: lineItems.map((li) => li.id),
+          contextVariables,
+          rawExtractedText,
+        };
+      }
+
       // If the variable is already pre-resolved, skip extraction and use the pre-resolved value
       if (preResolvedContext?.has(condition.variableName)) {
         const preResolvedValue = preResolvedContext.get(condition.variableName)!;
@@ -704,7 +742,7 @@ export function evaluateCondition(
       let lineItemIds: string[] | null = null;
 
       for (const subCondition of condition.conditions) {
-        const subResult = evaluateCondition(subCondition, lineItems, customerRequestText, preResolvedContext);
+        const subResult = evaluateCondition(subCondition, lineItems, customerRequestText, preResolvedContext, effectiveSqftOverride);
 
         // Short-circuit: if any sub-condition doesn't match, compound fails
         if (!subResult.matched) {
@@ -726,9 +764,10 @@ export function evaluateCondition(
         }
 
         // Intersect matchingLineItemIds from line-item-targeting conditions
-        // Text-only conditions (request_text_contains, request_text_extract, always)
+        // Text-only conditions (request_text_contains, request_text_not_contains, request_text_extract, always)
         // return all line item IDs — don't use those for intersection
         const isLineItemTargeting = subCondition.type !== 'request_text_contains'
+          && subCondition.type !== 'request_text_not_contains'
           && subCondition.type !== 'request_text_extract'
           && subCondition.type !== 'always';
 
@@ -799,6 +838,8 @@ export function executeAction(
   contextVariables?: Map<string, number>,
   rawExtractedText?: Map<string, string>,
   depositSchedule?: DepositSchedule | null,
+  effectiveSqftOverride?: number,
+  detectedScopes?: Set<string>,
 ): ActionResult {
   switch (action.type) {
     case 'add_line_item': {
@@ -812,6 +853,20 @@ export function executeAction(
           lineItems,
           warning: `Product "${action.productName}" not found in catalog — skipping add_line_item`,
         };
+      }
+
+      // Per-action scope constraint: skip this specific add_line_item if the action
+      // has a scopeConstraint that doesn't match the detected scopes.
+      // This allows a single rule to add some items unconditionally and others only
+      // when a specific scope is present (e.g., painting always, baseboard only for walls).
+      if (action.scopeConstraint && detectedScopes && detectedScopes.size > 0) {
+        if (!detectedScopes.has(action.scopeConstraint)) {
+          return {
+            modified: false,
+            lineItems,
+            warning: `Skipping add_line_item "${action.productName}": scope constraint "${action.scopeConstraint}" not in detected scopes`,
+          };
+        }
       }
 
       // Duplicate guard: if an item with this product name already exists, skip the add.
@@ -837,6 +892,9 @@ export function executeAction(
         confidenceScore: 100,
         originalText: '',
         ruleIdsApplied: [ruleId],
+        // Inherit the space-specific sqft from the triggering context so that
+        // compute_quantity rules on this new item use the correct per-space sqft.
+        sqftOverride: effectiveSqftOverride,
       };
 
       let updated: EngineLineItem[];
@@ -1112,8 +1170,11 @@ export function executeAction(
       const updated = lineItems.map((li) => {
         if (matchesProductName(li.productName, action.productNamePattern, action.matchMode)) {
           affected.push(li);
-          modified = true;
           const existing = li.description.trim();
+          if (existing.toLowerCase().includes(action.text.toLowerCase())) {
+            return li;
+          }
+          modified = true;
           const newDesc = existing
             ? `${existing}${separator}${action.text}`
             : action.text;
@@ -1219,7 +1280,7 @@ export function executeAction(
     }
 
     case 'compute_quantity': {
-      const vars = contextVariables ?? new Map<string, number>();
+      const sharedVars = contextVariables ?? new Map<string, number>();
       const rawText = rawExtractedText ?? new Map<string, string>();
 
       // Find matching line items
@@ -1231,86 +1292,94 @@ export function executeAction(
         return { modified: false, lineItems };
       }
 
-      // Evaluate formula
-      let computedValue: number;
-      try {
-        computedValue = evaluateFormula(action.formula, vars);
-      } catch (e) {
-        if (e instanceof FormulaError && e.message.startsWith("Missing variable")) {
-          // Missing variable — skip with warning
-          return {
-            modified: false,
-            lineItems,
-            warning: `compute_quantity skipped: ${e.message}`,
-          };
+      // Process each matching item individually so per-item sqftOverride takes
+      // precedence over the shared whole-property sqft in preResolvedContext.
+      // This is the core of Option 2: no grouping, no branching — each item
+      // carries its own sqft context and the formula is evaluated once per item.
+      const updatedLineItems = [...lineItems];
+      let anyModifiedByCompute = false;
+      const beforeSnapshots: Array<{ id: string; productName: string; description?: string; quantity: number; unitPrice: number }> = [];
+      const afterSnapshots: Array<{ id: string; productName: string; description?: string; quantity: number; unitPrice: number }> = [];
+      let lastComputedMeta: ActionResult['computedQuantityMeta'] | undefined;
+      let lastWarning: string | undefined;
+
+      for (let i = 0; i < updatedLineItems.length; i++) {
+        const li = updatedLineItems[i];
+        if (!matchesProductName(li.productName, action.productNamePattern, action.matchMode)) continue;
+
+        // Build per-item variable map: start from shared context, then inject
+        // this item's sqftOverride if present (space-specific sqft wins).
+        const itemVars = new Map<string, number>(sharedVars);
+        if (li.sqftOverride !== undefined && li.sqftOverride !== null) {
+          itemVars.set('sqft', li.sqftOverride);
         }
-        // Non-finite result or other formula error — skip with error
-        return {
-          modified: false,
-          lineItems,
-          warning: `compute_quantity error: ${e instanceof Error ? e.message : String(e)}`,
-        };
-      }
 
-      // Check for non-finite result (defensive — evaluateFormula should catch this)
-      if (!Number.isFinite(computedValue)) {
-        return {
-          modified: false,
-          lineItems,
-          warning: `compute_quantity error: Formula produced a non-finite result`,
-        };
-      }
+        beforeSnapshots.push({ id: li.id, productName: li.productName, description: li.description, quantity: li.quantity, unitPrice: li.unitPrice });
 
-      // Round to nearest integer
-      let finalQuantity = Math.round(computedValue);
-
-      // Clamp ≤ 0 to 1
-      const clamped = finalQuantity <= 0;
-      if (clamped) {
-        finalQuantity = 1;
-      }
-
-      const before = snapshot(matching);
-
-      // Apply quantity to matching line items
-      const updated = lineItems.map((li) => {
-        if (matchesProductName(li.productName, action.productNamePattern, action.matchMode)) {
-          return {
-            ...li,
-            quantity: finalQuantity,
-            ruleIdsApplied: [...li.ruleIdsApplied, ruleId],
-          };
+        let computedValue: number;
+        try {
+          computedValue = evaluateFormula(action.formula, itemVars);
+        } catch (e) {
+          if (e instanceof FormulaError && e.message.startsWith("Missing variable")) {
+            lastWarning = `compute_quantity skipped: ${e.message}`;
+          } else {
+            lastWarning = `compute_quantity error: ${e instanceof Error ? e.message : String(e)}`;
+          }
+          afterSnapshots.push({ id: li.id, productName: li.productName, description: li.description, quantity: li.quantity, unitPrice: li.unitPrice });
+          continue;
         }
-        return li;
-      });
 
-      // Build computedQuantityMeta for audit
-      const variableValues: Record<string, number> = {};
-      for (const [key, value] of vars) {
-        variableValues[key] = value;
-      }
-      const rawExtractedTextRecord: Record<string, string> = {};
-      for (const [key, value] of rawText) {
-        rawExtractedTextRecord[key] = value;
-      }
+        if (!Number.isFinite(computedValue)) {
+          lastWarning = `compute_quantity error: Formula produced a non-finite result`;
+          afterSnapshots.push({ id: li.id, productName: li.productName, description: li.description, quantity: li.quantity, unitPrice: li.unitPrice });
+          continue;
+        }
 
-      const after = snapshot(
-        updated.filter((li) => matchesProductName(li.productName, action.productNamePattern, action.matchMode)),
-      );
+        let finalQuantity = Math.round(computedValue);
+        const clamped = finalQuantity <= 0;
+        if (clamped) {
+          finalQuantity = 1;
+          lastWarning = `compute_quantity: result ${computedValue} was ≤ 0, clamped to 1`;
+        }
 
-      return {
-        modified: true,
-        lineItems: updated,
-        beforeSnapshot: before,
-        afterSnapshot: after,
-        warning: clamped ? `compute_quantity: result ${computedValue} was ≤ 0, clamped to 1` : undefined,
-        computedQuantityMeta: {
+        updatedLineItems[i] = {
+          ...li,
+          quantity: finalQuantity,
+          ruleIdsApplied: [...li.ruleIdsApplied, ruleId],
+        };
+        anyModifiedByCompute = true;
+
+        afterSnapshots.push({ id: li.id, productName: li.productName, description: li.description, quantity: finalQuantity, unitPrice: li.unitPrice });
+
+        // Build audit meta from this item (last one processed wins for the audit entry)
+        const variableValues: Record<string, number> = {};
+        for (const [key, value] of itemVars) {
+          variableValues[key] = value;
+        }
+        const rawExtractedTextRecord: Record<string, string> = {};
+        for (const [key, value] of rawText) {
+          rawExtractedTextRecord[key] = value;
+        }
+        lastComputedMeta = {
           formula: action.formula,
           variableValues,
           rawExtractedText: rawExtractedTextRecord,
-          previousQuantity: matching[0].quantity,
+          previousQuantity: li.quantity,
           computedQuantity: finalQuantity,
-        },
+        };
+      }
+
+      if (!anyModifiedByCompute) {
+        return { modified: false, lineItems, warning: lastWarning };
+      }
+
+      return {
+        modified: true,
+        lineItems: updatedLineItems,
+        beforeSnapshot: beforeSnapshots,
+        afterSnapshot: afterSnapshots,
+        warning: lastWarning,
+        computedQuantityMeta: lastComputedMeta,
       };
     }
 
@@ -1326,7 +1395,7 @@ export function executeAction(
 const DEFAULT_MAX_ITERATIONS = 10;
 
 export function executeRules(input: RulesEngineInput): RulesEngineResult {
-  const { rules, catalog, customerRequestText, maxIterations = DEFAULT_MAX_ITERATIONS, preResolvedContext } = input;
+  const { rules, catalog, customerRequestText, maxIterations = DEFAULT_MAX_ITERATIONS, preResolvedContext, detectedScopes } = input;
 
   // Clone input line items to avoid mutation
   let lineItems: EngineLineItem[] = input.lineItems.map((li) => ({
@@ -1365,6 +1434,13 @@ export function executeRules(input: RulesEngineInput): RulesEngineResult {
       .sort((a, b) => a.priorityOrder - b.priorityOrder);
 
     for (const rule of eligible) {
+      // Skip rule if it has a scope constraint that doesn't match detected scopes
+      if (rule.scopeConstraint && detectedScopes && detectedScopes.size > 0) {
+        if (!detectedScopes.has(rule.scopeConstraint)) {
+          continue;
+        }
+      }
+
       // Validate condition at runtime — skip invalid rules
       const condValid = validateCondition(rule.condition);
       if (!condValid.valid) {
@@ -1403,21 +1479,39 @@ export function executeRules(input: RulesEngineInput): RulesEngineResult {
       const condResult = evaluateCondition(rule.condition, lineItems, customerRequestText, preResolvedContext);
       if (!condResult.matched) continue;
 
+      // Compute the effective sqft override for this rule execution.
+      // Find the first matching line item that has a sqftOverride set — this is the
+      // space-specific sqft that should propagate to conditions, compute_quantity,
+      // and any new items added by this rule (Option 3 fix).
+      const matchingItemsForSqft = condResult.matchingLineItemIds
+        .map((mid) => lineItems.find((li) => li.id === mid))
+        .filter((li): li is EngineLineItem => li !== undefined);
+      const effectiveSqftOverride = matchingItemsForSqft.find(
+        (li) => li.sqftOverride !== undefined,
+      )?.sqftOverride;
+
+      // Re-evaluate condition with the effective sqft override so that
+      // request_text_extract for sqft uses the per-item value.
+      const condResultWithSqft = effectiveSqftOverride !== undefined
+        ? evaluateCondition(rule.condition, lineItems, customerRequestText, preResolvedContext, effectiveSqftOverride)
+        : condResult;
+      if (!condResultWithSqft.matched) continue;
+
       // Capture context variables scoped to this rule only.
       // Merge preResolvedContext as a baseline so compute_quantity formulas can
       // reference pre-resolved variables (e.g. sqft) even when no condition
       // extracted them. Rule-scoped extracted values take precedence.
       const ruleContextVariables = new Map<string, number>(preResolvedContext ?? []);
-      if (condResult.contextVariables) {
-        for (const [key, value] of condResult.contextVariables) {
+      if (condResultWithSqft.contextVariables) {
+        for (const [key, value] of condResultWithSqft.contextVariables) {
           ruleContextVariables.set(key, value);
         }
       }
-      const ruleRawExtractedText = condResult.rawExtractedText;
+      const ruleRawExtractedText = condResultWithSqft.rawExtractedText;
 
       // Check duplicate application: skip if this rule has already been
       // applied to all of the matching line items in this execution run.
-      const matchingIds = condResult.matchingLineItemIds;
+      const matchingIds = condResultWithSqft.matchingLineItemIds;
       const allAlreadyApplied = matchingIds.length > 0
         ? matchingIds.every((id) => applied.has(`${rule.id}:${id}`))
         : applied.has(`${rule.id}:__global__`);
@@ -1425,7 +1519,7 @@ export function executeRules(input: RulesEngineInput): RulesEngineResult {
 
       // Execute each action
       for (const action of rule.actions) {
-        const actionResult = executeAction(action, lineItems, catalog, rule.id, customerNote, ruleContextVariables, ruleRawExtractedText, depositSchedule);
+        const actionResult = executeAction(action, lineItems, catalog, rule.id, customerNote, ruleContextVariables, ruleRawExtractedText, depositSchedule, effectiveSqftOverride, detectedScopes);
         lineItems = actionResult.lineItems;
 
         // Update customer note state if the action produced a new value

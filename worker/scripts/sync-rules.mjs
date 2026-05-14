@@ -62,8 +62,10 @@ const RULE_COLUMNS = 'id, name, description, rule_group_id, priority_order, is_a
 
 /**
  * Build SQL to upsert groups and rules from source into target.
+ * When skipLocallyModified=true (pull from production), rules with locally_modified_at
+ * set in the local DB are skipped to preserve local migrations and manual edits.
  */
-function buildUpsertSql(groups, rules) {
+function buildUpsertSql(groups, rules, skipLocallyModified = false) {
   const sqlLines = [];
 
   // Build a map of local group ID → group name for remapping rule references
@@ -94,9 +96,14 @@ function buildUpsertSql(groups, rules) {
     sqlLines.push(
       `INSERT OR IGNORE INTO rules (id, name, description, rule_group_id, priority_order, is_active, condition_json, action_json, trigger_mode, created_at, updated_at) VALUES (${sqlVal(r.id)}, ${sqlVal(r.name)}, ${sqlVal(r.description)}, ${groupIdExpr}, ${r.priority_order}, ${r.is_active}, ${sqlVal(r.condition_json)}, ${sqlVal(r.action_json)}, ${sqlVal(r.trigger_mode)}, ${sqlVal(r.created_at)}, ${sqlVal(r.updated_at)});`
     );
-    // Update existing rules (matched by name + group) with latest data
+    // Update existing rules (matched by name + group) with latest data.
+    // When skipLocallyModified=true (pull from production), skip rules that have been
+    // locally modified (locally_modified_at IS NOT NULL) to preserve local migration changes.
+    const updateWhere = skipLocallyModified
+      ? `WHERE name = ${sqlVal(r.name)} AND rule_group_id = ${groupIdExpr} AND (locally_modified_at IS NULL OR locally_modified_at = 'null')`
+      : `WHERE name = ${sqlVal(r.name)} AND rule_group_id = ${groupIdExpr}`;
     sqlLines.push(
-      `UPDATE rules SET description = ${sqlVal(r.description)}, priority_order = ${r.priority_order}, is_active = ${r.is_active}, condition_json = ${sqlVal(r.condition_json)}, action_json = ${sqlVal(r.action_json)}, trigger_mode = ${sqlVal(r.trigger_mode)}, updated_at = ${sqlVal(r.updated_at)} WHERE name = ${sqlVal(r.name)} AND rule_group_id = ${groupIdExpr};`
+      `UPDATE rules SET description = ${sqlVal(r.description)}, priority_order = ${r.priority_order}, is_active = ${r.is_active}, condition_json = ${sqlVal(r.condition_json)}, action_json = ${sqlVal(r.action_json)}, trigger_mode = ${sqlVal(r.trigger_mode)}, updated_at = ${sqlVal(r.updated_at)} ${updateWhere};`
     );
   }
 
@@ -175,7 +182,7 @@ try {
       process.exit(0);
     }
 
-    const sql = buildUpsertSql(remoteGroups, remoteRules);
+    const sql = buildUpsertSql(remoteGroups, remoteRules, true /* skipLocallyModified */);
     execFile('--local', sql);
     console.log(`[sync-rules] Synced ${remoteGroups.length} rule groups and ${remoteRules.length} rules from production → local.`);
   }

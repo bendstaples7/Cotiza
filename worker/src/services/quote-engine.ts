@@ -5,6 +5,7 @@ import { QuantityEngine } from './quantity-engine.js';
 import { SqftResolutionService } from './sqft-resolution-service.js';
 import type { SqftResolutionResult } from './sqft-resolution-service.js';
 import { ProductivityRatesService } from './productivity-rates-service.js';
+import { SPACE_ALLOCATIONS } from './space-allocation-service.js';
 import type { ProductCatalogEntry, QuoteTemplate, QuoteDraft, QuoteLineItem, LineItemRationale, SimilarQuote, StructuredRule, AuditEntry, EngineLineItem, ActionItem, QuantityPredictionMeta, RuleCondition, DepositSchedule } from 'shared';
 
 const GENERATION_TIMEOUT_MS = 120_000;
@@ -59,13 +60,16 @@ interface AIResponse {
 
 const SYSTEM_PROMPT = [
   'You are a quote generation assistant for a home services company.',
-  'Analyze the customer request and generate line items ONLY for work the customer explicitly described or that is clearly implied by their request.',
+  'Analyze the customer request and generate line items ONLY for work the customer explicitly described.',
   '',
   'RULES:',
   '- CRITICAL: Do NOT include line items for work the customer did not ask about. Every line item must be directly traceable to something in the customer request text.',
+  '- CRITICAL: "Clearly implied" means the work is physically unavoidable given what the customer asked for — NOT that it is commonly done alongside the requested work. Examples of what is NOT implied: a customer asking for ceiling drywall does NOT imply baseboard trim (different surface); a customer asking for floor tile does NOT imply wall painting; a customer asking for one room does NOT imply work in adjacent rooms.',
+  '- SCOPE CONSTRAINTS: If the customer specifies a surface (ceiling, floor, walls), a room, or a limited scope, restrict all line items strictly to that scope. Do not add companion items that belong to a different surface, elevation, or area than what the customer described.',
   '- Only match to products that exist in the provided catalog — never invent new products.',
   '- If the catalog contains items unrelated to the customer request, ignore them.',
   '- When a catalog product has [matches: ...] keywords, use those to determine the best match. If the customer request text contains one of the keywords, prefer that product over similar alternatives.',
+  '- When a catalog product has [scope: ...], only include it if the customer\'s request involves that scope (e.g., scope "perimeter" requires wall or floor work, not ceiling-only work).',
   '- Assign a confidence score (0-100) for each match.',
   '- If a requested item cannot be confidently matched (score < 70), include it with the best guess and a reason.',
   '- Estimate quantities from the customer text when possible; default to 1.',
@@ -74,7 +78,8 @@ const SYSTEM_PROMPT = [
   '- If a template matches the type of work, reference it by ID and name. Use the template\'s line items as a starting point, but ONLY include items that are relevant to the customer\'s specific request. Remove template items that do not apply.',
   '- When SIMILAR PAST QUOTES are provided, use them only as pricing references. Do NOT copy line items from similar quotes unless the customer request explicitly calls for that type of work.',
   '- When BUSINESS RULES are provided, follow them when generating line items. Rules can change description, quantity, and unitPrice on a line item. productName must always match the exact catalog product name. For each line item, include a "ruleIdsApplied" array listing the IDs of any business rules that influenced that line item. If no rules apply, use an empty array.',
-  '- CRITICAL: Do NOT include duplicate line items. Each product should appear at most once. If the same product applies to multiple areas, use a single line item with an appropriate quantity instead of separate entries.',
+  '- CRITICAL: Do NOT include duplicate line items. Each product should appear at most once unless the items are for DIFFERENT spaces (see SPACE SPLITTING rule below).',
+  '- SPACE SPLITTING: If the customer mentions the same type of work in multiple distinct rooms or areas, create SEPARATE line items for each space — one per space. Include the space name in the "originalText" field for each item (e.g., originalText: "drywall in the basement"). Do NOT combine multi-space work into a single line item with a summed quantity.',
   '- If the customer request is vague, generate fewer items with lower confidence scores rather than guessing at work they might need.',
   '',
   'ACTION ITEMS:',
@@ -146,7 +151,36 @@ export class QuoteEngine {
       });
     }
 
-    const userPrompt = this.buildPrompt(input, catalog, templates);
+    // --- Scope-filtered catalog for AI (Option 3) ---
+    // Detect which scopes are present in the customer request text, then filter
+    // the catalog to only include products whose scope matches. This prevents the
+    // AI from ever matching perimeter/floor/exterior items on ceiling-only requests.
+    // Falls back to the full catalog when scope is ambiguous (no surface keywords found).
+    const detectedScopes = detectRequestScopes(input.customerText);
+    const filteredOutProducts = detectedScopes.size > 0
+      ? catalog.filter((p) => p.scope && p.scope !== 'any' && !detectedScopes.has(p.scope)).map((p) => p.name)
+      : [];
+    const scopedCatalog = detectedScopes.size > 0
+      ? catalog.filter((p) => !p.scope || p.scope === 'any' || detectedScopes.has(p.scope))
+      : catalog;
+
+    // --- Generation trace (Option 1) ---
+    // Mutable trace object populated throughout the pipeline for triage.
+    const trace: import('shared').GenerationTrace = {
+      detectedScopes: [...detectedScopes],
+      catalogFilteredCount: filteredOutProducts.length,
+      catalogFilteredProducts: filteredOutProducts,
+      wholePropSqft: null,
+      sqftResolutionTier: null,
+      spaceContexts: [],
+      rulesFiredCount: 0,
+      rulesFired: [],
+      scopeMismatchCount: 0,
+      scopeMismatchedProducts: [],
+      fallbackEnrichmentCount: 0,
+    };
+
+    const userPrompt = this.buildPrompt(input, scopedCatalog, templates);
     const systemPrompt = SYSTEM_PROMPT;
 
     const controller = new AbortController();
@@ -186,7 +220,40 @@ export class QuoteEngine {
         choices: Array<{ message: { content: string } }>;
       };
       const raw = data.choices?.[0]?.message?.content?.trim() ?? '';
-      const aiResult = this.parseAIResponse(raw, catalog);
+      const aiResult = this.parseAIResponse(raw, scopedCatalog);
+
+      // --- Post-generation scope filter (Option 1 safety net) ---
+      // Even with the scoped catalog, the AI may still return items that don't
+      // belong (e.g., matched via fuzzy logic or hallucinated). Filter out any
+      // item whose catalog scope doesn't match the detected scopes.
+      // Mismatched items are moved to unresolvedItems rather than silently dropped.
+      if (detectedScopes.size > 0) {
+        const fullCatalogByName = new Map(
+          catalog.map((p) => [p.name.trim().toLowerCase(), p]),
+        );
+        const scopeMismatched: typeof aiResult.lineItems = [];
+        aiResult.lineItems = aiResult.lineItems.filter((item) => {
+          const nameLower = item.productName.trim().toLowerCase();
+          const catalogEntry = fullCatalogByName.get(nameLower);
+          const itemScope = catalogEntry?.scope;
+          if (itemScope && itemScope !== 'any' && !detectedScopes.has(itemScope)) {
+            scopeMismatched.push({
+              ...item,
+              confidenceScore: 0,
+              productCatalogEntryId: null,
+              unmatchedReason: `Scope mismatch: "${itemScope}" work not mentioned in customer request`,
+            });
+            return false;
+          }
+          return true;
+        });
+        // Append scope-mismatched items as unresolved so they're visible for review
+        aiResult.lineItems.push(...scopeMismatched);
+
+        // Populate trace
+        trace.scopeMismatchCount = scopeMismatched.length;
+        trace.scopeMismatchedProducts = scopeMismatched.map((i) => i.productName);
+      }
 
       // --- Quantity Engine Integration ---
       // Apply historical quantity predictions before the rules engine runs.
@@ -270,9 +337,77 @@ export class QuoteEngine {
           if (resolutionResult.resolved && resolutionResult.value !== null) {
             preResolvedContext = new Map([['sqft', resolutionResult.value]]);
           }
+          // Populate trace
+          trace.wholePropSqft = resolutionResult.value;
+          trace.sqftResolutionTier = resolutionResult.tier;
         } catch (err) {
           // Graceful degradation — resolution failure must not block quote generation
           console.warn('[QuoteEngine] Sqft resolution failed:', err instanceof Error ? err.message : String(err));
+        }
+      }
+
+      // --- Space Extraction ---
+      // Extract space/room context from the customer text so downstream steps
+      // can build per-space descriptions and sqft overrides (tasks 11 & 12).
+      // SpaceExtractionService never throws — any failure returns [].
+      const wholePropSqft = sqftResolutionResult?.resolution?.value ?? null;
+      const { SpaceExtractionService } = await import('./space-extraction-service.js');
+      const spaceExtractionService = new SpaceExtractionService(this.apiKey, this.apiUrl);
+      const spaceContexts = await spaceExtractionService.extractSpaces(input.customerText, wholePropSqft);
+
+      // Populate trace with space contexts
+      trace.spaceContexts = spaceContexts.map((sc) => ({
+        spaceName: sc.spaceName,
+        normalizedLabel: sc.normalizedLabel,
+        explicitSqft: sc.explicitSqft,
+        estimatedSqft: sc.estimatedSqft,
+        sqftIsExplicit: sc.sqftIsExplicit,
+      }));
+
+      // --- Description Prefix Logic (Task 12) ---
+      // For each AI line item, find the matching SpaceContext by checking if
+      // item.originalText (case-insensitive) contains any space name from spaceContexts.
+      // Build a description prefix with assumption disclaimers and prepend it to the
+      // existing description. Also generate action items for estimated/missing sqft cases.
+      if (spaceContexts.length > 0) {
+        for (const item of aiResult.lineItems) {
+          const originalTextLower = (item.originalText ?? '').toLowerCase();
+          const matchedSpace = spaceContexts.find((sc) =>
+            originalTextLower.includes(sc.spaceName.toLowerCase()),
+          );
+
+          if (!matchedSpace) continue;
+
+          const { normalizedLabel, sqftIsExplicit, explicitSqft, estimatedSqft } = matchedSpace;
+
+          let prefix: string;
+
+          if (sqftIsExplicit && explicitSqft !== null) {
+            // Explicit sqft stated by the customer — no disclaimer needed
+            prefix = `${normalizedLabel} — ${explicitSqft} sq ft`;
+          } else if (estimatedSqft !== null) {
+            // Estimated sqft from lookup table — include assumption disclaimer
+            prefix = `${normalizedLabel} — Assumes ${normalizedLabel} sq footage is no greater than ${estimatedSqft} sq ft. If greater, a change order at additional cost will be required.`;
+            // Generate action item asking user to confirm the estimated sqft (REQ-7.2)
+            if (!aiResult.actionItems) aiResult.actionItems = [];
+            aiResult.actionItems.push({
+              lineItemProductName: item.productName,
+              description: `Confirm ${normalizedLabel} sq footage — currently estimated at ${estimatedSqft} sq ft. Update if different.`,
+            });
+          } else {
+            // Space known but no sqft available — prefix is just the label
+            prefix = normalizedLabel;
+            // Generate action item requesting the actual sqft (REQ-7.1)
+            if (!aiResult.actionItems) aiResult.actionItems = [];
+            aiResult.actionItems.push({
+              lineItemProductName: item.productName,
+              description: `Square footage of ${normalizedLabel} needed for accurate pricing.`,
+            });
+          }
+
+          // Prepend prefix to the existing description
+          const existingDesc = item.description ?? '';
+          item.description = existingDesc.length > 0 ? `${prefix} — ${existingDesc}` : prefix;
         }
       }
 
@@ -299,48 +434,80 @@ export class QuoteEngine {
       // --- Rules Engine Integration ---
       // Convert validated AI line items to EngineLineItem format, run the
       // deterministic rules engine, then convert back for deduplication.
+      //
+      // Option 2: per-item sqftOverride on EngineLineItem.
+      // Each item carries its own space-specific sqft resolved from spaceContexts.
+      // The rules engine runs once — no grouping, no branching, no edge cases.
       let auditTrail: AuditEntry[] | undefined;
       let rulesCustomerNote: string | null = null;
       let rulesDepositSchedule: DepositSchedule | null = null;
 
       if (structuredRules && structuredRules.length > 0) {
-        const engineLineItems: EngineLineItem[] = aiResult.lineItems.map((item) => ({
-          id: crypto.randomUUID(),
-          productCatalogEntryId: item.productCatalogEntryId,
-          productName: item.productName,
-          description: item.description ?? '',
-          quantity: item.quantity ?? 1,
-          unitPrice: item.unitPrice ?? 0,
-          confidenceScore: item.confidenceScore,
-          originalText: item.originalText ?? '',
-          ruleIdsApplied: Array.isArray(item.ruleIdsApplied) ? item.ruleIdsApplied.filter((id): id is string => typeof id === 'string') : [],
-          quantityPrediction: item.quantityPrediction ?? undefined,
-        }));
+        const engineLineItems: EngineLineItem[] = aiResult.lineItems.map((item) => {
+          // Resolve this item's space-specific sqft by matching originalText against
+          // extracted space names. First match wins.
+          const originalTextLower = (item.originalText ?? '').toLowerCase();
+          const matchedSpace = spaceContexts.find((sc) =>
+            originalTextLower.includes(sc.spaceName.toLowerCase()),
+          );
+          const spaceSqft = matchedSpace
+            ? (matchedSpace.explicitSqft ?? matchedSpace.estimatedSqft ?? undefined)
+            : undefined;
 
+          return {
+            id: crypto.randomUUID(),
+            productCatalogEntryId: item.productCatalogEntryId,
+            productName: item.productName,
+            description: item.description ?? '',
+            quantity: item.quantity ?? 1,
+            unitPrice: item.unitPrice ?? 0,
+            confidenceScore: item.confidenceScore,
+            originalText: item.originalText ?? '',
+            ruleIdsApplied: Array.isArray(item.ruleIdsApplied) ? item.ruleIdsApplied.filter((id): id is string => typeof id === 'string') : [],
+            quantityPrediction: item.quantityPrediction ?? undefined,
+            // Per-item sqft override: compute_quantity in the rules engine will use
+            // this instead of the whole-property sqft from preResolvedContext.
+            sqftOverride: spaceSqft,
+          };
+        });
+
+        // Single executeRules call — no grouping, no branching.
         const engineResult = executeRules({
           lineItems: engineLineItems,
           rules: structuredRules,
           catalog,
           customerRequestText: input.customerText,
           preResolvedContext,
+          detectedScopes,
         });
 
+        const mergedEngineLineItems = engineResult.lineItems;
+        const mergedPendingEnrichments = engineResult.pendingEnrichments;
         auditTrail = engineResult.auditTrail;
         rulesCustomerNote = engineResult.customerNote;
         rulesDepositSchedule = engineResult.depositSchedule;
 
+        // Populate trace with rules that fired
+        const firedRuleNames = [...new Set(
+          engineResult.auditTrail
+            .filter((e) => e.ruleId !== '__engine__')
+            .map((e) => e.ruleName)
+        )];
+        trace.rulesFiredCount = firedRuleNames.length;
+        trace.rulesFired = firedRuleNames;
+
         // Process AI enrichments synchronously (extract_request_context actions)
-        if (engineResult.pendingEnrichments.length > 0 && input.customerText?.trim()) {
+        if (mergedPendingEnrichments.length > 0 && input.customerText?.trim()) {
           const { EnrichmentService } = await import('./enrichment-service.js');
           const enrichmentService = new EnrichmentService(this.apiKey, this.apiUrl);
           const enrichedDescriptions = await enrichmentService.processEnrichments(
-            engineResult.pendingEnrichments,
+            mergedPendingEnrichments,
             input.customerText,
-            engineResult.lineItems.map(eli => ({ id: eli.id, productName: eli.productName, description: eli.description })),
+            mergedEngineLineItems.map(eli => ({ id: eli.id, productName: eli.productName, description: eli.description })),
           );
 
           // Apply enriched descriptions to engine line items
-          for (const eli of engineResult.lineItems) {
+          for (const eli of mergedEngineLineItems) {
             const newDesc = enrichedDescriptions.get(eli.id);
             if (newDesc) {
               eli.description = newDesc;
@@ -348,8 +515,37 @@ export class QuoteEngine {
           }
         }
 
+        // --- Fallback Enrichment for Missing Location Context (REQ-6.4) ---
+        const itemsNeedingLocation = mergedEngineLineItems.filter(
+          li => !hasLocationContext(li.description)
+        );
+
+        if (itemsNeedingLocation.length > 0 && input.customerText?.trim()) {
+          const fallbackEnrichments = itemsNeedingLocation.map(li => ({
+            lineItemId: li.id,
+            productNamePattern: li.productName,
+            extractionPrompt: 'Extract the room, area, or location where this work is being done. If no specific location is mentioned, return N/A.',
+            separator: ' — ',
+            ruleId: '__space_fallback__',
+            ruleName: 'Space Fallback Enrichment',
+          }));
+
+          const { EnrichmentService } = await import('./enrichment-service.js');
+          const enrichmentService = new EnrichmentService(this.apiKey, this.apiUrl);
+          const fallbackDescriptions = await enrichmentService.processEnrichments(
+            fallbackEnrichments,
+            input.customerText,
+            mergedEngineLineItems.map(eli => ({ id: eli.id, productName: eli.productName, description: eli.description })),
+          );
+
+          for (const li of mergedEngineLineItems) {
+            const newDesc = fallbackDescriptions.get(li.id);
+            if (newDesc) li.description = newDesc;
+          }
+        }
+
         // Convert engine output back to AILineItem format
-        aiResult.lineItems = engineResult.lineItems.map((eli) => ({
+        aiResult.lineItems = mergedEngineLineItems.map((eli) => ({
           id: eli.id,
           productCatalogEntryId: eli.productCatalogEntryId,
           productName: eli.productName,
@@ -363,6 +559,47 @@ export class QuoteEngine {
         }));
       }
 
+      // --- Fallback Enrichment for Missing Location Context (no-rules path, REQ-6.4) ---
+      // When the rules engine did not run (no structuredRules), apply the same fallback
+      // enrichment directly on the AI line items.
+      if ((!structuredRules || structuredRules.length === 0) && input.customerText?.trim()) {
+        const aiItemsNeedingLocation = aiResult.lineItems.filter(
+          li => !hasLocationContext(li.description ?? '')
+        );
+
+        if (aiItemsNeedingLocation.length > 0) {
+          const fallbackEnrichments = aiItemsNeedingLocation.map(li => ({
+            lineItemId: li.id ?? '',
+            productNamePattern: li.productName,
+            extractionPrompt: 'Extract the room, area, or location where this work is being done. If no specific location is mentioned, return N/A.',
+            separator: ' — ',
+            ruleId: '__space_fallback__',
+            ruleName: 'Space Fallback Enrichment',
+          })).filter(e => e.lineItemId !== '');
+
+          if (fallbackEnrichments.length > 0) {
+            try {
+              const { EnrichmentService } = await import('./enrichment-service.js');
+              const enrichmentService = new EnrichmentService(this.apiKey, this.apiUrl);
+              const fallbackDescriptions = await enrichmentService.processEnrichments(
+                fallbackEnrichments,
+                input.customerText,
+                aiResult.lineItems.map(li => ({ id: li.id ?? '', productName: li.productName, description: li.description ?? '' })),
+              );
+
+              for (const li of aiResult.lineItems) {
+                if (!li.id) continue;
+                const newDesc = fallbackDescriptions.get(li.id);
+                if (newDesc) li.description = newDesc;
+              }
+            } catch (err) {
+              // Graceful degradation — fallback enrichment failure must not block quote generation
+              console.warn('[QuoteEngine] Fallback enrichment (no-rules path) failed:', err instanceof Error ? err.message : String(err));
+            }
+          }
+        }
+      }
+
       // Deduplicate after rules engine has had a chance to add/modify items
       aiResult.lineItems = deduplicateLineItems(aiResult.lineItems);
 
@@ -370,7 +607,7 @@ export class QuoteEngine {
       // placeBefore) is reflected in the catalog sort_order values.
       aiResult.lineItems = sortLineItemsByCatalog(aiResult.lineItems, catalog);
 
-      return this.buildDraft(input, aiResult, auditTrail, rulesCustomerNote, sqftResolutionResult, rulesDepositSchedule);
+      return this.buildDraft(input, aiResult, auditTrail, rulesCustomerNote, sqftResolutionResult, rulesDepositSchedule, trace);
     } catch (err) {
       if (err instanceof PlatformError) throw err;
 
@@ -412,6 +649,9 @@ export class QuoteEngine {
       for (const p of catalog) {
         let line = `- ${p.name} — $${p.unitPrice}`;
         if (p.description) line += ' — ' + p.description;
+        if (p.scope && p.scope !== 'any') {
+          line += ` [scope: ${p.scope}]`;
+        }
         if (p.keywords) {
           // Sanitize: strip control chars, brackets, clamp length
           const sanitized = p.keywords
@@ -588,6 +828,7 @@ export class QuoteEngine {
     rulesCustomerNote?: string | null,
     sqftResolutionResult?: SqftResolutionResult | null,
     depositSchedule?: DepositSchedule | null,
+    generationTrace?: import('shared').GenerationTrace | null,
   ): QuoteEngineOutput {
     const now = new Date();
     const draftId = crypto.randomUUID();
@@ -705,6 +946,7 @@ export class QuoteEngine {
       actionItems: actionItems.length > 0 ? actionItems : undefined,
       similarQuotes: similarQuotes.length > 0 ? similarQuotes : undefined,
       sqftResolution: sqftResolutionResult ?? null,
+      generationTrace: generationTrace ?? null,
       createdAt: now,
       updatedAt: now,
     };
@@ -717,6 +959,109 @@ export class QuoteEngine {
   }
 
   // ── Rules section builder ─────────────────────────────────────────
+}
+
+// ---------------------------------------------------------------------------
+// Scope detection helper (module-level, pure function)
+// ---------------------------------------------------------------------------
+
+/**
+ * Detects which product scopes are relevant to a customer request.
+ *
+ * Returns a Set of scope strings that are explicitly present in the request.
+ * Returns an empty Set when the scope is ambiguous (no surface keywords found),
+ * which causes the full catalog to be used — conservative fallback.
+ *
+ * Scope values match the `scope` column in product_catalog:
+ *   'ceiling'   — ceiling-specific work
+ *   'floor'     — flooring work
+ *   'wall'      — wall-specific work
+ *   'perimeter' — baseboard, trim, crown molding (requires wall or floor work)
+ *   'exterior'  — outdoor/exterior work
+ *
+ * 'any' and null are always included (no constraint).
+ */
+function detectRequestScopes(customerText: string): Set<string> {
+  const text = customerText.toLowerCase();
+  const scopes = new Set<string>();
+
+  // Always include 'any' — products with no scope constraint are always valid
+  scopes.add('any');
+
+  // Ceiling work
+  if (/\bceiling\b|\bsoffit\b|\boverhead\b/.test(text)) {
+    scopes.add('ceiling');
+  }
+
+  // Floor/flooring work
+  if (/\bfloor\b|\bflooring\b|\bhardwood\b|\blaminate\b|\bvinyl floor\b|\btile floor\b|\bunderlayment\b/.test(text)) {
+    scopes.add('floor');
+  }
+
+  // Wall work — "drywall" alone doesn't count as wall scope if "ceiling" is also present
+  // (ceiling drywall is ceiling scope, not wall scope). Only add wall scope when
+  // wall work is explicitly mentioned without being qualified as ceiling work.
+  const hasCeiling = scopes.has('ceiling');
+  const hasDrywallOnWalls = /\bwall\b|\bwalls\b|\bsheetrock\b|\bplaster\b|\bwainscot\b/.test(text) ||
+    (/\bdrywall\b/.test(text) && !hasCeiling) ||
+    (/\bdrywall\b/.test(text) && hasCeiling && /\bwall\b|\bwalls\b/.test(text));
+  if (hasDrywallOnWalls) {
+    scopes.add('wall');
+  }
+
+  // Perimeter work (baseboard, trim, molding) — valid when walls or floors are in scope,
+  // or when explicitly mentioned by the customer.
+  if (
+    scopes.has('wall') ||
+    scopes.has('floor') ||
+    /\bbaseboard\b|\btrim\b|\bmolding\b|\bmoulding\b|\bshoe\b/.test(text)
+  ) {
+    scopes.add('perimeter');
+  }
+
+  // Exterior work
+  if (/\bexterior\b|\boutside\b|\boutdoor\b|\broof\b|\broofing\b|\bsiding\b|\bgutter\b|\bfence\b|\bfencing\b|\bdeck\b|\bporch\b/.test(text)) {
+    scopes.add('exterior');
+  }
+
+  // If only 'any' was added (no surface keywords found), return empty set
+  // so the caller falls back to the full catalog (conservative — don't filter).
+  if (scopes.size === 1 && scopes.has('any')) {
+    return new Set<string>();
+  }
+
+  return scopes;
+}
+
+// ---------------------------------------------------------------------------
+// Location context helper (module-level, pure function)
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true if the description already contains a location reference.
+ * Checks all keywords from the SPACE_ALLOCATIONS lookup table plus common
+ * location-indicating words. Case-insensitive.
+ *
+ * Used by the fallback enrichment pass (REQ-6.4) to skip items that already
+ * have location context in their description.
+ */
+function hasLocationContext(description: string): boolean {
+  const lower = description.toLowerCase();
+
+  // Check common location words
+  const commonLocationWords = ['room', 'area', 'floor', 'level', 'space'];
+  for (const word of commonLocationWords) {
+    if (lower.includes(word)) return true;
+  }
+
+  // Check all keywords from the SPACE_ALLOCATIONS lookup table
+  for (const entry of SPACE_ALLOCATIONS) {
+    for (const keyword of entry.keywords) {
+      if (lower.includes(keyword)) return true;
+    }
+  }
+
+  return false;
 }
 
 // ---------------------------------------------------------------------------
