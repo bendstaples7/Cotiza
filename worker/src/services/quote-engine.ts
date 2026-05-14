@@ -196,13 +196,17 @@ export class QuoteEngine {
     // Fix 2: Filter overly generic entries (e.g. "roof") before they reach the
     // reviewer. Single/two-word entries and entries subsumed by longer ones are
     // dropped to prevent false-positive flagging of requested work items.
-    completedWorkContext.completedWork = filterCompletedWork(completedWorkContext.completedWork);
+    // Nitpick 2: create a new object rather than mutating the returned context.
+    const filteredContext: import('./completed-work-service.js').CompletedWorkContext = {
+      ...completedWorkContext,
+      completedWork: filterCompletedWork(completedWorkContext.completedWork),
+    };
 
-    trace.completedWork = completedWorkContext.completedWork;
-    trace.contextualFacts = completedWorkContext.contextualFacts;
-    trace.completedWorkFromAI = completedWorkContext.fromAI;
+    trace.completedWork = filteredContext.completedWork;
+    trace.contextualFacts = filteredContext.contextualFacts;
+    trace.completedWorkFromAI = filteredContext.fromAI;
 
-    const userPrompt = this.buildPrompt(input, scopedCatalog, templates, completedWorkContext);
+    const userPrompt = this.buildPrompt(input, scopedCatalog, templates, filteredContext);
     const systemPrompt = SYSTEM_PROMPT;
 
     const controller = new AbortController();
@@ -491,11 +495,29 @@ export class QuoteEngine {
           // extracted space names. Sum across ALL matching spaces so that an item
           // covering multiple rooms (e.g. "drywall in two bedrooms") gets the combined
           // sqft rather than just the first room matched. (Option 1 fix)
+          // Inline 2: deduplicate overlapping matches before summing to prevent
+          // double-counting when spaceContexts contains both "bedroom" and "master bedroom"
+          // and the originalText contains "master bedroom" (which includes "bedroom").
+          // Strategy: sort by spaceName length descending, then skip any entry whose
+          // spaceName is a substring of an already-accepted entry.
           const originalTextLower = (item.originalText ?? '').toLowerCase();
-          const matchedSpaces = spaceContexts.filter((sc) =>
+          const rawMatches = spaceContexts.filter((sc) =>
             originalTextLower.includes(sc.spaceName.toLowerCase()),
           );
-          const totalMatchedSqft = matchedSpaces.reduce(
+          // Sort longest (most specific) first, then deduplicate subsumed entries
+          const sortedMatches = [...rawMatches].sort(
+            (a, b) => b.spaceName.length - a.spaceName.length,
+          );
+          const deduplicatedMatches: typeof sortedMatches = [];
+          for (const sc of sortedMatches) {
+            const alreadyCovered = deduplicatedMatches.some((accepted) =>
+              accepted.spaceName.toLowerCase().includes(sc.spaceName.toLowerCase()),
+            );
+            if (!alreadyCovered) {
+              deduplicatedMatches.push(sc);
+            }
+          }
+          const totalMatchedSqft = deduplicatedMatches.reduce(
             (sum, sc) => sum + (sc.explicitSqft ?? sc.estimatedSqft ?? 0),
             0,
           );
@@ -674,13 +696,13 @@ export class QuoteEngine {
       // line item against the completedWork list. Items that match are flagged by
       // dropping their confidenceScore below threshold so they land in unresolvedItems
       // with a clear unmatchedReason. This catches what the main AI missed.
-      if (completedWorkContext.completedWork.length > 0 && aiResult.lineItems.length > 0) {
+      if (filteredContext.completedWork.length > 0 && aiResult.lineItems.length > 0) {
         try {
           const flagged = await reviewLineItemsAgainstCompletedWork(
             this.apiKey,
             this.apiUrl,
             aiResult.lineItems,
-            completedWorkContext.completedWork,
+            filteredContext.completedWork,
             input.customerText,
           );
           if (flagged.size > 0) {
@@ -1099,7 +1121,9 @@ export class QuoteEngine {
  * Returns a Map of itemId → reason string for any items that should be flagged.
  * Flagged items get confidenceScore = 0 → land in unresolvedItems for human review.
  *
- * Never throws — caller handles graceful degradation.
+ * Can throw on reviewer API errors or invalid JSON responses. Callers must handle
+ * these exceptions (the call site in generateQuote wraps this in try/catch for
+ * graceful degradation).
  */
 async function reviewLineItemsAgainstCompletedWork(
   apiKey: string,

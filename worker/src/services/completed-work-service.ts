@@ -28,12 +28,12 @@ export interface CompletedWorkContext {
 const COMPLETED_WORK_PATTERNS: RegExp[] = [
   // "I recently/just/already had X done/installed/completed/spray foamed/finished"
   /(?:i|we)\s+(?:recently|just|already|previously)\s+had\s+(?:my|our|the)?\s*(.+?)\s+(?:done|installed|completed|spray\s*foamed|spray\s*foam(?:ed)?|finished|put\s+in|applied|added)/gi,
-  // "X was/were already done/installed/completed"
-  /(.+?)\s+(?:was|were|has\s+been|have\s+been)\s+already\s+(?:done|installed|completed|finished|applied|added)/gi,
-  // "X is/are already in place/installed/done"
-  /(.+?)\s+(?:is|are)\s+already\s+(?:in\s+place|installed|done|finished|completed|there)/gi,
-  // "X has already been done/installed"
-  /(.+?)\s+has\s+already\s+been\s+(?:done|installed|completed|finished|applied)/gi,
+  // "X was/were already done/installed/completed" — anchored to sentence start to prevent cross-sentence capture
+  /(?:^|[.!?]\s+)(.+?)\s+(?:was|were|has\s+been|have\s+been)\s+already\s+(?:done|installed|completed|finished|applied|added)/gi,
+  // "X is/are already in place/installed/done" — anchored to sentence start
+  /(?:^|[.!?]\s+)(.+?)\s+(?:is|are)\s+already\s+(?:in\s+place|installed|done|finished|completed|there)/gi,
+  // "X has already been done/installed" — anchored to sentence start
+  /(?:^|[.!?]\s+)(.+?)\s+has\s+already\s+been\s+(?:done|installed|completed|finished|applied)/gi,
   // "just had X spray foamed / insulated / etc."
   /(?:just|recently)\s+had\s+(?:my|our|the)?\s*(.+?)\s+(?:spray\s*foam(?:ed)?|insulated|drywalled|painted|tiled|floored)/gi,
 ];
@@ -244,11 +244,13 @@ export function filterCompletedWork(items: string[]): string[] {
   // losing all signal (better to have imprecise signal than none)
   const candidates = longEnough.length > 0 ? longEnough : items;
 
-  // Step 2: containment deduplication — remove any entry that is a substring of another
+  // Step 2: containment deduplication — remove any entry that is a substring of another.
+  // Use index-based identity (j !== i) so identical duplicate strings are handled correctly.
   const result: string[] = [];
-  for (const candidate of candidates) {
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i];
     const isSubsumed = candidates.some(
-      (other) => other !== candidate && other.toLowerCase().includes(candidate.toLowerCase()),
+      (other, j) => j !== i && other.toLowerCase().includes(candidate.toLowerCase()),
     );
     if (!isSubsumed) {
       result.push(candidate);
