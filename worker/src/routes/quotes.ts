@@ -336,7 +336,7 @@ app.get('/manual-requests/:id', async (c) => {
  */
 async function fetchCatalog(db: D1Database, userId: string): Promise<ProductCatalogEntry[]> {
   const result = await db.prepare(
-    'SELECT id, name, unit_price, description, category, sort_order, keywords, source FROM product_catalog WHERE user_id = ? ORDER BY sort_order ASC, name ASC'
+    'SELECT id, name, unit_price, description, category, sort_order, keywords, scope, source FROM product_catalog WHERE user_id = ? ORDER BY sort_order ASC, name ASC'
   ).bind(userId).all();
 
   return (result.results as any[]).map((row) => ({
@@ -347,6 +347,7 @@ async function fetchCatalog(db: D1Database, userId: string): Promise<ProductCata
     category: (row.category as string) ?? undefined,
     sortOrder: Number(row.sort_order ?? 500),
     keywords: (row.keywords as string) ?? undefined,
+    scope: (row.scope as import('shared').Scope) ?? null,
     source: (row.source as 'jobber' | 'manual') ?? 'manual',
   }));
 }

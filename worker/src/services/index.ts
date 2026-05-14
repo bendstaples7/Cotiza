@@ -42,3 +42,6 @@ export type { AssessorPropertyRecord } from './cook-county-assessor.js';
 export { SqftResolutionService, resolvePropertyAddress } from './sqft-resolution-service.js';
 export type { ResolutionContext, ResolutionResult, SqftResolutionResult, ResolutionMetadata, AddressResolutionInput } from './sqft-resolution-service.js';
 export { ProductivityRatesService } from './productivity-rates-service.js';
+export { resolveSpaceAllocation, SPACE_ALLOCATIONS } from './space-allocation-service.js';
+export type { SpaceAllocationResult } from './space-allocation-service.js';
+export { SpaceExtractionService } from './space-extraction-service.js';

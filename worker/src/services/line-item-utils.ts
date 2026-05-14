@@ -3,6 +3,32 @@
  */
 
 import type { ProductCatalogEntry, AuditEntry } from 'shared';
+import { SPACE_ALLOCATIONS } from './space-allocation-service.js';
+
+/**
+ * Checks if a line item description starts with a known space label from the
+ * SPACE_ALLOCATIONS lookup table. Returns the matching label, or null if none.
+ *
+ * This is used by deduplicateLineItems to prevent collapsing space-split items
+ * (e.g., "Basement — Drywall" and "Master Bedroom — Drywall" are distinct).
+ */
+export function extractSpacePrefix(description: string): string | null {
+  if (!description) return null;
+  const lower = description.toLowerCase();
+  for (const entry of SPACE_ALLOCATIONS) {
+    const labelLower = entry.label.toLowerCase();
+    // Match if description starts with the label followed by a separator character
+    // (or end of string). This prevents "Bathroom" from matching "Bathroom Tile"
+    // when "Bathroom" is not a known space label prefix in that context.
+    if (lower.startsWith(labelLower)) {
+      const nextChar = lower[labelLower.length];
+      if (nextChar === undefined || /[\s\-—:,()\/]/.test(nextChar)) {
+        return entry.label;
+      }
+    }
+  }
+  return null;
+}
 
 /**
  * Merge duplicate line items that share the same product name (case-insensitive).
@@ -45,9 +71,11 @@ export function deduplicateLineItems<
       continue;
     }
 
-    // Key by product name only — items with different prices for the same
-    // product are duplicates (the rules engine price is authoritative).
-    const key = nameTrimmed;
+    // Key by product name + space prefix — items for the same product but
+    // different spaces (e.g. "Basement — Drywall" vs "Master Bedroom — Drywall")
+    // are distinct and must NOT be merged (REQ-2.4).
+    const spacePrefix = extractSpacePrefix(item.description ?? '');
+    const key = spacePrefix ? `${nameTrimmed}|${spacePrefix}` : nameTrimmed;
     const existing = seen.get(key);
 
     if (!existing) {

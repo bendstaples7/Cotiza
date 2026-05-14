@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { QuoteDraft, QuoteLineItem, LineItemRationale, ErrorResponse, RuleGroupWithRules, Rule, ProductCatalogEntry, ActionItem, QuantityPredictionMeta, QuantitySource, ResolutionConfidence, ResolutionTier } from 'shared';
+import type { QuoteDraft, QuoteLineItem, LineItemRationale, GenerationTrace, ErrorResponse, RuleGroupWithRules, Rule, ProductCatalogEntry, ActionItem, QuantityPredictionMeta, QuantitySource, ResolutionConfidence, ResolutionTier } from 'shared';
 import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber } from '../api';
 import type { JobberRequestDetail } from '../api';
 import SimilarQuotesPanel from './SimilarQuotesPanel';
@@ -40,6 +40,9 @@ export default function QuoteDraftPage() {
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
+  // Pending delete (undo) state
+  const [pendingDelete, setPendingDelete] = useState<{ item: QuoteLineItem; timerId: ReturnType<typeof setTimeout> } | null>(null);
+
   // Add line item state
   const [showAddRow, setShowAddRow] = useState(false);
   const [catalogSearch, setCatalogSearch] = useState('');
@@ -70,6 +73,9 @@ export default function QuoteDraftPage() {
   const [sqftOverrideInput, setSqftOverrideInput] = useState('');
   const [sqftOverrideSaving, setSqftOverrideSaving] = useState(false);
   const [sqftOverrideError, setSqftOverrideError] = useState<string | null>(null);
+
+  // Generation trace toggle state
+  const [showGenerationTrace, setShowGenerationTrace] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -359,18 +365,47 @@ export default function QuoteDraftPage() {
     if (e.key === 'Escape') { setEditingCell(null); }
   };
 
-  const deleteLineItem = async (itemId: string) => {
+  const deleteLineItem = (itemId: string) => {
     if (!draft || !id) return;
-    const updatedLineItems = draft.lineItems.filter((item) => item.id !== itemId);
-    setSaving(true);
-    try {
-      const updated = await updateDraft(id, { lineItems: updatedLineItems, unresolvedItems: draft.unresolvedItems });
-      setDraft(updated);
-    } catch {
-      await loadDraft();
-    } finally {
-      setSaving(false);
+    const itemToDelete = draft.lineItems.find((item) => item.id === itemId);
+    if (!itemToDelete) return;
+
+    // Cancel any existing pending delete first (commit it immediately)
+    if (pendingDelete) {
+      clearTimeout(pendingDelete.timerId);
+      const prevItem = pendingDelete.item;
+      const withoutPrev = draft.lineItems.filter((i) => i.id !== prevItem.id);
+      updateDraft(id, { lineItems: withoutPrev, unresolvedItems: draft.unresolvedItems }).catch(() => {});
     }
+
+    // Optimistically remove from view
+    setDraft({ ...draft, lineItems: draft.lineItems.filter((i) => i.id !== itemId) });
+
+    // Start 5-second undo window — on expiry, commit the delete to the API
+    const timerId = setTimeout(async () => {
+      setPendingDelete(null);
+      setSaving(true);
+      try {
+        const currentDraft = await fetchDraft(id);
+        const withoutItem = currentDraft.lineItems.filter((i) => i.id !== itemId);
+        const updated = await updateDraft(id, { lineItems: withoutItem, unresolvedItems: currentDraft.unresolvedItems });
+        setDraft(updated);
+      } catch {
+        await loadDraft();
+      } finally {
+        setSaving(false);
+      }
+    }, 5000);
+
+    setPendingDelete({ item: itemToDelete, timerId });
+  };
+
+  const handleUndoDelete = () => {
+    if (!pendingDelete || !draft) return;
+    clearTimeout(pendingDelete.timerId);
+    // Restore the item at the end of the list
+    setDraft({ ...draft, lineItems: [...draft.lineItems, pendingDelete.item] });
+    setPendingDelete(null);
   };
 
   // ── Add line item handlers ──
@@ -727,9 +762,42 @@ export default function QuoteDraftPage() {
         )}
       </div>
 
+      {/* Generation Trace section — only shown when trace data is available */}
+      {draft.generationTrace && (
+        <div style={sectionStyle}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: showGenerationTrace ? '0.75rem' : 0 }}>
+            <h2 style={{ ...sectionTitleStyle, margin: 0 }}>🔍 Generation Trace</h2>
+            <button
+              onClick={() => setShowGenerationTrace((v) => !v)}
+              style={infoIconBtnStyle}
+              aria-label={showGenerationTrace ? 'Hide generation trace' : 'Show generation trace'}
+              aria-expanded={showGenerationTrace}
+              title="View generation pipeline details"
+            >
+              {showGenerationTrace ? '▲' : '▼'}
+            </button>
+          </div>
+          {showGenerationTrace && (
+            <GenerationTracePanel trace={draft.generationTrace} />
+          )}
+        </div>
+      )}
+
       {/* Matched line items table */}
       <div style={sectionStyle}>
         <h2 style={sectionTitleStyle}>Matched Line Items</h2>
+
+        {/* Undo delete toast */}
+        {pendingDelete && (
+          <div style={undoToastStyle} role="status" aria-live="polite">
+            <span>
+              <strong>{pendingDelete.item.productName}</strong> removed.
+            </span>
+            <button onClick={handleUndoDelete} style={undoBtnStyle}>
+              Undo
+            </button>
+          </div>
+        )}
         {draft.lineItems.length === 0 ? (
           <p style={{ color: '#888', margin: '0.5rem 0' }}>No matched line items.</p>
         ) : (
@@ -1928,6 +1996,209 @@ function LineItemRationalePanel({
           ))}
         </div>
       )}
+
+      {/* ── Catalog scope ── */}
+      {r?.catalogScope && (
+        <div>
+          <p style={ruleGroupHeadingStyle}>Catalog Scope</p>
+          <span style={{
+            display: 'inline-block',
+            padding: '0.15rem 0.5rem',
+            borderRadius: 10,
+            fontSize: '0.75rem',
+            fontWeight: 600,
+            background: '#e8f5e9',
+            color: '#2e7d32',
+          }}>
+            scope: {r.catalogScope}
+          </span>
+        </div>
+      )}
+
+      {/* ── Space context ── */}
+      {r?.spaceContext && (
+        <div>
+          <p style={ruleGroupHeadingStyle}>Space Context</p>
+          <div style={ruleEntryStyle}>
+            <span style={ruleNameStyle}>{r.spaceContext.normalizedLabel}</span>
+            <span style={ruleDescStyle}>
+              {r.spaceContext.sqftUsed.toLocaleString()} sq ft
+              {' · '}
+              {r.spaceContext.sqftSource === 'explicit' ? 'explicitly stated' : r.spaceContext.sqftSource === 'estimated' ? 'estimated' : 'whole property'}
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// GenerationTracePanel — shown when the Generation Trace section is expanded
+// ---------------------------------------------------------------------------
+
+function GenerationTracePanel({ trace }: { trace: GenerationTrace }) {
+  const [showAllCatalogFiltered, setShowAllCatalogFiltered] = React.useState(false);
+  const [showAllRules, setShowAllRules] = React.useState(false);
+
+  const CATALOG_COLLAPSE_THRESHOLD = 3;
+  const RULES_COLLAPSE_THRESHOLD = 5;
+
+  const visibleCatalogFiltered = showAllCatalogFiltered
+    ? trace.catalogFilteredProducts
+    : trace.catalogFilteredProducts.slice(0, CATALOG_COLLAPSE_THRESHOLD);
+
+  const visibleRules = showAllRules
+    ? trace.rulesFired
+    : trace.rulesFired.slice(0, RULES_COLLAPSE_THRESHOLD);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', fontSize: '0.85rem' }}>
+
+      {/* Detected scopes */}
+      <div>
+        <p style={ruleGroupHeadingStyle}>Detected Scopes</p>
+        {trace.detectedScopes.length > 0 ? (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+            {trace.detectedScopes.map((scope) => (
+              <span key={scope} style={{
+                display: 'inline-block',
+                padding: '0.15rem 0.5rem',
+                borderRadius: 10,
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                background: '#e3f2fd',
+                color: '#1565c0',
+              }}>
+                {scope}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p style={noRulesTextStyle}>No scopes detected</p>
+        )}
+      </div>
+
+      {/* Catalog filtered */}
+      <div>
+        <p style={ruleGroupHeadingStyle}>
+          Catalog Pre-filter — {trace.catalogFilteredCount} product{trace.catalogFilteredCount !== 1 ? 's' : ''} excluded
+        </p>
+        {trace.catalogFilteredProducts.length > 0 ? (
+          <>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
+              {visibleCatalogFiltered.map((name) => (
+                <span key={name} style={{
+                  display: 'inline-block',
+                  padding: '0.1rem 0.4rem',
+                  borderRadius: 6,
+                  fontSize: '0.75rem',
+                  background: '#fce4ec',
+                  color: '#c62828',
+                }}>
+                  {name}
+                </span>
+              ))}
+            </div>
+            {trace.catalogFilteredProducts.length > CATALOG_COLLAPSE_THRESHOLD && (
+              <button
+                onClick={() => setShowAllCatalogFiltered((v) => !v)}
+                style={{ ...customItemLinkStyle, fontSize: '0.75rem', marginTop: '0.3rem', display: 'block' }}
+              >
+                {showAllCatalogFiltered
+                  ? 'Show less'
+                  : `+${trace.catalogFilteredProducts.length - CATALOG_COLLAPSE_THRESHOLD} more`}
+              </button>
+            )}
+          </>
+        ) : (
+          <p style={noRulesTextStyle}>No products excluded</p>
+        )}
+      </div>
+
+      {/* Space contexts */}
+      {trace.spaceContexts.length > 0 && (
+        <div>
+          <p style={ruleGroupHeadingStyle}>Space Contexts Extracted ({trace.spaceContexts.length})</p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+            {trace.spaceContexts.map((sc, i) => (
+              <div key={i} style={ruleEntryStyle}>
+                <span style={ruleNameStyle}>{sc.normalizedLabel}</span>
+                <span style={ruleDescStyle}>
+                  {sc.sqftIsExplicit
+                    ? `${sc.explicitSqft?.toLocaleString()} sq ft (explicit)`
+                    : sc.estimatedSqft != null
+                    ? `${sc.estimatedSqft.toLocaleString()} sq ft (estimated)`
+                    : 'no sqft'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Rules fired */}
+      <div>
+        <p style={ruleGroupHeadingStyle}>
+          Rules Fired — {trace.rulesFiredCount} rule{trace.rulesFiredCount !== 1 ? 's' : ''}
+        </p>
+        {trace.rulesFired.length > 0 ? (
+          <>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+              {visibleRules.map((name) => (
+                <span key={name} style={{ fontSize: '0.8rem', color: '#333', paddingLeft: '0.5rem', borderLeft: '2px solid #00a89d' }}>
+                  {name}
+                </span>
+              ))}
+            </div>
+            {trace.rulesFired.length > RULES_COLLAPSE_THRESHOLD && (
+              <button
+                onClick={() => setShowAllRules((v) => !v)}
+                style={{ ...customItemLinkStyle, fontSize: '0.75rem', marginTop: '0.3rem', display: 'block' }}
+              >
+                {showAllRules
+                  ? 'Show less'
+                  : `+${trace.rulesFired.length - RULES_COLLAPSE_THRESHOLD} more`}
+              </button>
+            )}
+          </>
+        ) : (
+          <p style={noRulesTextStyle}>No rules fired</p>
+        )}
+      </div>
+
+      {/* Scope mismatches */}
+      {trace.scopeMismatchCount > 0 && (
+        <div>
+          <p style={ruleGroupHeadingStyle}>
+            Scope Mismatches — {trace.scopeMismatchCount} item{trace.scopeMismatchCount !== 1 ? 's' : ''} moved to unresolved
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
+            {trace.scopeMismatchedProducts.map((name) => (
+              <span key={name} style={{
+                display: 'inline-block',
+                padding: '0.1rem 0.4rem',
+                borderRadius: 6,
+                fontSize: '0.75rem',
+                background: '#fff8e1',
+                color: '#e65100',
+              }}>
+                {name}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Fallback enrichment */}
+      {trace.fallbackEnrichmentCount > 0 && (
+        <div>
+          <p style={ruleGroupHeadingStyle}>Fallback Enrichment</p>
+          <p style={{ ...noRulesTextStyle, fontStyle: 'normal', color: '#555' }}>
+            {trace.fallbackEnrichmentCount} item{trace.fallbackEnrichmentCount !== 1 ? 's' : ''} enriched via fallback pass
+          </p>
+        </div>
+      )}
     </div>
   );
 }
@@ -2258,6 +2529,31 @@ const deleteItemBtnStyle: React.CSSProperties = {
   borderRadius: 4,
   lineHeight: 1,
   transition: 'color 0.15s',
+};
+
+const undoToastStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: '1rem',
+  padding: '0.6rem 1rem',
+  marginBottom: '0.75rem',
+  background: '#323232',
+  color: '#fff',
+  borderRadius: 8,
+  fontSize: '0.875rem',
+};
+
+const undoBtnStyle: React.CSSProperties = {
+  background: 'none',
+  border: '1px solid rgba(255,255,255,0.5)',
+  color: '#fff',
+  borderRadius: 5,
+  padding: '0.25rem 0.75rem',
+  cursor: 'pointer',
+  fontSize: '0.85rem',
+  fontWeight: 600,
+  whiteSpace: 'nowrap',
 };
 
 const savingIndicatorStyle: React.CSSProperties = {

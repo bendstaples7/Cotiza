@@ -5,7 +5,7 @@ import { validateFormula } from './formula-evaluator.js';
 import { resolvePreset } from './extraction-presets.js';
 
 /** Standard column list for rule SELECT queries */
-const RULE_COLUMNS = 'id, name, description, rule_group_id, priority_order, is_active, condition_json, action_json, trigger_mode, created_at, updated_at';
+const RULE_COLUMNS = 'id, name, description, rule_group_id, priority_order, is_active, condition_json, action_json, trigger_mode, scope_constraint, created_at, updated_at';
 
 // ---------------------------------------------------------------------------
 // Cross-validation helpers
@@ -161,6 +161,7 @@ export class RulesService {
           triggerMode: (row.trigger_mode as TriggerMode) ?? 'chained',
           condition: conditionRaw as RuleCondition,
           actions: actionsRaw as RuleAction[],
+          scopeConstraint: (row.scope_constraint as import('shared').Scope) ?? null,
         });
       } catch {
         console.warn(`Skipping rule ${row.id}: failed to parse condition/action JSON`);

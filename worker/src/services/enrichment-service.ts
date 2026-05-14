@@ -54,6 +54,9 @@ export class EnrichmentService {
           if (extracted) {
             const separator = enrichment.separator ?? '. ';
             const existing = lineItem?.description?.trim() ?? '';
+            if (existing.toLowerCase().includes(extracted.toLowerCase())) {
+              return; // already present, skip
+            }
             const newDesc = existing ? `${existing}${separator}${extracted}` : extracted;
             results.set(enrichment.lineItemId, newDesc);
           }
