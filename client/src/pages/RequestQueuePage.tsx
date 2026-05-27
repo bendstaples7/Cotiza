@@ -15,6 +15,14 @@ const DEATHCLOCK_COLORS: Record<string, string> = {
   red: '#ef4444',
 } as const;
 
+/** Convert #rrggbb hex to "r, g, b" string for CSS custom properties. */
+const hexToRgb = (hex: string): string => {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `${r}, ${g}, ${b}`;
+};
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -121,8 +129,21 @@ export default function RequestQueuePage() {
     );
   }
 
+  // Check if any card needs the pulsing glow animation
+  const anyShouldPulse = requests.some(
+    (r) => !r.deathclock.frozen && !r.deathclock.isComplete && ['yellow', 'orange', 'red'].includes(r.deathclock.color)
+  );
+
   return (
     <div style={containerStyle}>
+      {anyShouldPulse && (
+        <style>{`
+@keyframes dc-card-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--dc-card-rgb), 0.3); }
+  50% { box-shadow: 0 0 8px 2px rgba(var(--dc-card-rgb), 0.15); }
+}
+`}</style>
+      )}
       <h1 style={titleStyle}>Request Queue</h1>
 
       {/* Sort toggle */}
@@ -158,12 +179,15 @@ export default function RequestQueuePage() {
           {requests.map((req) => {
             const colorHex = DEATHCLOCK_COLORS[req.deathclock.color] ?? '#10b981';
             const liveAge = req.deathclock.ageSeconds + Math.floor((Date.now() - lastFetchedAtRef.current) / 1000);
+            const shouldPulse = !req.deathclock.frozen && !req.deathclock.isComplete &&
+              (req.deathclock.color === 'yellow' || req.deathclock.color === 'orange' || req.deathclock.color === 'red');
             return (
               <div
                 key={req.id}
                 style={{
                   ...cardStyle,
                   borderLeft: `4px solid ${colorHex}`,
+                  ...(shouldPulse ? { '--dc-card-rgb': hexToRgb(colorHex), animation: 'dc-card-glow 2s ease-in-out infinite' } as React.CSSProperties : {}),
                 }}
                 onClick={() => navigate('/quotes')}
                 role="button"

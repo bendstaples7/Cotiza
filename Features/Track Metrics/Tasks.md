@@ -14,11 +14,11 @@
 | Phase | Progress | Tasks |
 |-------|----------|-------|
 | 1: Backend Data Model + Core Logic | 13 / 13 (100%) | T1.1-T1.12 + QA-1.1 done |
-| 2: Frontend Deathclock Badge | 3 / 8 (38%) | T2.1-T2.3 done |
+| 2: Frontend Deathclock Badge | 4 / 8 (50%) | T2.1-T2.4 done |
 | 3: Detail View Enhancements | 0 / 4 (0%) | Not started |
 | 4: Dashboard Analytics | 0 / 3 (0%) | Not started |
 
-**Overall: 16 / 28 tasks complete (57%)**
+**Overall: 17 / 28 tasks complete (61%)**
 
 ### Activity Log
 - **2026-05-26** — T1.1 completed (DB migration: fields added to Quote/Request)
@@ -142,13 +142,13 @@
 **Description:** Add a sort toggle to the queue view with options: "Oldest First" (default for deathclock view), "Newest First", plus existing sort options. Implement via URL query param `?sort=age_asc` or `?sort=age_desc`.
 
 ### T2.4 --
-**Status:** ⬜ Waiting Implement 60s polling with local tick interpolation
+### T2.4 -- Implement 60s polling with local tick interpolation
+**Status:** ✅ Done
 **Size:** M
 **Dependencies:** T2.2
-**Description:** Poll the queue endpoint every 60 seconds when the queue page is visible. Use `setInterval` with visibility detection (pause when tab hidden). Between polls, increment a local counter so the badge label ticks forward live. On page focus, trigger an immediate fresh poll. Disable cache via `Cache-Control: no-cache`.
 
-### T2.5 --
-**Status:** ⬜ Waiting Add pulsing animation for yellow/orange/red thresholds
+### T2.5 -- Add pulsing animation for yellow/orange/red thresholds
+**Status:** ⬜ Waiting
 **Size:** S
 **Dependencies:** T2.1
 **Description:** Add a gentle CSS border/glow pulse animation that activates at yellow, orange, and red thresholds. No animation when `isComplete` or `frozen` is true. Ensure animation is subtle and does not degrade performance or accessibility.
