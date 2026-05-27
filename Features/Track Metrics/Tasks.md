@@ -16,9 +16,9 @@
 | 1: Backend Data Model + Core Logic | 13 / 13 (100%) | Phase 1 done |
 | 2: Frontend Deathclock Badge | 8 / 8 (100%) | Phase 2 done |
 | 3: Detail View + Dashboard | 6 / 6 (100%) | Phase 3 done |
-| 4: Polish + Edge Cases | 1 / 8 (13%) | T4.1 done |
+| 4: Polish + Edge Cases | 2 / 8 (25%) | T4.1 done, T4.2 in progress |
 
-**Overall: 28 / 35 tasks complete (80%)**
+**Overall: 29 / 35 tasks complete (83%)**
 
 ### Activity Log
 - **2026-05-26** — T1.1 completed (DB migration: fields added to Quote/Request)
@@ -46,7 +46,7 @@
 - **2026-05-27** — T3.4 completed (7d/30d trend chart with SVG stacked bar chart on dashboard)
 - **2026-05-27** — T3.5 completed (per-request historical time-to-send with send events listing)
 - **2026-05-27** — QA-3.1 completed (Phase 3 integration tests — 32 tests, all passing)
-- **2026-05-27** — T4.1 completed (99+ day cap — server-side clamp in computeDeathclock)
+- **2026-05-27** — T4.1 completed (99+ day cap — server-side clamp in computeDeathclock, committed to main)
 
 ---
 
@@ -219,14 +219,14 @@
 **Dependencies:** T2.1, T1.6
 **Description:** Ensure any request older than 90 days displays "99+ days" (not absurd values like "8,760h") and shows the darkest red tint. Server-side clamp: `LEAST(age_seconds, 90 * 86400)`. Frontend: if age_seconds >= 90*86400, show "99+ days" directly.
 
-### T4.2 --
-**Status:** ⬜ Waiting Frozen badge for completed requests
+### T4.2 -- Frozen badge for completed requests
+**Status:** ⬜ Waiting
 **Size:** S
 **Dependencies:** T2.1
 **Description:** When `isComplete` or `frozen` is true: deathclock badge is static, no pulsing animation, no color transitions. Color is frozen at the threshold reached at time of send. The badge shows the final elapsed time.
 
-### T4.3 --
-**Status:** ⬜ Waiting Accessibility pass
+### T4.3 -- Accessibility pass
+**Status:** ⬜ Waiting
 **Size:** S
 **Dependencies:** T2.1, T2.2, T3.1, T3.3
 **Description:** Add `aria-label` attributes on all deathclock badges (e.g., "Age: 8 hours - within SLA"). Ensure color is never the only indicator -- badge text always shows numeric time. Yellow/orange/red cards get a `title` attribute with urgency text. Run an automated accessibility check.
