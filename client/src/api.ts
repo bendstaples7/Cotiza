@@ -715,6 +715,21 @@ export async function fetchDeathclock(requestId: string): Promise<DeathclockStat
   return handleResponse(res);
 }
 
+/** Mark a manual request's quote as sent (for manual/offline sends). */
+export async function markRequestSent(
+  requestId: string,
+  sentAt?: string,
+): Promise<ManualRequest> {
+  const body: Record<string, string> = {};
+  if (sentAt) body.sentAt = sentAt;
+  const res = await fetch(API_BASE + '/api/quotes/requests/' + requestId + '/mark-sent', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  return handleResponseWithToast(res);
+}
+
 // ── Rules Engine ──
 
 export async function fetchRules(): Promise<RuleGroupWithRules[]> {

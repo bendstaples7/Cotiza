@@ -62,12 +62,14 @@ const mockFetchDraft = vi.fn<(...args: unknown[]) => Promise<QuoteDraft>>();
 const mockFetchDeathclock = vi.fn<(...args: unknown[]) => Promise<DeathclockState>>();
 const mockFetchDeathclockStats = vi.fn<(...args: unknown[]) => Promise<Record<string, number>>>();
 const mockFetchTrends = vi.fn<(...args: unknown[]) => Promise<Record<string, unknown>>>();
+const mockMarkRequestSent = vi.fn<(...args: unknown[]) => Promise<Record<string, unknown>>>();
 
 vi.mock('../../client/src/api', () => ({
   fetchDraft: mockFetchDraft,
   fetchDeathclock: mockFetchDeathclock,
   fetchDeathclockStats: mockFetchDeathclockStats,
   fetchTrends: mockFetchTrends,
+  markRequestSent: mockMarkRequestSent,
   fetchRules: vi.fn().mockResolvedValue([]),
   fetchJobberRequestDetail: vi.fn().mockRejectedValue(new Error('not found')),
   fetchCatalog: vi.fn().mockResolvedValue([]),
@@ -644,5 +646,84 @@ describe('DeathclockDashboardPage — Phase 3', () => {
     expect(screen.queryByText(/Send events:/)).toBeNull();
     // Back button should still work
     expect(screen.getByText(/← Back to New Quote/)).toBeInTheDocument();
+  });
+
+  // ── T4.4: Mark as sent UI ──
+
+  it('shows "Mark as sent" button when deathclock is active', async () => {
+    mockFetchDraft.mockResolvedValue(makeDraft({ manualRequestId: 'req-1' }));
+    mockFetchDeathclock.mockResolvedValue(makeDeathclock({ isComplete: false, frozen: false }));
+    renderDraftPage();
+    await waitFor(() => {
+      expect(screen.getByText('Quote Draft D-042')).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /Mark quote as sent/i })).toBeInTheDocument();
+  });
+
+  it('does not show "Mark as sent" button when deathclock is complete', async () => {
+    mockFetchDraft.mockResolvedValue(makeDraft({ manualRequestId: 'req-1' }));
+    mockFetchDeathclock.mockResolvedValue(makeDeathclock({ isComplete: true, frozen: true }));
+    renderDraftPage();
+    await waitFor(() => {
+      expect(screen.getByText('Quote Draft D-042')).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('button', { name: /Mark quote as sent/i })).toBeNull();
+  });
+
+  it('opens confirmation dialog on "Mark as sent" click', async () => {
+    mockFetchDraft.mockResolvedValue(makeDraft({ manualRequestId: 'req-1' }));
+    mockFetchDeathclock.mockResolvedValue(makeDeathclock({ isComplete: false, frozen: false }));
+    renderDraftPage();
+    await waitFor(() => {
+      expect(screen.getByText('Quote Draft D-042')).toBeInTheDocument();
+    });
+    // Click the mark-as-sent button
+    fireEvent.click(screen.getByRole('button', { name: /Mark quote as sent/i }));
+    // Dialog should appear
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByText('Mark quote as sent')).toBeInTheDocument();
+  });
+
+  it('calls markRequestSent on confirm and refreshes deathclock', async () => {
+    mockFetchDraft.mockResolvedValue(makeDraft({ manualRequestId: 'req-1' }));
+    const updatedDc = makeDeathclock({ isComplete: true, frozen: true });
+    mockFetchDeathclock
+      .mockResolvedValueOnce(makeDeathclock({ isComplete: false, frozen: false })) // initial load
+      .mockResolvedValueOnce(updatedDc); // after mark-as-sent
+    mockMarkRequestSent.mockResolvedValue({ id: 'req-1' });
+    renderDraftPage();
+    await waitFor(() => {
+      expect(screen.getByText('Quote Draft D-042')).toBeInTheDocument();
+    });
+    // Open dialog
+    fireEvent.click(screen.getByRole('button', { name: /Mark quote as sent/i }));
+    // Confirm
+    fireEvent.click(screen.getByRole('button', { name: /Confirm mark as sent/i }));
+    // Should call markRequestSent with the request id
+    await waitFor(() => {
+      expect(mockMarkRequestSent).toHaveBeenCalledWith('req-1', undefined);
+    });
+    // Deathclock should be refreshed
+    await waitFor(() => {
+      expect(mockFetchDeathclock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('shows error state when mark-as-sent fails', async () => {
+    mockFetchDraft.mockResolvedValue(makeDraft({ manualRequestId: 'req-1' }));
+    mockFetchDeathclock.mockResolvedValue(makeDeathclock({ isComplete: false, frozen: false }));
+    mockMarkRequestSent.mockRejectedValue(new Error('Server error'));
+    renderDraftPage();
+    await waitFor(() => {
+      expect(screen.getByText('Quote Draft D-042')).toBeInTheDocument();
+    });
+    // Open dialog
+    fireEvent.click(screen.getByRole('button', { name: /Mark quote as sent/i }));
+    // Confirm
+    fireEvent.click(screen.getByRole('button', { name: /Confirm mark as sent/i }));
+    // Error should appear
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('Server error');
+    });
   });
 });

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import type { QuoteDraft, QuoteLineItem, LineItemRationale, GenerationTrace, ErrorResponse, RuleGroupWithRules, Rule, ProductCatalogEntry, ActionItem, QuantityPredictionMeta, QuantitySource, ResolutionConfidence, ResolutionTier, DeathclockState } from 'shared';
-import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber, fetchDeathclock } from '../api';
+import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber, fetchDeathclock, markRequestSent } from '../api';
 import type { JobberRequestDetail } from '../api';
 import SimilarQuotesPanel from './SimilarQuotesPanel';
 import DeathclockBadge, { getLabel } from '../components/DeathclockBadge';
@@ -34,6 +34,10 @@ export default function QuoteDraftPage() {
   const [requestDetail, setRequestDetail] = useState<JobberRequestDetail | null>(null);
   const [deathclock, setDeathclock] = useState<DeathclockState | null>(null);
   const [deathclockLoading, setDeathclockLoading] = useState(false);
+  const [showMarkSentDialog, setShowMarkSentDialog] = useState(false);
+  const [markSentTimestamp, setMarkSentTimestamp] = useState('');
+  const [markSentError, setMarkSentError] = useState<string | null>(null);
+  const [markingSent, setMarkingSent] = useState(false);
   const [showSaveTemplate, setShowSaveTemplate] = useState(false);
   const [templateName, setTemplateName] = useState('');
   const [savingTemplate, setSavingTemplate] = useState(false);
@@ -225,6 +229,26 @@ export default function QuoteDraftPage() {
       setTemplateSaveError(true);
     } finally {
       setSavingTemplate(false);
+    }
+  };
+
+  /** Mark the request's quote as sent (manual/offline send). */
+  const handleMarkSent = async () => {
+    if (!draft.manualRequestId) return;
+    setMarkingSent(true);
+    setMarkSentError(null);
+    try {
+      const timestamp = markSentTimestamp.trim() || undefined;
+      await markRequestSent(draft.manualRequestId, timestamp);
+      // Refresh the deathclock to show the completed state
+      const dc = await fetchDeathclock(draft.manualRequestId);
+      setDeathclock(dc);
+      setShowMarkSentDialog(false);
+      setMarkSentTimestamp('');
+    } catch (err) {
+      setMarkSentError((err as ErrorResponse).message ?? 'Failed to mark as sent. Please try again.');
+    } finally {
+      setMarkingSent(false);
     }
   };
 
@@ -620,6 +644,113 @@ export default function QuoteDraftPage() {
             <span>Send lag: {getLabel(deathclock.sendLagSeconds)}</span>
           )}
         </div>
+
+        {/* Mark as sent button — only when deathclock is still active */}
+        {!deathclock.isComplete && !deathclock.frozen && draft.manualRequestId && (
+          <>
+          <div style={{
+            padding: '0.4rem 0 0.4rem 16px',
+            borderTop: '1px solid #e0e0e0',
+          }}>
+            <button
+              type="button"
+              onClick={() => setShowMarkSentDialog(true)}
+              style={{
+                background: '#f5f5f5',
+                border: '1px solid #d0d0d0',
+                borderRadius: 6,
+                padding: '0.35rem 0.8rem',
+                fontSize: '0.8rem',
+                color: '#333',
+                cursor: 'pointer',
+                fontWeight: 500,
+              }}
+              aria-label="Mark quote as sent"
+            >
+              ✓ Mark as sent
+            </button>
+          </div>
+
+          {/* Mark as sent confirmation dialog */}
+          {showMarkSentDialog && (
+            <div
+              style={{
+                position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                zIndex: 1000,
+              }}
+              onClick={() => setShowMarkSentDialog(false)}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Mark as sent confirmation"
+            >
+              <div
+                style={{
+                  background: '#fff', borderRadius: 8, padding: '1.5rem',
+                  maxWidth: 400, width: '90%', boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem', fontWeight: 600 }}>
+                  Mark quote as sent
+                </h3>
+                <p style={{ margin: '0 0 1rem', fontSize: '0.85rem', color: '#666' }}>
+                  This records the quote as sent and freezes the deathclock timer.
+                </p>
+
+                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.8rem', fontWeight: 500, color: '#333' }}>
+                  Optional timestamp (defaults to now)
+                </label>
+                <input
+                  type="datetime-local"
+                  value={markSentTimestamp}
+                  onChange={(e) => setMarkSentTimestamp(e.target.value)}
+                  style={{
+                    width: '100%', padding: '0.5rem', borderRadius: 6,
+                    border: '1px solid #d0d0d0', fontSize: '0.85rem',
+                    marginBottom: '0.75rem', boxSizing: 'border-box',
+                  }}
+                  aria-label="Optional send timestamp"
+                />
+
+                {markSentError && (
+                  <p role="alert" style={{ margin: '0 0 0.75rem', fontSize: '0.8rem', color: '#d32f2f' }}>
+                    {markSentError}
+                  </p>
+                )}
+
+                <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    onClick={() => { setShowMarkSentDialog(false); setMarkSentError(null); }}
+                    style={{
+                      background: '#fff', border: '1px solid #d0d0d0', borderRadius: 6,
+                      padding: '0.45rem 1rem', fontSize: '0.85rem', cursor: 'pointer',
+                    }}
+                    disabled={markingSent}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleMarkSent}
+                    disabled={markingSent}
+                    style={{
+                      background: markingSent ? '#bbb' : '#00a89d',
+                      color: '#fff', border: 'none', borderRadius: 6,
+                      padding: '0.45rem 1rem', fontSize: '0.85rem',
+                      fontWeight: 600, cursor: markingSent ? 'default' : 'pointer',
+                    }}
+                    aria-label="Confirm mark as sent"
+                  >
+                    {markingSent ? 'Saving…' : 'Confirm'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+          </>
+        )}
 
         {deathclock.isComplete && deathclock.sendEvents && deathclock.sendEvents.length > 0 && (() => {
           const events = deathclock.sendEvents!;
