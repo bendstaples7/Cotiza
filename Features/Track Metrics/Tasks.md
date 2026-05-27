@@ -14,11 +14,11 @@
 | Phase | Progress | Tasks |
 |-------|----------|-------|
 | 1: Backend Data Model + Core Logic | 13 / 13 (100%) | T1.1-T1.12 + QA-1.1 done |
-| 2: Frontend Deathclock Badge | 1 / 8 (13%) | T2.1 done |
+| 2: Frontend Deathclock Badge | 2 / 8 (25%) | T2.1, T2.2 done |
 | 3: Detail View Enhancements | 0 / 4 (0%) | Not started |
 | 4: Dashboard Analytics | 0 / 3 (0%) | Not started |
 
-**Overall: 14 / 28 tasks complete (50%)**
+**Overall: 15 / 28 tasks complete (54%)**
 
 ### Activity Log
 - **2026-05-26** — T1.1 completed (DB migration: fields added to Quote/Request)
@@ -35,6 +35,7 @@
 - **2026-05-27** — T1.12 completed (backfill migration + script for existing open requests)
 - **2026-05-27** — QA-1.1 completed (Phase 1 integration tests — 30 tests, all passing)
 - **2026-05-27** — T2.1 completed (DeathclockBadge React component)
+- **2026-05-27** — T2.2 completed (deathclock badge on request queue cards)
 
 ---
 
@@ -128,8 +129,8 @@
 **Dependencies:** None (frontend, can parallel with Phase 1)
 **Description:** Create reusable `DeathclockBadge` component. Props: `ageSeconds`, `color`, `isComplete`, `frozen`. Renders: time label (via getDeathclockLabel) and a small colored dot icon with aria-label. Color logic mirrors server-side helper. Frozen mode: static display, no animation.
 
-### T2.2 --
-**Status:** ⬜ Waiting Add deathclock badge to request queue card
+### T2.2 -- Add deathclock badge to request queue card
+**Status:** ✅ Done
 **Size:** S
 **Dependencies:** T2.1, T1.7
 **Description:** Render the `DeathclockBadge` in the top-right corner of each request card in the queue. Add a left-side color strip on the card border matching the deathclock color. Wire up to the deathclock data from the queue API response.

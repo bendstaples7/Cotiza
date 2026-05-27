@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import DeathclockBadge from '../components/DeathclockBadge';
 import type { ErrorResponse } from 'shared';
 import { fetchManualRequests } from '../api';
@@ -21,25 +21,37 @@ const DEATHCLOCK_COLORS: Record<string, string> = {
 
 export default function RequestQueuePage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   const [requests, setRequests] = useState<ManualRequestWithDeathclock[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Read sort from URL query param, default to 'age_asc'
+  const sortParam = searchParams.get('sort');
+  const currentSort: 'age_asc' | 'age_desc' =
+    sortParam === 'age_desc' ? 'age_desc' : 'age_asc';
+
   const loadRequests = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const result = await fetchManualRequests();
+      const result = await fetchManualRequests(currentSort);
       setRequests(result);
     } catch (err) {
       setError((err as ErrorResponse).message ?? 'Failed to load request queue.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentSort]);
 
   useEffect(() => { loadRequests(); }, [loadRequests]);
+
+  const handleSortChange = (sort: 'age_asc' | 'age_desc') => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('sort', sort);
+    navigate('?' + params.toString(), { replace: false });
+  };
 
   // ── Loading state ──
   if (loading) {
@@ -56,6 +68,26 @@ export default function RequestQueuePage() {
   return (
     <div style={containerStyle}>
       <h1 style={titleStyle}>Request Queue</h1>
+
+      {/* Sort toggle */}
+      <div style={sortToggleContainerStyle}>
+        <button
+          type="button"
+          style={currentSort === 'age_asc' ? sortToggleActiveStyle : sortToggleInactiveStyle}
+          onClick={() => handleSortChange('age_asc')}
+          aria-label="Sort oldest first"
+        >
+          Oldest First
+        </button>
+        <button
+          type="button"
+          style={currentSort === 'age_desc' ? sortToggleActiveStyle : sortToggleInactiveStyle}
+          onClick={() => handleSortChange('age_desc')}
+          aria-label="Sort newest first"
+        >
+          Newest First
+        </button>
+      </div>
 
       {error && (
         <div role="alert" style={alertStyle}>{error}</div>
@@ -119,6 +151,36 @@ export default function RequestQueuePage() {
 
 const containerStyle: React.CSSProperties = { maxWidth: 800, margin: '0 auto' };
 const titleStyle: React.CSSProperties = { margin: '0 0 1.25rem', fontSize: '1.5rem' };
+
+const sortToggleContainerStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  border: '1px solid #d0d0d0',
+  borderRadius: 6,
+  overflow: 'hidden',
+  marginBottom: '1rem',
+};
+
+const sortToggleBaseStyle: React.CSSProperties = {
+  border: 'none',
+  padding: '0.4rem 0.9rem',
+  fontSize: '0.85rem',
+  fontWeight: 500,
+  cursor: 'pointer',
+  transition: 'background 0.15s, color 0.15s',
+  outline: 'none',
+} as const;
+
+const sortToggleActiveStyle: React.CSSProperties = {
+  ...sortToggleBaseStyle,
+  background: '#00a89d',
+  color: '#fff',
+};
+
+const sortToggleInactiveStyle: React.CSSProperties = {
+  ...sortToggleBaseStyle,
+  background: '#fff',
+  color: '#555',
+};
 
 const loadingContainerStyle: React.CSSProperties = {
   display: 'flex',
