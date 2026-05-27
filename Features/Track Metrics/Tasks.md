@@ -14,11 +14,11 @@
 | Phase | Progress | Tasks |
 |-------|----------|-------|
 | 1: Backend Data Model + Core Logic | 13 / 13 (100%) | T1.1-T1.12 + QA-1.1 done |
-| 2: Frontend Deathclock Badge | 4 / 8 (50%) | T2.1-T2.4 done |
+| 2: Frontend Deathclock Badge | 5 / 8 (63%) | T2.1-T2.5 done |
 | 3: Detail View Enhancements | 0 / 4 (0%) | Not started |
 | 4: Dashboard Analytics | 0 / 3 (0%) | Not started |
 
-**Overall: 17 / 28 tasks complete (61%)**
+**Overall: 18 / 28 tasks complete (64%)**
 
 ### Activity Log
 - **2026-05-26** — T1.1 completed (DB migration: fields added to Quote/Request)
@@ -36,6 +36,9 @@
 - **2026-05-27** — QA-1.1 completed (Phase 1 integration tests — 30 tests, all passing)
 - **2026-05-27** — T2.1 completed (DeathclockBadge React component)
 - **2026-05-27** — T2.2 completed (deathclock badge on request queue cards)
+- **2026-05-27** — T2.3 completed (sort-by-age toggle on queue)
+- **2026-05-27** — T2.4 completed (60s polling with local tick interpolation)
+- **2026-05-27** — T2.5 completed (card border glow pulse for yellow/orange/red)
 
 ---
 
@@ -141,20 +144,20 @@
 **Dependencies:** T1.7, T2.2
 **Description:** Add a sort toggle to the queue view with options: "Oldest First" (default for deathclock view), "Newest First", plus existing sort options. Implement via URL query param `?sort=age_asc` or `?sort=age_desc`.
 
-### T2.4 --
 ### T2.4 -- Implement 60s polling with local tick interpolation
 **Status:** ✅ Done
 **Size:** M
 **Dependencies:** T2.2
+**Description:** Poll the queue endpoint every 60 seconds when the queue page is visible. Use `setInterval` with visibility detection (pause when tab hidden). Between polls, increment a local counter so the badge label ticks forward live. On page focus, trigger an immediate fresh poll. Disable cache via `Cache-Control: no-cache`.
 
 ### T2.5 -- Add pulsing animation for yellow/orange/red thresholds
-**Status:** ⬜ Waiting
+**Status:** ✅ Done
 **Size:** S
 **Dependencies:** T2.1
 **Description:** Add a gentle CSS border/glow pulse animation that activates at yellow, orange, and red thresholds. No animation when `isComplete` or `frozen` is true. Ensure animation is subtle and does not degrade performance or accessibility.
 
-### QA-2.1 --
-**Status:** ⬜ Waiting Phase 2 frontend tests
+### QA-2.1 -- Phase 2 frontend tests
+**Status:** ⬜ Waiting
 **Size:** M
 **Dependencies:** T2.1 through T2.5
 **Description:** Test: DeathclockBadge renders all threshold colors correctly, label formatting matches spec (Xh, X.Xd, Xd Xh, "99+ days"), sort-by-age reorders cards, polling triggers every 60s and updates display, local tick increments smoothly between polls, pulsing animation activates at correct thresholds, frozen mode disables animation, tab visibility pausing works, aria-labels are present.
