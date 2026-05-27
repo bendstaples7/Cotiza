@@ -52,6 +52,7 @@
 - **2026-05-27** — T4.4 completed (mark-as-sent UI — button, confirmation dialog with optional timestamp)
 - **2026-05-27** — T4.5 completed (multiple quotes per request display — sibling quotes list with send times, "N quotes" count, 4 tests)
 - **2026-05-27** — T4.6 completed (reopened/re-sent quote display — Original time, Last sent ago, lastQuoteSentAt backend field, 3 tests)
+- **2026-05-27** — QA-4.1 completed (acceptance tests — 39 tests covering all 10 ACs, full pipeline scenarios)
 
 ---
 
@@ -254,6 +255,7 @@
 **Description:** For quotes that were sent, reopened, and re-sent: `quote_sent_at` stays as the first send. `last_quote_sent_at` tracks the most recent send. Detail view shows: "Original time: Xh" and "Last sent: Yh ago". All events are listed in the QuoteSendEvent audit log.
 
 ### QA-4.1 -- End-to-end acceptance tests
+**Status:** ✅ Done
 **Size:** L
 **Dependencies:** All tasks
 **Description:** Full E2E tests covering all acceptance criteria from the requirements doc:
@@ -267,7 +269,7 @@
 - AC-08: Edge cases handled (99+ day cap, backfill, offline sends, multiple quotes, re-sends, timezone)
 - AC-09: Accessibility: color not the only indicator
 - AC-10: < 200ms added latency to existing actions
-- Run on staging environment with realistic data volume.
+- 39 tests in acceptance/deathclock-acceptance.test.ts
 
 ### QA-4.2 -- Performance benchmark tests
 **Size:** M
