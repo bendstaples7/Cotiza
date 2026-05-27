@@ -13,12 +13,12 @@
 
 | Phase | Progress | Tasks |
 |-------|----------|-------|
-| 1: Backend Data Model + Core Logic | 13 / 13 (100%) | T1.1-T1.12 + QA-1.1 done |
-| 2: Frontend Deathclock Badge | 5 / 8 (63%) | T2.1-T2.5 done |
-| 3: Detail View Enhancements | 0 / 4 (0%) | Not started |
-| 4: Dashboard Analytics | 0 / 3 (0%) | Not started |
+| 1: Backend Data Model + Core Logic | 13 / 13 (100%) | Phase 1 done |
+| 2: Frontend Deathclock Badge | 8 / 8 (100%) | Phase 2 done |
+| 3: Detail View + Dashboard | 1 / 6 (17%) | T3.1 done |
+| 4: Polish + Edge Cases | 0 / 8 (0%) | Not started |
 
-**Overall: 18 / 28 tasks complete (64%)**
+**Overall: 22 / 35 tasks complete (63%)**
 
 ### Activity Log
 - **2026-05-26** — T1.1 completed (DB migration: fields added to Quote/Request)
@@ -39,6 +39,8 @@
 - **2026-05-27** — T2.3 completed (sort-by-age toggle on queue)
 - **2026-05-27** — T2.4 completed (60s polling with local tick interpolation)
 - **2026-05-27** — T2.5 completed (card border glow pulse for yellow/orange/red)
+- **2026-05-27** — QA-2.1 completed (Phase 2 frontend tests — 30 tests, all passing)
+- **2026-05-27** — T3.1 completed (deathclock badge on request detail header)
 
 ---
 
@@ -157,17 +159,16 @@
 **Description:** Add a gentle CSS border/glow pulse animation that activates at yellow, orange, and red thresholds. No animation when `isComplete` or `frozen` is true. Ensure animation is subtle and does not degrade performance or accessibility.
 
 ### QA-2.1 -- Phase 2 frontend tests
-**Status:** ⬜ Waiting
+**Status:** ✅ Done
 **Size:** M
 **Dependencies:** T2.1 through T2.5
-**Description:** Test: DeathclockBadge renders all threshold colors correctly, label formatting matches spec (Xh, X.Xd, Xd Xh, "99+ days"), sort-by-age reorders cards, polling triggers every 60s and updates display, local tick increments smoothly between polls, pulsing animation activates at correct thresholds, frozen mode disables animation, tab visibility pausing works, aria-labels are present.
 
 ---
 
 ## Phase 3: Detail View + Dashboard (Day 5-6)
 
-### T3.1 --
-**Status:** ⬜ Waiting Add deathclock badge to request detail header
+### T3.1 -- Add deathclock badge to request detail header
+**Status:** ✅ Tested (awaiting PR review)
 **Size:** S
 **Dependencies:** T2.1, T1.8
 **Description:** Render a larger `DeathclockBadge` in the request detail view header. Pull live data from `GET /api/requests/:id/deathclock`. Show the badge prominently with the color strip on the left.

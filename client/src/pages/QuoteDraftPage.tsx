@@ -1,11 +1,19 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { QuoteDraft, QuoteLineItem, LineItemRationale, GenerationTrace, ErrorResponse, RuleGroupWithRules, Rule, ProductCatalogEntry, ActionItem, QuantityPredictionMeta, QuantitySource, ResolutionConfidence, ResolutionTier } from 'shared';
-import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber } from '../api';
+import type { QuoteDraft, QuoteLineItem, LineItemRationale, GenerationTrace, ErrorResponse, RuleGroupWithRules, Rule, ProductCatalogEntry, ActionItem, QuantityPredictionMeta, QuantitySource, ResolutionConfidence, ResolutionTier, DeathclockState } from 'shared';
+import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber, fetchDeathclock } from '../api';
 import type { JobberRequestDetail } from '../api';
 import SimilarQuotesPanel from './SimilarQuotesPanel';
+import DeathclockBadge from '../components/DeathclockBadge';
 
 const MANUALLY_ADDED_SENTINEL = 'Manually added';
+
+const DEATHCLOCK_COLOR_MAP: Record<string, string> = {
+  green: '#10b981',
+  yellow: '#eab308',
+  orange: '#f97316',
+  red: '#ef4444',
+};
 
 export default function QuoteDraftPage() {
   const { id } = useParams<{ id: string }>();
@@ -24,6 +32,8 @@ export default function QuoteDraftPage() {
   const [ruleCreatedMsg, setRuleCreatedMsg] = useState<string | null>(null);
   const [ruleCreationWarning, setRuleCreationWarning] = useState<string | null>(null);
   const [requestDetail, setRequestDetail] = useState<JobberRequestDetail | null>(null);
+  const [deathclock, setDeathclock] = useState<DeathclockState | null>(null);
+  const [deathclockLoading, setDeathclockLoading] = useState(false);
   const [showSaveTemplate, setShowSaveTemplate] = useState(false);
   const [templateName, setTemplateName] = useState('');
   const [savingTemplate, setSavingTemplate] = useState(false);
@@ -86,6 +96,11 @@ export default function QuoteDraftPage() {
       setError(null);
       const d = await fetchDraft(id);
       setDraft(d);
+      // After setting draft, fetch deathclock if manualRequestId exists
+      if (d.manualRequestId) {
+        setDeathclockLoading(true);
+        fetchDeathclock(d.manualRequestId).then(setDeathclock).catch(() => { /* non-critical */ }).finally(() => setDeathclockLoading(false));
+      }
     } catch (err) {
       setError((err as ErrorResponse).message ?? 'Failed to load quote draft.');
     } finally {
@@ -558,8 +573,24 @@ export default function QuoteDraftPage() {
       <div style={{ flex: 1, minWidth: 0 }}>
       <button onClick={() => navigate('/quotes')} style={backBtnStyle}>← Back to New Quote</button>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap',
+        marginBottom: '0.5rem',
+        paddingLeft: 12,
+        borderLeft: deathclock ? `4px solid ${DEATHCLOCK_COLOR_MAP[deathclock.color]}` : '4px solid transparent',
+      }}>
         <h1 style={{ ...titleStyle, margin: 0 }}>Quote Draft D-{String(draft.draftNumber).padStart(3, '0')}</h1>
+        {deathclock && (
+          <DeathclockBadge
+            ageSeconds={deathclock.ageSeconds}
+            color={deathclock.color}
+            isComplete={deathclock.isComplete}
+            frozen={deathclock.frozen}
+          />
+        )}
+        {deathclockLoading && !deathclock && (
+          <span style={{ fontSize: '0.8rem', color: '#999' }}>Loading deathclock...</span>
+        )}
         {draft.jobberQuoteNumber && (
           <span style={{ fontSize: '0.9rem', color: '#00a89d', fontWeight: 600 }}>
             (Jobber {draft.jobberQuoteNumber})
