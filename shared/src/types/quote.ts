@@ -622,4 +622,8 @@ export interface DeathclockState {
   isComplete: boolean;
   /** True when the badge should not animate / tick */
   frozen: boolean;
+  /** Seconds from request creation to first draft creation (optional). */
+  quoteCreationLagSeconds?: number;
+  /** Seconds from first draft creation to quote sent (optional, only present for completed quotes). */
+  sendLagSeconds?: number;
 }

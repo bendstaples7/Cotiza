@@ -385,20 +385,37 @@ app.get('/manual-requests/:id/deathclock', async (c) => {
   // Resolves the request; throws 404 via PlatformError if not found
   const manualRequest = await manualRequestService.getById(requestId, userId);
 
-  // Fetch quote_sent_at from the earliest sent quote draft linked to this request
+  // Fetch quote_sent_at and first_draft_created_at from quote drafts linked to this request
   const quoteRow = await db.prepare(
-    `SELECT MIN(quote_sent_at) AS quote_sent_at
+    `SELECT MIN(quote_sent_at) AS quote_sent_at,
+            MIN(first_draft_created_at) AS first_draft_created_at
        FROM quote_drafts
-      WHERE manual_request_id = ?
-        AND quote_sent_at IS NOT NULL`
-  ).bind(requestId).first<{ quote_sent_at: string | null }>();
+      WHERE manual_request_id = ?`
+  ).bind(requestId).first<{ quote_sent_at: string | null; first_draft_created_at: string | null }>();
 
   const quoteSentAt = quoteRow?.quote_sent_at ?? null;
+  const firstDraftCreatedAt = quoteRow?.first_draft_created_at ?? null;
 
   const { computeDeathclock } = await import('../services/deathclock-service.js');
   const deathclock = computeDeathclock(manualRequest.createdAt, quoteSentAt);
 
-  return c.json(deathclock);
+  // Compute creation lag and send lag from the raw timestamps
+  const requestCreatedAt = new Date(manualRequest.createdAt).getTime();
+  let quoteCreationLagSeconds: number | undefined;
+  let sendLagSeconds: number | undefined;
+
+  if (firstDraftCreatedAt) {
+    quoteCreationLagSeconds = Math.floor(
+      (new Date(firstDraftCreatedAt).getTime() - requestCreatedAt) / 1000,
+    );
+    if (quoteSentAt) {
+      sendLagSeconds = Math.floor(
+        (new Date(quoteSentAt).getTime() - new Date(firstDraftCreatedAt).getTime()) / 1000,
+      );
+    }
+  }
+
+  return c.json({ ...deathclock, quoteCreationLagSeconds, sendLagSeconds });
 });
 
 /**

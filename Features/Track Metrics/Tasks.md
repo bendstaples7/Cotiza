@@ -15,10 +15,10 @@
 |-------|----------|-------|
 | 1: Backend Data Model + Core Logic | 13 / 13 (100%) | Phase 1 done |
 | 2: Frontend Deathclock Badge | 8 / 8 (100%) | Phase 2 done |
-| 3: Detail View + Dashboard | 1 / 6 (17%) | T3.1 done |
+| 3: Detail View + Dashboard | 2 / 6 (33%) | T3.1-T3.2 done |
 | 4: Polish + Edge Cases | 0 / 8 (0%) | Not started |
 
-**Overall: 22 / 35 tasks complete (63%)**
+**Overall: 23 / 35 tasks complete (66%)**
 
 ### Activity Log
 - **2026-05-26** — T1.1 completed (DB migration: fields added to Quote/Request)
@@ -41,6 +41,7 @@
 - **2026-05-27** — T2.5 completed (card border glow pulse for yellow/orange/red)
 - **2026-05-27** — QA-2.1 completed (Phase 2 frontend tests — 30 tests, all passing)
 - **2026-05-27** — T3.1 completed (deathclock badge on request detail header)
+- **2026-05-27** — T3.2 completed (creation lag and send lag breakdown in detail view)
 
 ---
 
@@ -173,8 +174,8 @@
 **Dependencies:** T2.1, T1.8
 **Description:** Render a larger `DeathclockBadge` in the request detail view header. Pull live data from `GET /api/requests/:id/deathclock`. Show the badge prominently with the color strip on the left.
 
-### T3.2 --
-**Status:** ⬜ Waiting Add creation lag and send lag breakdown in detail view
+### T3.2 -- Add creation lag and send lag breakdown in detail view
+**Status:** ✅ Tested (awaiting PR review)
 **Size:** S
 **Dependencies:** T3.1
 **Description:** Below the main deathclock badge in the detail view, add a breakdown section showing: "Request age", "Quote creation lag", and "Send lag" with their respective time labels. For completed quotes, also show "Original time" and "Last sent" for re-sends.

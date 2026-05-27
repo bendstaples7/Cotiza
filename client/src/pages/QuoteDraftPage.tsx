@@ -4,7 +4,7 @@ import type { QuoteDraft, QuoteLineItem, LineItemRationale, GenerationTrace, Err
 import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber, fetchDeathclock } from '../api';
 import type { JobberRequestDetail } from '../api';
 import SimilarQuotesPanel from './SimilarQuotesPanel';
-import DeathclockBadge from '../components/DeathclockBadge';
+import DeathclockBadge, { getLabel } from '../components/DeathclockBadge';
 
 const MANUALLY_ADDED_SENTINEL = 'Manually added';
 
@@ -603,6 +603,24 @@ export default function QuoteDraftPage() {
           📋 Save as Template
         </button>
       </div>
+
+      {deathclock && (
+        <div style={{
+          display: 'flex', gap: '1rem', flexWrap: 'wrap',
+          fontSize: '0.8rem', color: '#666',
+          padding: '0.4rem 0 0.4rem 16px',
+          borderTop: '1px solid #e0e0e0',
+          marginBottom: '0.5rem',
+        }}>
+          <span>Request age: {deathclock.ageLabel}</span>
+          {deathclock.quoteCreationLagSeconds !== undefined && (
+            <span>Quote creation lag: {getLabel(deathclock.quoteCreationLagSeconds)}</span>
+          )}
+          {deathclock.sendLagSeconds !== undefined && deathclock.isComplete && (
+            <span>Send lag: {getLabel(deathclock.sendLagSeconds)}</span>
+          )}
+        </div>
+      )}
 
       {templateSavedMsg && (
         <div style={{ padding: '0.5rem 0.75rem', background: templateSaveError ? '#fdecea' : '#e8f5e9', borderRadius: 6, marginBottom: '0.75rem', fontSize: '0.85rem' }} role={templateSaveError ? 'alert' : 'status'} aria-live="polite" aria-atomic="true">
