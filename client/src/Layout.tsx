@@ -22,6 +22,7 @@ const socialNavItems = [
 
 const quotesNavItems = [
   { to: '/quotes/queue', label: 'Request Queue' },
+  { to: '/quotes/deathclock-dashboard', label: 'Deathclock Dashboard' },
   { to: '/quotes', label: 'New Quote' },
   { to: '/quotes/drafts', label: 'Saved Drafts' },
   { to: '/quotes/rules', label: 'Rules & Product Ordering' },

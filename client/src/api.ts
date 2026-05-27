@@ -875,3 +875,20 @@ export async function updateProductivityRate(
   });
   return handleResponseWithToast(res);
 }
+
+// ── Deathclock Dashboard ──
+
+export interface DeathclockBucketCounts {
+  green: number;
+  yellow: number;
+  orange: number;
+  red: number;
+  totalActive: number;
+}
+
+export async function fetchDeathclockStats(): Promise<DeathclockBucketCounts> {
+  const res = await fetch(API_BASE + '/api/dashboard/deathclock-stats', {
+    headers: { ...authHeaders() },
+  });
+  return handleResponse(res);
+}
