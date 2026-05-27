@@ -605,12 +605,12 @@ export default function QuoteDraftPage() {
       </div>
 
       {deathclock && (
+        <div style={{ marginBottom: '0.5rem' }}>
         <div style={{
           display: 'flex', gap: '1rem', flexWrap: 'wrap',
           fontSize: '0.8rem', color: '#666',
           padding: '0.4rem 0 0.4rem 16px',
           borderTop: '1px solid #e0e0e0',
-          marginBottom: '0.5rem',
         }}>
           <span>Request age: {deathclock.ageLabel}</span>
           {deathclock.quoteCreationLagSeconds !== undefined && (
@@ -619,6 +619,29 @@ export default function QuoteDraftPage() {
           {deathclock.sendLagSeconds !== undefined && deathclock.isComplete && (
             <span>Send lag: {getLabel(deathclock.sendLagSeconds)}</span>
           )}
+        </div>
+
+        {deathclock.isComplete && deathclock.sendEvents && deathclock.sendEvents.length > 0 && (() => {
+          const events = deathclock.sendEvents!;
+          return (
+          <div style={{
+            display: 'flex', gap: '1rem', flexWrap: 'wrap',
+            fontSize: '0.8rem', color: '#666',
+            padding: '0.4rem 0 0.4rem 16px',
+            borderTop: '1px solid #e0e0e0',
+          }}>
+            <span style={{ fontWeight: 600, color: '#333' }}>Send events:</span>
+            {events.map((ev, idx) => (
+              <span key={ev.id}>
+                {idx === 0 ? 'Original' : idx === events.length - 1 ? 'Last sent' : `Resend #${idx}`}: {getLabel(ev.elapsedSecondsFromRequest)}
+                <span style={{ marginLeft: '0.25rem', opacity: 0.6 }}>
+                  ({new Date(ev.sentAt).toLocaleString()})
+                </span>
+              </span>
+            ))}
+          </div>
+          );
+        })()}
         </div>
       )}
 

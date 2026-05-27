@@ -626,4 +626,8 @@ export interface DeathclockState {
   quoteCreationLagSeconds?: number;
   /** Seconds from first draft creation to quote sent (optional, only present for completed quotes). */
   sendLagSeconds?: number;
+  /** Frozen request-to-quote seconds (same as ageSeconds when isComplete). */
+  requestToQuoteSeconds?: number;
+  /** Quote send events for re-send tracking. */
+  sendEvents?: QuoteSendEvent[];
 }

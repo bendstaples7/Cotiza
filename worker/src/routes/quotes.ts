@@ -385,16 +385,18 @@ app.get('/manual-requests/:id/deathclock', async (c) => {
   // Resolves the request; throws 404 via PlatformError if not found
   const manualRequest = await manualRequestService.getById(requestId, userId);
 
-  // Fetch quote_sent_at and first_draft_created_at from quote drafts linked to this request
+  // Fetch quote_sent_at, first_draft_created_at, and request_to_quote_seconds from quote drafts
   const quoteRow = await db.prepare(
     `SELECT MIN(quote_sent_at) AS quote_sent_at,
-            MIN(first_draft_created_at) AS first_draft_created_at
+            MIN(first_draft_created_at) AS first_draft_created_at,
+            MIN(request_to_quote_seconds) AS request_to_quote_seconds
        FROM quote_drafts
       WHERE manual_request_id = ?`
-  ).bind(requestId).first<{ quote_sent_at: string | null; first_draft_created_at: string | null }>();
+  ).bind(requestId).first<{ quote_sent_at: string | null; first_draft_created_at: string | null; request_to_quote_seconds: number | null }>();
 
   const quoteSentAt = quoteRow?.quote_sent_at ?? null;
   const firstDraftCreatedAt = quoteRow?.first_draft_created_at ?? null;
+  const requestToQuoteSeconds = quoteRow?.request_to_quote_seconds ?? undefined;
 
   const { computeDeathclock } = await import('../services/deathclock-service.js');
   const deathclock = computeDeathclock(manualRequest.createdAt, quoteSentAt);
@@ -415,7 +417,24 @@ app.get('/manual-requests/:id/deathclock', async (c) => {
     }
   }
 
-  return c.json({ ...deathclock, quoteCreationLagSeconds, sendLagSeconds });
+  // Fetch QuoteSendEvents for this request
+  const sendEventRows = await db.prepare(
+    `SELECT id, quote_id, request_id, sent_at, elapsed_seconds_from_request, send_type
+       FROM quote_send_events
+      WHERE request_id = ?
+      ORDER BY sent_at ASC`
+  ).bind(requestId).all<{ id: number; quote_id: string; request_id: string; sent_at: string; elapsed_seconds_from_request: number; send_type: string }>();
+
+  const sendEvents = sendEventRows.results?.map((row) => ({
+    id: row.id,
+    quoteId: row.quote_id,
+    requestId: row.request_id,
+    sentAt: row.sent_at,
+    elapsedSecondsFromRequest: row.elapsed_seconds_from_request,
+    sendType: row.send_type as 'first' | 'resend',
+  })) ?? [];
+
+  return c.json({ ...deathclock, quoteCreationLagSeconds, sendLagSeconds, requestToQuoteSeconds, sendEvents });
 });
 
 /**
