@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import DeathclockBadge from '../components/DeathclockBadge';
 import type { ErrorResponse } from 'shared';
@@ -27,6 +27,16 @@ export default function RequestQueuePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Tick counter to trigger re-renders every second for live deathclock age
+  const [tick, setTick] = useState(0);
+  const lastFetchedAtRef = useRef(0);
+
+  // 1-second tick — drives local age interpolation between polls
+  useEffect(() => {
+    const interval = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   // Read sort from URL query param, default to 'age_asc'
   const sortParam = searchParams.get('sort');
   const currentSort: 'age_asc' | 'age_desc' =
@@ -38,6 +48,7 @@ export default function RequestQueuePage() {
       setError(null);
       const result = await fetchManualRequests(currentSort);
       setRequests(result);
+      lastFetchedAtRef.current = Date.now();
     } catch (err) {
       setError((err as ErrorResponse).message ?? 'Failed to load request queue.');
     } finally {
@@ -46,6 +57,51 @@ export default function RequestQueuePage() {
   }, [currentSort]);
 
   useEffect(() => { loadRequests(); }, [loadRequests]);
+
+  // 60-second polling with visibility detection and immediate poll on focus
+  useEffect(() => {
+    const POLL_INTERVAL_MS = 60_000;
+
+    let pollInterval: ReturnType<typeof setInterval> | undefined;
+
+    function startPolling() {
+      stopPolling();
+      pollInterval = setInterval(loadRequests, POLL_INTERVAL_MS);
+    }
+
+    function stopPolling() {
+      if (pollInterval !== undefined) {
+        clearInterval(pollInterval);
+        pollInterval = undefined;
+      }
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === 'visible') {
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    }
+
+    function handleWindowFocus() {
+      loadRequests();
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleWindowFocus);
+
+    // Start polling only if the page is visible on mount
+    if (document.visibilityState === 'visible') {
+      startPolling();
+    }
+
+    return () => {
+      stopPolling();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleWindowFocus);
+    };
+  }, [loadRequests]);
 
   const handleSortChange = (sort: 'age_asc' | 'age_desc') => {
     const params = new URLSearchParams(searchParams.toString());
@@ -101,6 +157,7 @@ export default function RequestQueuePage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
           {requests.map((req) => {
             const colorHex = DEATHCLOCK_COLORS[req.deathclock.color] ?? '#10b981';
+            const liveAge = req.deathclock.ageSeconds + Math.floor((Date.now() - lastFetchedAtRef.current) / 1000);
             return (
               <div
                 key={req.id}
@@ -120,7 +177,7 @@ export default function RequestQueuePage() {
                       {req.customerName}
                     </span>
                     <DeathclockBadge
-                      ageSeconds={req.deathclock.ageSeconds}
+                      ageSeconds={liveAge}
                       color={req.deathclock.color}
                       isComplete={req.deathclock.isComplete}
                       frozen={req.deathclock.frozen}

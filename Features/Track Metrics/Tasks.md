@@ -14,11 +14,11 @@
 | Phase | Progress | Tasks |
 |-------|----------|-------|
 | 1: Backend Data Model + Core Logic | 13 / 13 (100%) | T1.1-T1.12 + QA-1.1 done |
-| 2: Frontend Deathclock Badge | 2 / 8 (25%) | T2.1, T2.2 done |
+| 2: Frontend Deathclock Badge | 3 / 8 (38%) | T2.1-T2.3 done |
 | 3: Detail View Enhancements | 0 / 4 (0%) | Not started |
 | 4: Dashboard Analytics | 0 / 3 (0%) | Not started |
 
-**Overall: 15 / 28 tasks complete (54%)**
+**Overall: 16 / 28 tasks complete (57%)**
 
 ### Activity Log
 - **2026-05-26** — T1.1 completed (DB migration: fields added to Quote/Request)
@@ -135,8 +135,8 @@
 **Dependencies:** T2.1, T1.7
 **Description:** Render the `DeathclockBadge` in the top-right corner of each request card in the queue. Add a left-side color strip on the card border matching the deathclock color. Wire up to the deathclock data from the queue API response.
 
-### T2.3 --
-**Status:** ⬜ Waiting Implement sort-by-age toggle on queue
+### T2.3 -- Implement sort-by-age toggle on queue
+**Status:** ✅ Done
 **Size:** S
 **Dependencies:** T1.7, T2.2
 **Description:** Add a sort toggle to the queue view with options: "Oldest First" (default for deathclock view), "Newest First", plus existing sort options. Implement via URL query param `?sort=age_asc` or `?sort=age_desc`.
