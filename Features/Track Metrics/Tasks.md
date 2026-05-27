@@ -15,10 +15,10 @@
 |-------|----------|-------|
 | 1: Backend Data Model + Core Logic | 13 / 13 (100%) | Phase 1 done |
 | 2: Frontend Deathclock Badge | 8 / 8 (100%) | Phase 2 done |
-| 3: Detail View + Dashboard | 5 / 6 (83%) | T3.1-T3.5 done |
+| 3: Detail View + Dashboard | 6 / 6 (100%) | Phase 3 done |
 | 4: Polish + Edge Cases | 0 / 8 (0%) | Not started |
 
-**Overall: 26 / 35 tasks complete (74%)**
+**Overall: 27 / 35 tasks complete (77%)**
 
 ### Activity Log
 - **2026-05-26** — T1.1 completed (DB migration: fields added to Quote/Request)
@@ -45,6 +45,7 @@
 - **2026-05-27** — T3.3 completed (team dashboard aggregate view with bucket bar chart)
 - **2026-05-27** — T3.4 completed (7d/30d trend chart with SVG stacked bar chart on dashboard)
 - **2026-05-27** — T3.5 completed (per-request historical time-to-send with send events listing)
+- **2026-05-27** — QA-3.1 completed (Phase 3 integration tests — 32 tests, all passing)
 
 ---
 
@@ -202,6 +203,7 @@
 **Description:** In the completed quote detail view, display the stored `request_to_quote_seconds` as a human-readable time label. Show the frozen color badge. For re-sends, list all `QuoteSendEvent` records with timestamps and types.
 
 ### QA-3.1 -- Phase 3 integration and UI tests
+**Status:** ✅ Tested (awaiting PR review)
 **Size:** M
 **Dependencies:** T3.1 through T3.5
 **Description:** Test: detail view badge matches queue badge for same request, breakdown labels are correct, dashboard bucket counts match live queue data, trend chart renders historical data correctly, completed quote detail shows frozen badge with final time, re-send events are listed, dashboard auto-refresh works.
