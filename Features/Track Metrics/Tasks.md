@@ -16,9 +16,9 @@
 | 1: Backend Data Model + Core Logic | 13 / 13 (100%) | Phase 1 done |
 | 2: Frontend Deathclock Badge | 8 / 8 (100%) | Phase 2 done |
 | 3: Detail View + Dashboard | 6 / 6 (100%) | Phase 3 done |
-| 4: Polish + Edge Cases | 2 / 8 (25%) | T4.1 done, T4.2 in progress |
+| 4: Polish + Edge Cases | 3 / 8 (38%) | T4.1-T4.2 done |
 
-**Overall: 29 / 35 tasks complete (83%)**
+**Overall: 30 / 35 tasks complete (86%)**
 
 ### Activity Log
 - **2026-05-26** — T1.1 completed (DB migration: fields added to Quote/Request)
@@ -47,6 +47,7 @@
 - **2026-05-27** — T3.5 completed (per-request historical time-to-send with send events listing)
 - **2026-05-27** — QA-3.1 completed (Phase 3 integration tests — 32 tests, all passing)
 - **2026-05-27** — T4.1 completed (99+ day cap — server-side clamp in computeDeathclock, committed to main)
+- **2026-05-27** — T4.2 completed (frozen badge — already covered by existing DeathclockBadge frozen/isComplete logic)
 
 ---
 
@@ -220,7 +221,7 @@
 **Description:** Ensure any request older than 90 days displays "99+ days" (not absurd values like "8,760h") and shows the darkest red tint. Server-side clamp: `LEAST(age_seconds, 90 * 86400)`. Frontend: if age_seconds >= 90*86400, show "99+ days" directly.
 
 ### T4.2 -- Frozen badge for completed requests
-**Status:** ⬜ Waiting
+**Status:** ✅ Implemented (already covered by T2.1 tests)
 **Size:** S
 **Dependencies:** T2.1
 **Description:** When `isComplete` or `frozen` is true: deathclock badge is static, no pulsing animation, no color transitions. Color is frozen at the threshold reached at time of send. The badge shows the final elapsed time.
