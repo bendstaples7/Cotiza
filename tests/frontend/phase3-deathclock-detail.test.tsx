@@ -199,11 +199,11 @@ describe('QuoteDraftPage — Phase 3 deathclock features', () => {
     renderDraftPage();
 
     await waitFor(() => {
-      expect(screen.getByRole('status', { name: /Age:/ })).toBeInTheDocument();
+      expect(screen.getByRole('status', { name: /Request age:/ })).toBeInTheDocument();
     });
 
     // Badge should show the deathclock age label
-    const badge = screen.getByRole('status', { name: /Age:/ });
+    const badge = screen.getByRole('status', { name: /Request age:/ });
     expect(badge).toHaveTextContent('1.0d');
   });
 
@@ -212,7 +212,7 @@ describe('QuoteDraftPage — Phase 3 deathclock features', () => {
     const { container } = renderDraftPage();
 
     await waitFor(() => {
-      expect(screen.getByRole('status', { name: /Age:/ })).toBeInTheDocument();
+      expect(screen.getByRole('status', { name: /Request age:/ })).toBeInTheDocument();
     });
 
     // The header div has borderLeft set inline — find the h1 "Quote Draft D-042"
@@ -226,11 +226,11 @@ describe('QuoteDraftPage — Phase 3 deathclock features', () => {
     renderDraftPage();
 
     await waitFor(() => {
-      expect(screen.getByRole('status', { name: /Age:/ })).toBeInTheDocument();
+      expect(screen.getByRole('status', { name: /Request age:/ })).toBeInTheDocument();
     });
 
     // Non-compact badge has padding '2px 10px'
-    const badge = screen.getByRole('status', { name: /Age:/ });
+    const badge = screen.getByRole('status', { name: /Request age:/ });
     expect(badge.getAttribute('style')).toContain('2px 10px');
   });
 
@@ -253,8 +253,8 @@ describe('QuoteDraftPage — Phase 3 deathclock features', () => {
       expect(screen.getByText('Quote Draft D-042')).toBeInTheDocument();
     });
 
-    // No badge should be rendered (the sqft <p> has role=status but not with Age: label)
-    expect(screen.queryByRole('status', { name: /Age:/ })).toBeNull();
+    // No badge should be rendered (the sqft <p> has role=status but not with Request age: label)
+    expect(screen.queryByRole('status', { name: /Request age:/ })).toBeNull();
     // No deathclock loading text
     expect(screen.queryByText('Loading deathclock...')).toBeNull();
   });
@@ -270,7 +270,7 @@ describe('QuoteDraftPage — Phase 3 deathclock features', () => {
     });
 
     // No badge rendered (since deathclock is null after error)
-    expect(screen.queryByRole('status', { name: /Age:/ })).toBeNull();
+    expect(screen.queryByRole('status', { name: /Request age:/ })).toBeNull();
   });
 
   // ── T3.2: Lag breakdown section ──
@@ -639,7 +639,7 @@ describe('DeathclockDashboardPage — Phase 3', () => {
     });
 
     // Page should be fully functional without deathclock
-    expect(screen.queryByRole('status', { name: /Age:/ })).toBeNull();
+    expect(screen.queryByRole('status', { name: /Request age:/ })).toBeNull();
     expect(screen.queryByText(/Request age:/)).toBeNull();
     expect(screen.queryByText(/Send events:/)).toBeNull();
     // Back button should still work

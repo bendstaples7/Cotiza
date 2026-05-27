@@ -38,6 +38,18 @@ const SECONDS_IN_90_DAYS = 90 * SECONDS_IN_DAY;
 
 const PULSE_DURATION = '2s';
 
+/** Urgency text for screen readers — color is never the only indicator. */
+export function getUrgencyText(color: string, isComplete: boolean, frozen: boolean): string {
+  if (isComplete || frozen) return 'completed — no longer tracking';
+  switch (color) {
+    case 'green':  return 'within SLA';
+    case 'yellow': return 'needs attention — approaching SLA limit';
+    case 'orange': return 'approaching deadline — overdue soon';
+    case 'red':    return 'over SLA deadline';
+    default:       return 'unknown';
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Client-side label formatter (fallback, mirrors server logic)
 // ---------------------------------------------------------------------------
@@ -156,7 +168,11 @@ export default function DeathclockBadge({
   // Use server-provided ageLabel if passed via ageSeconds in a real flow;
   // for this component, we compute it client-side
   const label = getLabel(ageSeconds);
-  const ariaLabel = `Age: ${label}, ${color}`;
+  const urgency = getUrgencyText(color, isComplete, frozen);
+  const ariaLabel = `Request age: ${label} — ${urgency}`;
+  const titleText = isComplete || frozen
+    ? `Request age: ${label} (frozen)`
+    : `Request age: ${label} — ${urgency}`;
 
   return (
     <>
@@ -167,7 +183,7 @@ export default function DeathclockBadge({
         style={containerStyle}
         role="status"
         aria-label={ariaLabel}
-        title={ariaLabel}
+        title={titleText}
       >
         <span
           style={dotStyle}

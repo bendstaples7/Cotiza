@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import DeathclockBadge, { getLabel } from '../../client/src/components/DeathclockBadge';
+import DeathclockBadge, { getLabel, getUrgencyText } from '../../client/src/components/DeathclockBadge';
 import RequestQueuePage from '../../client/src/pages/RequestQueuePage';
 import type { ManualRequestWithDeathclock } from '../../client/src/api';
 
@@ -131,16 +131,48 @@ describe('DeathclockBadge', () => {
       expect(screen.getByRole('status')).toBeInTheDocument();
     });
 
-    it('has aria-label matching age and color', () => {
+    it('has aria-label matching age and urgency text', () => {
       renderBadge({ color: 'orange', ageSeconds: 86400 });
       const badge = screen.getByRole('status');
-      expect(badge).toHaveAttribute('aria-label', 'Age: 1.0d, orange');
+      expect(badge).toHaveAttribute('aria-label', 'Request age: 1.0d — approaching deadline — overdue soon');
     });
 
-    it('has a title attribute matching aria-label', () => {
+    it('has a title attribute with urgency text', () => {
       renderBadge({ color: 'green', ageSeconds: 7200 });
       const badge = screen.getByRole('status');
-      expect(badge).toHaveAttribute('title', 'Age: 2h, green');
+      expect(badge).toHaveAttribute('title', 'Request age: 2h — within SLA');
+    });
+
+    it('has title showing frozen status when complete', () => {
+      renderBadge({ color: 'red', ageSeconds: 7200, isComplete: true });
+      const badge = screen.getByRole('status');
+      expect(badge).toHaveAttribute('title', 'Request age: 2h (frozen)');
+    });
+  });
+
+  describe('getUrgencyText', () => {
+    it('returns within SLA for green', () => {
+      expect(getUrgencyText('green', false, false)).toBe('within SLA');
+    });
+
+    it('returns approaching SLA limit for yellow', () => {
+      expect(getUrgencyText('yellow', false, false)).toBe('needs attention — approaching SLA limit');
+    });
+
+    it('returns overdue soon for orange', () => {
+      expect(getUrgencyText('orange', false, false)).toBe('approaching deadline — overdue soon');
+    });
+
+    it('returns over SLA deadline for red', () => {
+      expect(getUrgencyText('red', false, false)).toBe('over SLA deadline');
+    });
+
+    it('returns completed for frozen', () => {
+      expect(getUrgencyText('red', true, false)).toBe('completed — no longer tracking');
+    });
+
+    it('returns completed when isComplete', () => {
+      expect(getUrgencyText('green', true, true)).toBe('completed — no longer tracking');
     });
   });
 

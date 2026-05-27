@@ -447,7 +447,12 @@ function TrendsSection({ trends, loading, error, onRetry }: {
 
       <p style={chartSubtitleStyle}>SLA target: 24h &mdash; Bucket distribution per day (last 7 days)</p>
 
-      <svg viewBox={`0 0 ${SVG_W} ${SVG_H}`} style={svgStyle}>
+      <svg
+        viewBox={`0 0 ${SVG_W} ${SVG_H}`}
+        style={svgStyle}
+        role="img"
+        aria-label={`Trend chart: 7-day bucket distribution. Green (within SLA), yellow (needs attention), orange (approaching deadline), red (over SLA). Data from ${bucketHistory[0].date} to ${bucketHistory[bucketHistory.length - 1].date}.`}
+      >
         {[0, 1, 2, 3, 4].map(i => {
           const val = Math.round((maxTotal / 4) * i);
           const y = MARGIN_T + CHART_H - scaleH(val);
