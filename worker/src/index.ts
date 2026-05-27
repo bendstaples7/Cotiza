@@ -83,6 +83,30 @@ app.get('/health', async (c) => {
   return c.json({ status, checks });
 });
 
+/**
+ * POST /api/admin/backfill-deathclock
+ * One-shot endpoint to backfill deathclock metrics for pre-existing requests.
+ *
+ * Protected by a secret key passed in the `Authorization: Bearer <key>` header.
+ * The key must match the `BACKFILL_SECRET_KEY` env var.
+ *
+ * Response:
+ *   { success: true, summary: { totalRequests, markedRequests, noDataDrafts, unchangedDrafts, sentDrafts, errors } }
+ */
+app.post('/api/admin/backfill-deathclock', async (c) => {
+  const authHeader = c.req.header('Authorization') || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+
+  if (!token || token !== c.env.BACKFILL_SECRET_KEY) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  const { runBackfill } = await import('./scripts/backfill-deathclock.js');
+  const summary = await runBackfill(c.env.DB);
+
+  return c.json({ success: true, summary });
+});
+
 // API routes
 app.route('/api/auth', authRoutes);
 app.route('/api/media', mediaRoutes);
