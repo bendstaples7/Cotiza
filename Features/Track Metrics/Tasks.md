@@ -16,9 +16,9 @@
 | 1: Backend Data Model + Core Logic | 13 / 13 (100%) | Phase 1 done |
 | 2: Frontend Deathclock Badge | 8 / 8 (100%) | Phase 2 done |
 | 3: Detail View + Dashboard | 6 / 6 (100%) | Phase 3 done |
-| 4: Polish + Edge Cases | 3 / 8 (38%) | T4.1-T4.2 done |
+| 4: Polish + Edge Cases | 4 / 8 (50%) | T4.1-T4.3 done |
 
-**Overall: 30 / 35 tasks complete (86%)**
+**Overall: 31 / 35 tasks complete (89%)**
 
 ### Activity Log
 - **2026-05-26** — T1.1 completed (DB migration: fields added to Quote/Request)
@@ -48,6 +48,7 @@
 - **2026-05-27** — QA-3.1 completed (Phase 3 integration tests — 32 tests, all passing)
 - **2026-05-27** — T4.1 completed (99+ day cap — server-side clamp in computeDeathclock, committed to main)
 - **2026-05-27** — T4.2 completed (frozen badge — already covered by existing DeathclockBadge frozen/isComplete logic)
+- **2026-05-27** — T4.3 completed (accessibility pass — richer aria-labels, SVG chart role=img, 7 new a11y tests)
 
 ---
 
@@ -227,7 +228,7 @@
 **Description:** When `isComplete` or `frozen` is true: deathclock badge is static, no pulsing animation, no color transitions. Color is frozen at the threshold reached at time of send. The badge shows the final elapsed time.
 
 ### T4.3 -- Accessibility pass
-**Status:** ⬜ Waiting
+**Status:** ✅ Done
 **Size:** S
 **Dependencies:** T2.1, T2.2, T3.1, T3.3
 **Description:** Add `aria-label` attributes on all deathclock badges (e.g., "Age: 8 hours - within SLA"). Ensure color is never the only indicator -- badge text always shows numeric time. Yellow/orange/red cards get a `title` attribute with urgency text. Run an automated accessibility check.
