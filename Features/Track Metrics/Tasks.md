@@ -16,9 +16,9 @@
 | 1: Backend Data Model + Core Logic | 13 / 13 (100%) | Phase 1 done |
 | 2: Frontend Deathclock Badge | 8 / 8 (100%) | Phase 2 done |
 | 3: Detail View + Dashboard | 6 / 6 (100%) | Phase 3 done |
-| 4: Polish + Edge Cases | 6 / 8 (75%) | T4.5 done |
+| 4: Polish + Edge Cases | 7 / 8 (88%) | T4.5, T4.6 done |
 
-**Overall: 33 / 35 tasks complete (94%)**
+**Overall: 34 / 35 tasks complete (97%)**
 
 ### Activity Log
 - **2026-05-26** — T1.1 completed (DB migration: fields added to Quote/Request)
@@ -51,6 +51,7 @@
 - **2026-05-27** — T4.3 completed (accessibility pass — richer aria-labels, SVG chart role=img, 7 new a11y tests)
 - **2026-05-27** — T4.4 completed (mark-as-sent UI — button, confirmation dialog with optional timestamp)
 - **2026-05-27** — T4.5 completed (multiple quotes per request display — sibling quotes list with send times, "N quotes" count, 4 tests)
+- **2026-05-27** — T4.6 completed (reopened/re-sent quote display — Original time, Last sent ago, lastQuoteSentAt backend field, 3 tests)
 
 ---
 
@@ -247,6 +248,7 @@
 **Description:** In the detail view, if a request has multiple child quotes: primary metric shows time to first quote send. List all child quotes with their individual send times. Show "N quotes" count in the badge area. Ensure the deathclock for the request stops at first send.
 
 ### T4.6 -- Reopened/re-sent quote display
+**Status:** ✅ Done
 **Size:** S
 **Dependencies:** T1.2, T3.5
 **Description:** For quotes that were sent, reopened, and re-sent: `quote_sent_at` stays as the first send. `last_quote_sent_at` tracks the most recent send. Detail view shows: "Original time: Xh" and "Last sent: Yh ago". All events are listed in the QuoteSendEvent audit log.

@@ -632,6 +632,8 @@ export interface DeathclockState {
   sendEvents?: QuoteSendEvent[];
   /** Sibling quotes belonging to the same request, with their individual send info. */
   siblingQuotes?: SiblingQuoteInfo[];
+  /** ISO 8601 timestamp of the most recent quote send (null/undefined if never sent). */
+  lastQuoteSentAt?: string | null;
 }
 
 /** Brief info about a single quote draft in the context of its parent request. */

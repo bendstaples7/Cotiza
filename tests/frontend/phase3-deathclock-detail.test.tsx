@@ -56,6 +56,7 @@ type DeathclockState = {
     firstDraftCreatedAt: string | null;
     requestToQuoteSeconds: number | null;
   }>;
+  lastQuoteSentAt?: string | null;
 };
 
 type QuoteDraft = {
@@ -806,5 +807,68 @@ describe('DeathclockDashboardPage — Phase 3', () => {
     });
 
     expect(screen.getByText(/\(earliest\)/)).toBeInTheDocument();
+  });
+
+  // ── T4.6: Reopened/re-sent quote display ──
+
+  it('shows "Original time" when isComplete with requestToQuoteSeconds', async () => {
+    mockFetchDeathclock.mockResolvedValue(
+      makeDeathclock({
+        isComplete: true,
+        frozen: true,
+        requestToQuoteSeconds: 7200,
+        sendEvents: [{ id: 1, quoteId: 'q-1', requestId: 'req-1', sentAt: new Date().toISOString(), elapsedSecondsFromRequest: 7200, sendType: 'first' }],
+        lastQuoteSentAt: new Date().toISOString(),
+      }),
+    );
+    renderDraftPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Original time: 2h/)).toBeInTheDocument();
+    });
+  });
+
+  it('shows "Last sent: Xh ago" when lastQuoteSentAt exists', async () => {
+    // Set lastQuoteSentAt to ~1 hour ago
+    const oneHourAgo = new Date(Date.now() - 3600 * 1000).toISOString();
+    mockFetchDeathclock.mockResolvedValue(
+      makeDeathclock({
+        isComplete: true,
+        frozen: true,
+        requestToQuoteSeconds: 7200,
+        sendEvents: [
+          { id: 1, quoteId: 'q-1', requestId: 'req-1', sentAt: oneHourAgo, elapsedSecondsFromRequest: 7200, sendType: 'first' },
+          { id: 2, quoteId: 'q-1', requestId: 'req-1', sentAt: oneHourAgo, elapsedSecondsFromRequest: 86400, sendType: 'resend' },
+        ],
+        lastQuoteSentAt: oneHourAgo,
+      }),
+    );
+    renderDraftPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Last sent:.*ago/)).toBeInTheDocument();
+    });
+  });
+
+  it('shows correct relative time in "Last sent" label', async () => {
+    // Set lastQuoteSentAt to ~2 hours ago
+    const twoHoursAgo = new Date(Date.now() - 7200 * 1000).toISOString();
+    mockFetchDeathclock.mockResolvedValue(
+      makeDeathclock({
+        isComplete: true,
+        frozen: true,
+        requestToQuoteSeconds: 7200,
+        sendEvents: [
+          { id: 1, quoteId: 'q-1', requestId: 'req-1', sentAt: twoHoursAgo, elapsedSecondsFromRequest: 7200, sendType: 'first' },
+          { id: 2, quoteId: 'q-1', requestId: 'req-1', sentAt: twoHoursAgo, elapsedSecondsFromRequest: 86400, sendType: 'resend' },
+        ],
+        lastQuoteSentAt: twoHoursAgo,
+      }),
+    );
+    renderDraftPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Last sent: 2h ago/)).toBeInTheDocument();
+    });
   });
 });

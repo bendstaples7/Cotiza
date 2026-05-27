@@ -388,13 +388,15 @@ app.get('/manual-requests/:id/deathclock', async (c) => {
   // Fetch quote_sent_at, first_draft_created_at, and request_to_quote_seconds from quote drafts
   const quoteRow = await db.prepare(
     `SELECT MIN(quote_sent_at) AS quote_sent_at,
+            MAX(quote_sent_at) AS last_quote_sent_at,
             MIN(first_draft_created_at) AS first_draft_created_at,
             MIN(request_to_quote_seconds) AS request_to_quote_seconds
        FROM quote_drafts
       WHERE manual_request_id = ?`
-  ).bind(requestId).first<{ quote_sent_at: string | null; first_draft_created_at: string | null; request_to_quote_seconds: number | null }>();
+  ).bind(requestId).first<{ quote_sent_at: string | null; last_quote_sent_at: string | null; first_draft_created_at: string | null; request_to_quote_seconds: number | null }>();
 
   const quoteSentAt = quoteRow?.quote_sent_at ?? null;
+  const lastQuoteSentAt = quoteRow?.last_quote_sent_at ?? null;
   const firstDraftCreatedAt = quoteRow?.first_draft_created_at ?? null;
   const requestToQuoteSeconds = quoteRow?.request_to_quote_seconds ?? undefined;
 
@@ -450,7 +452,7 @@ app.get('/manual-requests/:id/deathclock', async (c) => {
     requestToQuoteSeconds: row.request_to_quote_seconds,
   })) ?? [];
 
-  return c.json({ ...deathclock, quoteCreationLagSeconds, sendLagSeconds, requestToQuoteSeconds, sendEvents, siblingQuotes });
+  return c.json({ ...deathclock, quoteCreationLagSeconds, sendLagSeconds, requestToQuoteSeconds, lastQuoteSentAt, sendEvents, siblingQuotes });
 });
 
 /**

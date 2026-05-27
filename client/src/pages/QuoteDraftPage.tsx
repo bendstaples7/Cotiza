@@ -648,6 +648,17 @@ export default function QuoteDraftPage() {
           {deathclock.sendLagSeconds !== undefined && deathclock.isComplete && (
             <span>Send lag: {getLabel(deathclock.sendLagSeconds)}</span>
           )}
+          {deathclock.isComplete && deathclock.requestToQuoteSeconds !== undefined && (
+            <span>Original time: {getLabel(deathclock.requestToQuoteSeconds)}</span>
+          )}
+          {deathclock.lastQuoteSentAt && deathclock.isComplete && (() => {
+            const now = Date.now();
+            const lastSent = new Date(deathclock.lastQuoteSentAt!).getTime();
+            const elapsedSec = Math.floor((now - lastSent) / 1000);
+            return elapsedSec > 0 ? (
+              <span>Last sent: {getLabel(elapsedSec)} ago</span>
+            ) : null;
+          })()}
         </div>
 
         {/* Mark as sent button — only when deathclock is still active */}
