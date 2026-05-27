@@ -49,6 +49,13 @@ type DeathclockState = {
     elapsedSecondsFromRequest: number;
     sendType: string;
   }>;
+  siblingQuotes?: Array<{
+    id: string;
+    draftNumber: number;
+    quoteSentAt: string | null;
+    firstDraftCreatedAt: string | null;
+    requestToQuoteSeconds: number | null;
+  }>;
 };
 
 type QuoteDraft = {
@@ -725,5 +732,79 @@ describe('DeathclockDashboardPage — Phase 3', () => {
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent('Server error');
     });
+  });
+
+  // ── T4.5: Multiple quotes per request display ──
+
+  it('shows \"N quotes\" count when siblingQuotes > 1', async () => {
+    mockFetchDeathclock.mockResolvedValue(
+      makeDeathclock({
+        siblingQuotes: [
+          { id: 'q-1', draftNumber: 42, quoteSentAt: '2026-05-27T12:00:00Z', firstDraftCreatedAt: null, requestToQuoteSeconds: 7200 },
+          { id: 'q-2', draftNumber: 43, quoteSentAt: null, firstDraftCreatedAt: null, requestToQuoteSeconds: null },
+        ],
+      }),
+    );
+    renderDraftPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('2 quotes')).toBeInTheDocument();
+    });
+  });
+
+  it('does not show \"N quotes\" count when only one sibling quote', async () => {
+    mockFetchDeathclock.mockResolvedValue(
+      makeDeathclock({
+        siblingQuotes: [
+          { id: 'q-1', draftNumber: 42, quoteSentAt: '2026-05-27T12:00:00Z', firstDraftCreatedAt: null, requestToQuoteSeconds: 7200 },
+        ],
+      }),
+    );
+    renderDraftPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Quote Draft D-042')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/^\d+ quotes$/)).toBeNull();
+  });
+
+  it('lists sibling quotes with draft numbers and send status', async () => {
+    mockFetchDeathclock.mockResolvedValue(
+      makeDeathclock({
+        siblingQuotes: [
+          { id: 'q-1', draftNumber: 42, quoteSentAt: '2026-05-27T12:00:00Z', firstDraftCreatedAt: null, requestToQuoteSeconds: 7200 },
+          { id: 'q-2', draftNumber: 43, quoteSentAt: null, firstDraftCreatedAt: null, requestToQuoteSeconds: null },
+        ],
+      }),
+    );
+    renderDraftPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Quotes for this request:/)).toBeInTheDocument();
+    });
+
+    // Should reference draft numbers
+    const container = screen.getByText(/Quotes for this request:/).parentElement!;
+    expect(container.textContent).toContain('D-042');
+    expect(container.textContent).toContain('D-043');
+  });
+
+  it('marks earliest sibling quote with (earliest) label', async () => {
+    mockFetchDeathclock.mockResolvedValue(
+      makeDeathclock({
+        siblingQuotes: [
+          { id: 'q-1', draftNumber: 42, quoteSentAt: '2026-05-27T12:00:00Z', firstDraftCreatedAt: null, requestToQuoteSeconds: 7200 },
+          { id: 'q-2', draftNumber: 43, quoteSentAt: null, firstDraftCreatedAt: null, requestToQuoteSeconds: null },
+        ],
+      }),
+    );
+    renderDraftPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Quotes for this request:/)).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/\(earliest\)/)).toBeInTheDocument();
   });
 });

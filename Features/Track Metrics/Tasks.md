@@ -16,9 +16,9 @@
 | 1: Backend Data Model + Core Logic | 13 / 13 (100%) | Phase 1 done |
 | 2: Frontend Deathclock Badge | 8 / 8 (100%) | Phase 2 done |
 | 3: Detail View + Dashboard | 6 / 6 (100%) | Phase 3 done |
-| 4: Polish + Edge Cases | 4 / 8 (50%) | T4.1-T4.3 done |
+| 4: Polish + Edge Cases | 6 / 8 (75%) | T4.5 done |
 
-**Overall: 31 / 35 tasks complete (89%)**
+**Overall: 33 / 35 tasks complete (94%)**
 
 ### Activity Log
 - **2026-05-26** — T1.1 completed (DB migration: fields added to Quote/Request)
@@ -49,6 +49,8 @@
 - **2026-05-27** — T4.1 completed (99+ day cap — server-side clamp in computeDeathclock, committed to main)
 - **2026-05-27** — T4.2 completed (frozen badge — already covered by existing DeathclockBadge frozen/isComplete logic)
 - **2026-05-27** — T4.3 completed (accessibility pass — richer aria-labels, SVG chart role=img, 7 new a11y tests)
+- **2026-05-27** — T4.4 completed (mark-as-sent UI — button, confirmation dialog with optional timestamp)
+- **2026-05-27** — T4.5 completed (multiple quotes per request display — sibling quotes list with send times, "N quotes" count, 4 tests)
 
 ---
 
@@ -239,6 +241,7 @@
 **Description:** Add a "Mark as sent" button/action in the request detail view for requests where the quote was sent outside the system. Button opens a confirmation dialog accepting an optional timestamp (defaults to now). Calls `POST /api/requests/:id/mark-sent`. On success, refreshes the request detail.
 
 ### T4.5 -- Multiple quotes per request display
+**Status:** ✅ Done
 **Size:** S
 **Dependencies:** T3.1, T3.5
 **Description:** In the detail view, if a request has multiple child quotes: primary metric shows time to first quote send. List all child quotes with their individual send times. Show "N quotes" count in the badge area. Ensure the deathclock for the request stops at first send.

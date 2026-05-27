@@ -615,6 +615,11 @@ export default function QuoteDraftPage() {
         {deathclockLoading && !deathclock && (
           <span style={{ fontSize: '0.8rem', color: '#999' }}>Loading deathclock...</span>
         )}
+        {deathclock && deathclock.siblingQuotes && deathclock.siblingQuotes.length > 1 && (
+          <span style={{ fontSize: '0.8rem', color: '#666', fontWeight: 500 }}>
+            {deathclock.siblingQuotes.length} quotes
+          </span>
+        )}
         {draft.jobberQuoteNumber && (
           <span style={{ fontSize: '0.9rem', color: '#00a89d', fontWeight: 600 }}>
             (Jobber {draft.jobberQuoteNumber})
@@ -773,6 +778,29 @@ export default function QuoteDraftPage() {
           </div>
           );
         })()}
+
+        {/* T4.5: Sibling quotes list — show when a request has multiple quote drafts */}
+        {deathclock && deathclock.siblingQuotes && deathclock.siblingQuotes.length > 1 && (
+          <div style={{
+            display: 'flex', gap: '1rem', flexWrap: 'wrap',
+            fontSize: '0.8rem', color: '#666',
+            padding: '0.4rem 0 0.4rem 16px',
+            borderTop: '1px solid #e0e0e0',
+          }}>
+            <span style={{ fontWeight: 600, color: '#333' }}>Quotes for this request:</span>
+            {deathclock.siblingQuotes.map((sq, idx) => (
+              <span key={sq.id}>
+                D-{String(sq.draftNumber).padStart(3, '0')}
+                {sq.quoteSentAt ? (
+                  <>: {getLabel(sq.requestToQuoteSeconds ?? deathclock.ageSeconds)} sent</>
+                ) : (
+                  <span style={{ fontStyle: 'italic', opacity: 0.7 }}>: unsent</span>
+                )}
+                {idx === 0 && <span style={{ marginLeft: '0.25rem', opacity: 0.5 }}>(earliest)</span>}
+              </span>
+            ))}
+          </div>
+        )}
         </div>
       )}
 

@@ -630,4 +630,15 @@ export interface DeathclockState {
   requestToQuoteSeconds?: number;
   /** Quote send events for re-send tracking. */
   sendEvents?: QuoteSendEvent[];
+  /** Sibling quotes belonging to the same request, with their individual send info. */
+  siblingQuotes?: SiblingQuoteInfo[];
+}
+
+/** Brief info about a single quote draft in the context of its parent request. */
+export interface SiblingQuoteInfo {
+  id: string;
+  draftNumber: number;
+  quoteSentAt: string | null;
+  firstDraftCreatedAt: string | null;
+  requestToQuoteSeconds: number | null;
 }

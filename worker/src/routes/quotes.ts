@@ -434,7 +434,23 @@ app.get('/manual-requests/:id/deathclock', async (c) => {
     sendType: row.send_type as 'first' | 'resend',
   })) ?? [];
 
-  return c.json({ ...deathclock, quoteCreationLagSeconds, sendLagSeconds, requestToQuoteSeconds, sendEvents });
+  // Fetch sibling quotes — all quote drafts belonging to this request
+  const siblingRows = await db.prepare(
+    `SELECT id, draft_number, quote_sent_at, first_draft_created_at, request_to_quote_seconds
+       FROM quote_drafts
+      WHERE manual_request_id = ?
+      ORDER BY created_at ASC`
+  ).bind(requestId).all<{ id: string; draft_number: number; quote_sent_at: string | null; first_draft_created_at: string | null; request_to_quote_seconds: number | null }>();
+
+  const siblingQuotes = siblingRows.results?.map((row) => ({
+    id: row.id,
+    draftNumber: row.draft_number,
+    quoteSentAt: row.quote_sent_at,
+    firstDraftCreatedAt: row.first_draft_created_at,
+    requestToQuoteSeconds: row.request_to_quote_seconds,
+  })) ?? [];
+
+  return c.json({ ...deathclock, quoteCreationLagSeconds, sendLagSeconds, requestToQuoteSeconds, sendEvents, siblingQuotes });
 });
 
 /**
