@@ -121,6 +121,11 @@ export function computeDeathclock(
     ageSeconds = 0;
   }
 
+  // Cap at 90 days for display — prevents absurd values in the API response
+  if (ageSeconds > SECONDS_IN_90_DAYS) {
+    ageSeconds = SECONDS_IN_90_DAYS;
+  }
+
   const color = getColor(ageSeconds);
   const ageLabel = getLabel(ageSeconds);
 
