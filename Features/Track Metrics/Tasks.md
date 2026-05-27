@@ -15,10 +15,10 @@
 |-------|----------|-------|
 | 1: Backend Data Model + Core Logic | 13 / 13 (100%) | Phase 1 done |
 | 2: Frontend Deathclock Badge | 8 / 8 (100%) | Phase 2 done |
-| 3: Detail View + Dashboard | 3 / 6 (50%) | T3.1-T3.3 done |
+| 3: Detail View + Dashboard | 4 / 6 (67%) | T3.1-T3.4 done |
 | 4: Polish + Edge Cases | 0 / 8 (0%) | Not started |
 
-**Overall: 24 / 35 tasks complete (69%)**
+**Overall: 25 / 35 tasks complete (71%)**
 
 ### Activity Log
 - **2026-05-26** — T1.1 completed (DB migration: fields added to Quote/Request)
@@ -43,6 +43,7 @@
 - **2026-05-27** — T3.1 completed (deathclock badge on request detail header)
 - **2026-05-27** — T3.2 completed (creation lag and send lag breakdown in detail view)
 - **2026-05-27** — T3.3 completed (team dashboard aggregate view with bucket bar chart)
+- **2026-05-27** — T3.4 completed (7d/30d trend chart with SVG stacked bar chart on dashboard)
 
 ---
 
@@ -187,8 +188,8 @@
 **Dependencies:** T1.10, T2.1
 **Description:** Build the aggregate dashboard panel showing a bar chart of bucket counts (green/yellow/orange/red). Each bucket is clickable to drill into the list of requests. Pull data from `GET /api/dashboard/deathclock-stats`. Auto-refresh every 60s.
 
-### T3.4 --
-**Status:** ⬜ Waiting Add 7d/30d trend chart to dashboard
+### T3.4 -- Add 7d/30d trend chart to dashboard
+**Status:** ✅ Tested (awaiting PR review)
 **Size:** M
 **Dependencies:** T1.11, T3.3
 **Description:** Add a trend line chart below the bucket breakdown showing rolling 7-day and 30-day average request-to-quote time. Pull data from `GET /api/dashboard/trends`. Cache with 5-minute refresh. Show a baseline marker for SLA target (24h).

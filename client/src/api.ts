@@ -892,3 +892,24 @@ export async function fetchDeathclockStats(): Promise<DeathclockBucketCounts> {
   });
   return handleResponse(res);
 }
+
+export interface BucketHistoryEntry {
+  date: string;
+  green: number;
+  yellow: number;
+  orange: number;
+  red: number;
+}
+
+export interface DeathclockTrends {
+  avg7Days: number;
+  avg30Days: number;
+  bucketHistory: BucketHistoryEntry[];
+}
+
+export async function fetchTrends(): Promise<DeathclockTrends> {
+  const res = await fetch(API_BASE + '/api/dashboard/trends', {
+    headers: { ...authHeaders() },
+  });
+  return handleResponse(res);
+}
