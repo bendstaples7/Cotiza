@@ -12,6 +12,13 @@ import type {
   DeathclockState,
 } from 'shared';
 
+/** A manual request row returned by the list endpoint with deathclock enrichment. */
+export interface ManualRequestWithDeathclock extends ManualRequest {
+  ageSeconds: number;
+  quoteSentAt: string | null;
+  deathclock: DeathclockState;
+}
+
 const TOKEN_KEY = 'session_token';
 
 export const API_BASE = import.meta.env.PROD
@@ -681,6 +688,14 @@ export async function fetchManualRequest(id: string): Promise<ManualRequest> {
     headers: { ...authHeaders() },
   });
   return handleResponse(res);
+}
+
+export async function fetchManualRequests(): Promise<ManualRequestWithDeathclock[]> {
+  const res = await fetch(API_BASE + '/api/quotes/manual-requests?include_deathclock=true&sort_by=age_asc', {
+    headers: { ...authHeaders() },
+  });
+  const data = await handleResponse<{ requests: ManualRequestWithDeathclock[] }>(res);
+  return data.requests;
 }
 
 export async function fetchDraftManualRequest(draftId: string): Promise<ManualRequest | null> {

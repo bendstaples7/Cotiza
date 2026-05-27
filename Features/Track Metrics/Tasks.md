@@ -14,11 +14,11 @@
 | Phase | Progress | Tasks |
 |-------|----------|-------|
 | 1: Backend Data Model + Core Logic | 13 / 13 (100%) | T1.1-T1.12 + QA-1.1 done |
-| 2: Frontend Deathclock Badge | 0 / 8 (0%) | Not started |
+| 2: Frontend Deathclock Badge | 1 / 8 (13%) | T2.1 done |
 | 3: Detail View Enhancements | 0 / 4 (0%) | Not started |
 | 4: Dashboard Analytics | 0 / 3 (0%) | Not started |
 
-**Overall: 13 / 28 tasks complete (46%)**
+**Overall: 14 / 28 tasks complete (50%)**
 
 ### Activity Log
 - **2026-05-26** — T1.1 completed (DB migration: fields added to Quote/Request)
@@ -34,6 +34,7 @@
 - **2026-05-27** — T1.11 completed (dashboard trends endpoint)
 - **2026-05-27** — T1.12 completed (backfill migration + script for existing open requests)
 - **2026-05-27** — QA-1.1 completed (Phase 1 integration tests — 30 tests, all passing)
+- **2026-05-27** — T2.1 completed (DeathclockBadge React component)
 
 ---
 
@@ -121,8 +122,8 @@
 
 ## Phase 2: Frontend Deathclock Badge (Day 3-4)
 
-### T2.1 --
-**Status:** ⬜ Waiting Build DeathclockBadge React component
+### T2.1 -- Build DeathclockBadge React component
+**Status:** ✅ Done
 **Size:** M
 **Dependencies:** None (frontend, can parallel with Phase 1)
 **Description:** Create reusable `DeathclockBadge` component. Props: `ageSeconds`, `color`, `isComplete`, `frozen`. Renders: time label (via getDeathclockLabel) and a small colored dot icon with aria-label. Color logic mirrors server-side helper. Frozen mode: static display, no animation.
