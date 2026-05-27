@@ -13,12 +13,12 @@
 
 | Phase | Progress | Tasks |
 |-------|----------|-------|
-| 1: Backend Data Model + Core Logic | 10 / 13 (77%) | T1.1-T1.10 done, T1.11 running |
+| 1: Backend Data Model + Core Logic | 13 / 13 (100%) | T1.1-T1.12 + QA-1.1 done |
 | 2: Frontend Deathclock Badge | 0 / 8 (0%) | Not started |
 | 3: Detail View Enhancements | 0 / 4 (0%) | Not started |
 | 4: Dashboard Analytics | 0 / 3 (0%) | Not started |
 
-**Overall: 10 / 28 tasks complete (36%)**
+**Overall: 13 / 28 tasks complete (46%)**
 
 ### Activity Log
 - **2026-05-26** — T1.1 completed (DB migration: fields added to Quote/Request)
@@ -31,6 +31,9 @@
 - **2026-05-27** — T1.8 completed (individual deathclock endpoint)
 - **2026-05-27** — T1.9 completed (manual mark-sent endpoint)
 - **2026-05-27** — T1.10 completed (dashboard deathclock-stats)
+- **2026-05-27** — T1.11 completed (dashboard trends endpoint)
+- **2026-05-27** — T1.12 completed (backfill migration + script for existing open requests)
+- **2026-05-27** — QA-1.1 completed (Phase 1 integration tests — 30 tests, all passing)
 
 ---
 
@@ -97,19 +100,19 @@
 **Description:** Aggregate endpoint returning bucket counts: `{ green: N, yellow: N, orange: N, red: N, total_active: N }`. Support 60s server-side caching (Redis or in-memory). Invalidate cache on any quote-send event.
 
 ### T1.11 -- Build GET /api/dashboard/trends endpoint
-**Status:** 🔄 In Progress
+**Status:** ✅ Done
 **Size:** M
 **Dependencies:** T1.1, T1.2
 **Description:** Compute and return rolling 7-day and 30-day average request-to-quote time. Include bucket_history for trend visualization. Cache with 5-minute TTL. Recalculate on demand or via hourly cron.
 
 ### T1.12 -- Run backfill migration for existing open requests
-**Status:** ⬜ Waiting
+**Status:** ✅ Done
 **Size:** M
 **Dependencies:** T1.1
 **Description:** One-time migration script that iterates all open requests: if `request_created_at` exists, use it (honest age); if no reliable timestamp, set `backfilled_at = NOW()` (age starts at 0); if quote sent but no `quote_sent_at`, set `metric_status = 'no_data'`. Add `backfilled_at` field if needed.
 
-### QA-1.1 --
-**Status:** ⬜ Waiting Phase 1 integration tests
+### QA-1.1 -- Phase 1 integration tests
+**Status:** ✅ Done
 **Size:** M
 **Dependencies:** T1.1 through T1.12
 **Description:** Write integration tests covering: quote send sets timestamps correctly, draft creation sets first_draft_created_at, deathclock computation covers all thresholds, sort-by-age returns correct ordering, mark-sent endpoint works with and without custom timestamp, backfill does not break existing data, QuoteSendEvent records are created on send.

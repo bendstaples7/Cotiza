@@ -9,6 +9,7 @@ import type {
   RuleCondition, RuleAction, TriggerMode,
   ManualRequest, CreateManualRequestPayload,
   ProductivityRate, UpdateProductivityRatePayload,
+  DeathclockState,
 } from 'shared';
 
 const TOKEN_KEY = 'session_token';
@@ -688,6 +689,13 @@ export async function fetchDraftManualRequest(draftId: string): Promise<ManualRe
   });
   const data = await handleResponse<{ manualRequest: ManualRequest | null }>(res);
   return data?.manualRequest ?? null;
+}
+
+export async function fetchDeathclock(requestId: string): Promise<DeathclockState> {
+  const res = await fetch(API_BASE + '/api/quotes/manual-requests/' + requestId + '/deathclock', {
+    headers: { ...authHeaders() },
+  });
+  return handleResponse(res);
 }
 
 // ── Rules Engine ──
