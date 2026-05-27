@@ -586,3 +586,40 @@ export interface UpdateProductivityRatePayload {
   displayName?: string;
   description?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Deathclock / Send Metrics Types
+// ---------------------------------------------------------------------------
+
+/** The type of quote send event */
+export type SendType = 'first' | 'resend';
+
+/** A record of a quote being sent to a customer, used for cycle-time analytics (Deathclock). */
+export interface QuoteSendEvent {
+  id: number;
+  quoteId: string;
+  requestId: string;
+  /** ISO 8601 UTC timestamp of when the quote was sent */
+  sentAt: string;
+  /** Seconds elapsed between the original customer request and this send */
+  elapsedSecondsFromRequest: number;
+  /** Whether this was the first send or a resend */
+  sendType: SendType;
+}
+
+/** The color buckets for the deathclock badge (server-side computed) */
+export type DeathclockColor = 'green' | 'yellow' | 'orange' | 'red';
+
+/** The computed visual state of a deathclock badge, returned by computeDeathclock(). */
+export interface DeathclockState {
+  /** Elapsed seconds from request creation (or frozen time if quote was sent). */
+  ageSeconds: number;
+  /** Human-readable label: e.g. "8h", "2.5d", "5d 12h", "99+ days" */
+  ageLabel: string;
+  /** Color bucket: green < 24h, yellow < 48h, orange < 72h, red >= 72h */
+  color: DeathclockColor;
+  /** True when the quote has been sent and the clock is frozen */
+  isComplete: boolean;
+  /** True when the badge should not animate / tick */
+  frozen: boolean;
+}

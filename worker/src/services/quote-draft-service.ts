@@ -96,6 +96,21 @@ export class QuoteDraftService {
       }
     }
 
+    // ── Deathclock: record first draft created timestamp ──
+    // Sets first_draft_created_at only if currently NULL (first draft for this request).
+    // If linked to a manual request, also computes request_to_quote_seconds as the
+    // time from manual request creation to first draft creation.
+    // Uses the WHERE first_draft_created_at IS NULL guard so subsequent drafts for
+    // the same request are no-ops (< 1ms cost).
+    await this.db.prepare(
+      `UPDATE quote_drafts
+          SET first_draft_created_at = datetime('now'),
+              request_to_quote_seconds = CAST(
+                (unixepoch('now') - unixepoch((SELECT created_at FROM manual_requests WHERE id = ?))) AS INTEGER
+              )
+        WHERE id = ? AND first_draft_created_at IS NULL`
+    ).bind(draft.manualRequestId ?? null, draft.id).run();
+
     // Re-read the saved row to get DB-assigned fields (draft_number, timestamps).
     // We reuse the original draft's lineItems/unresolvedItems since they were just inserted.
     const row = await this.db.prepare(
