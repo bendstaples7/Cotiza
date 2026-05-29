@@ -114,7 +114,7 @@ describe('DeathclockBadge', () => {
     colors.forEach((color) => {
       it(`renders ${color} dot and label`, () => {
         renderBadge({ color, ageSeconds: 7200 });
-        const container = screen.getByRole('status');
+        const container = screen.getByRole('img');
         expect(container).toBeInTheDocument();
         // Each color renders label based on ageSeconds
         expect(container).toHaveTextContent('2h');
@@ -126,26 +126,26 @@ describe('DeathclockBadge', () => {
   });
 
   describe('aria and role attributes', () => {
-    it('has role="status" on the container', () => {
+    it('has role="img" on the container', () => {
       renderBadge({ color: 'red', ageSeconds: 3600 });
-      expect(screen.getByRole('status')).toBeInTheDocument();
+      expect(screen.getByRole('img')).toBeInTheDocument();
     });
 
     it('has aria-label matching age and urgency text', () => {
       renderBadge({ color: 'orange', ageSeconds: 86400 });
-      const badge = screen.getByRole('status');
+      const badge = screen.getByRole('img');
       expect(badge).toHaveAttribute('aria-label', 'Request age: 1.0d — approaching deadline — overdue soon');
     });
 
     it('has a title attribute with urgency text', () => {
       renderBadge({ color: 'green', ageSeconds: 7200 });
-      const badge = screen.getByRole('status');
+      const badge = screen.getByRole('img');
       expect(badge).toHaveAttribute('title', 'Request age: 2h — within SLA');
     });
 
     it('has title showing frozen status when complete', () => {
       renderBadge({ color: 'red', ageSeconds: 7200, isComplete: true });
-      const badge = screen.getByRole('status');
+      const badge = screen.getByRole('img');
       expect(badge).toHaveAttribute('title', 'Request age: 2h (frozen)');
     });
   });
@@ -206,14 +206,14 @@ describe('DeathclockBadge', () => {
           compact
         />,
       );
-      const badge = screen.getByRole('status');
+      const badge = screen.getByRole('img');
       // In compact mode, padding is '1px 6px' vs '2px 10px' — check the style attribute
       expect(badge.getAttribute('style')).toContain('1px 6px');
     });
 
     it('renders default sizing when compact is not set', () => {
       renderBadge({ compact: false });
-      const badge = screen.getByRole('status');
+      const badge = screen.getByRole('img');
       expect(badge.getAttribute('style')).toContain('2px 10px');
     });
   });
@@ -325,8 +325,8 @@ describe('RequestQueuePage', () => {
     expect(await screen.findByText('Alice')).toBeInTheDocument();
     expect(await screen.findByText('Bob')).toBeInTheDocument();
 
-    // Each card gets a DeathclockBadge (role="status") — there should be two
-    const badges = screen.getAllByRole('status');
+    // Each card gets a DeathclockBadge (role="img") — there should be two
+    const badges = screen.getAllByRole('img');
     expect(badges.length).toBe(2);
   });
 
