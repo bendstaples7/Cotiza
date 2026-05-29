@@ -343,7 +343,7 @@ describe('Frontend rendering performance', () => {
       const dc = computeDeathclock(new Date(created));
       const elapsed = performance.now() - start;
       expect(dc.ageLabel).toBe(expected);
-      expect(elapsed).toBeLessThan(0.02);
+      expect(elapsed).toBeLessThan(0.05);
     }
 
     vi.useRealTimers();

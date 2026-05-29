@@ -14,7 +14,7 @@
  * Requirements: QA-1.1 (T1.1–T1.12)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
 import type { User } from 'shared';
 import type { DeathclockState } from 'shared';
