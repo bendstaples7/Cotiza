@@ -8,6 +8,7 @@ export interface ManualRequestListRow extends ManualRequest {
   ageSeconds: number;
   quoteSentAt?: string | null;
   deathclock?: DeathclockState;
+  jobberRequestId?: string | null;
 }
 
 /** Bucket counts returned by the deathclock stats endpoint. */
@@ -90,7 +91,12 @@ export class ManualRequestService {
                   FROM quote_drafts qd
                  WHERE qd.manual_request_id = mr.id
                    AND qd.quote_sent_at IS NOT NULL
-               ) AS quote_sent_at
+               ) AS quote_sent_at,
+               (SELECT qd.jobber_request_id
+                  FROM quote_drafts qd
+                 WHERE qd.manual_request_id = mr.id
+                 LIMIT 1
+               ) AS jobber_request_id
         FROM manual_requests mr
         WHERE mr.user_id = ?
         ${orderClause}
@@ -494,6 +500,7 @@ export class ManualRequestService {
       ...base,
       ageSeconds: Number(row.age_seconds),
       ...(row.quote_sent_at !== undefined ? { quoteSentAt: (row.quote_sent_at as string) || null } : {}),
+      ...(row.jobber_request_id !== undefined ? { jobberRequestId: (row.jobber_request_id as string) || null } : {}),
     };
   }
 }

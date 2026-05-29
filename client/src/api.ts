@@ -17,6 +17,7 @@ export interface ManualRequestWithDeathclock extends ManualRequest {
   ageSeconds: number;
   quoteSentAt: string | null;
   deathclock: DeathclockState;
+  jobberRequestId: string | null;
 }
 
 const TOKEN_KEY = 'session_token';

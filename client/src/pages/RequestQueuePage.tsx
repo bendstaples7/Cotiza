@@ -217,6 +217,11 @@ export default function RequestQueuePage() {
                     <span style={metaStyle}>
                       Created {new Date(req.createdAt).toLocaleDateString()}
                     </span>
+                    {req.jobberRequestId && (
+                      <span style={metaStyle}>
+                        Jobber #{decodeJobberId(req.jobberRequestId)}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -350,3 +355,15 @@ const metaStyle: React.CSSProperties = {
   fontSize: '0.8rem',
   color: '#888',
 };
+
+/** Decode a base64 Jobber GraphQL ID and extract the numeric request ID for display. */
+function decodeJobberId(id: string): string {
+  try {
+    const decoded = atob(id);
+    // Format: gid://Jobber/Request/29995593
+    const parts = decoded.split('/');
+    return parts[parts.length - 1] || id.slice(0, 12);
+  } catch {
+    return id.slice(0, 12);
+  }
+}

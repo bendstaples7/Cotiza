@@ -27,7 +27,7 @@ app.route('/api/webhooks', webhookRoutes);
 
 // CORS – allow the Pages frontend to call the Worker API
 app.use('*', cors({
-  origin: ['https://cotiza-e4h.pages.dev'],
+  origin: ['https://cotiza-e4h.pages.dev', 'http://localhost:5173', 'http://192.168.0.31:5173'],
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization'],
 }));
