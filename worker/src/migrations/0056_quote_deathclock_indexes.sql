@@ -15,9 +15,3 @@ CREATE INDEX IF NOT EXISTS idx_quote_sent_at
 -- Index on manual_requests.created_at for sort-by-age queries (oldest first).
 CREATE INDEX IF NOT EXISTS idx_request_created_at
   ON manual_requests(created_at);
-
--- Composite index on (status, created_at) for fetching active requests
--- sorted by age. This covers the common Deathclock query pattern:
---   SELECT * FROM manual_requests WHERE status = ? ORDER BY created_at ASC
-CREATE INDEX IF NOT EXISTS idx_request_status_created
-  ON manual_requests(status, created_at);

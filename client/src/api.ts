@@ -723,7 +723,7 @@ export async function markRequestSent(
 ): Promise<ManualRequest> {
   const body: Record<string, string> = {};
   if (sentAt) body.sentAt = sentAt;
-  const res = await fetch(API_BASE + '/api/quotes/manual-requests/' + requestId + '/mark-sent', {
+  const res = await fetch(API_BASE + '/api/quotes/requests/' + requestId + '/mark-sent', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(body),

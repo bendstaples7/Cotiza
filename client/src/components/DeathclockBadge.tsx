@@ -85,8 +85,9 @@ export function getLabel(ageSeconds: number): string {
     return `${totalDays.toFixed(1)}d`;
   }
 
-  const wholeDays = Math.floor(totalDays);
-  const remainingHours = Math.round(totalHours % 24);
+  const wholeHours = Math.floor(totalHours);
+  const wholeDays = Math.floor(wholeHours / 24);
+  const remainingHours = wholeHours % 24;
   return `${wholeDays}d ${remainingHours}h`;
 }
 
@@ -181,6 +182,7 @@ export default function DeathclockBadge({
       )}
       <div
         style={containerStyle}
+        role="status"
         aria-label={ariaLabel}
         title={titleText}
       >
