@@ -148,6 +148,16 @@ export interface GenerationTrace {
   scopeMismatchedProducts: string[];
   /** Whether the fallback enrichment pass ran and how many items it enriched */
   fallbackEnrichmentCount: number;
+  /** Work items the customer stated are already completed (extracted by CompletedWorkService) */
+  completedWork: string[];
+  /** Background contextual facts extracted from the customer text (e.g. "vaulted ceilings") */
+  contextualFacts: string[];
+  /** Whether the completed work extraction used the AI pass (true) or regex-only fallback (false) */
+  completedWorkFromAI: boolean;
+  /** Number of line items flagged by the post-generation reviewer as potentially already-done */
+  reviewerFlaggedCount: number;
+  /** Names of line items flagged by the post-generation reviewer */
+  reviewerFlaggedProducts: string[];
 }
 
 /** A matched line item in a quote draft */

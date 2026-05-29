@@ -45,3 +45,5 @@ export { ProductivityRatesService } from './productivity-rates-service.js';
 export { resolveSpaceAllocation, SPACE_ALLOCATIONS } from './space-allocation-service.js';
 export type { SpaceAllocationResult } from './space-allocation-service.js';
 export { SpaceExtractionService } from './space-extraction-service.js';
+export { CompletedWorkService, extractCompletedWorkPatterns, filterCompletedWork } from './completed-work-service.js';
+export type { CompletedWorkContext } from './completed-work-service.js';
