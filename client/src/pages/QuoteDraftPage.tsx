@@ -234,7 +234,7 @@ export default function QuoteDraftPage() {
 
   /** Mark the request's quote as sent (manual/offline send). */
   const handleMarkSent = async () => {
-    if (!draft.manualRequestId) return;
+    if (!draft || !draft.manualRequestId) return;
     setMarkingSent(true);
     setMarkSentError(null);
     try {
