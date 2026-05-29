@@ -263,8 +263,8 @@ describe('QuoteDraftPage — Phase 3 deathclock features', () => {
       expect(screen.getByText('Quote Draft D-042')).toBeInTheDocument();
     });
 
-    // No badge should be rendered (the sqft <p> has role=status but not with Request age: label)
-    expect(screen.queryByRole('status', { name: /Request age:/ })).toBeNull();
+    // No badge should be rendered
+    expect(screen.queryByRole('img', { name: /Request age:/ })).toBeNull();
     // No deathclock loading text
     expect(screen.queryByText('Loading deathclock...')).toBeNull();
   });
@@ -280,7 +280,7 @@ describe('QuoteDraftPage — Phase 3 deathclock features', () => {
     });
 
     // No badge rendered (since deathclock is null after error)
-    expect(screen.queryByRole('status', { name: /Request age:/ })).toBeNull();
+    expect(screen.queryByRole('img', { name: /Request age:/ })).toBeNull();
   });
 
   // ── T3.2: Lag breakdown section ──
@@ -649,7 +649,7 @@ describe('DeathclockDashboardPage — Phase 3', () => {
     });
 
     // Page should be fully functional without deathclock
-    expect(screen.queryByRole('status', { name: /Request age:/ })).toBeNull();
+    expect(screen.queryByRole('img', { name: /Request age:/ })).toBeNull();
     expect(screen.queryByText(/Request age:/)).toBeNull();
     expect(screen.queryByText(/Send events:/)).toBeNull();
     // Back button should still work
