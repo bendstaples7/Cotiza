@@ -209,11 +209,11 @@ describe('QuoteDraftPage — Phase 3 deathclock features', () => {
     renderDraftPage();
 
     await waitFor(() => {
-      expect(screen.getByRole('status', { name: /Request age:/ })).toBeInTheDocument();
+      expect(screen.getByRole('img', { name: /Request age:/ })).toBeInTheDocument();
     });
 
     // Badge should show the deathclock age label
-    const badge = screen.getByRole('status', { name: /Request age:/ });
+    const badge = screen.getByRole('img', { name: /Request age:/ });
     expect(badge).toHaveTextContent('1.0d');
   });
 
@@ -222,7 +222,7 @@ describe('QuoteDraftPage — Phase 3 deathclock features', () => {
     const { container } = renderDraftPage();
 
     await waitFor(() => {
-      expect(screen.getByRole('status', { name: /Request age:/ })).toBeInTheDocument();
+      expect(screen.getByRole('img', { name: /Request age:/ })).toBeInTheDocument();
     });
 
     // The header div has borderLeft set inline — find the h1 "Quote Draft D-042"
@@ -236,11 +236,11 @@ describe('QuoteDraftPage — Phase 3 deathclock features', () => {
     renderDraftPage();
 
     await waitFor(() => {
-      expect(screen.getByRole('status', { name: /Request age:/ })).toBeInTheDocument();
+      expect(screen.getByRole('img', { name: /Request age:/ })).toBeInTheDocument();
     });
 
     // Non-compact badge has padding '2px 10px'
-    const badge = screen.getByRole('status', { name: /Request age:/ });
+    const badge = screen.getByRole('img', { name: /Request age:/ });
     expect(badge.getAttribute('style')).toContain('2px 10px');
   });
 
