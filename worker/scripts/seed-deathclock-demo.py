@@ -1,5 +1,12 @@
 import sqlite3
-db_path = '.wrangler/state/v3/d1/miniflare-D1DatabaseObject/948839c3e7f80a5fb5986eb251d4f968929b96850e32efd3994a2fc878af7216.sqlite'
+import glob, os
+
+# Discover the Miniflare D1 SQLite file dynamically (hash varies per machine/recreate)
+d1_glob = glob.glob('.wrangler/state/v3/d1/miniflare-D1DatabaseObject/*/*.sqlite')
+db_path = d1_glob[0] if d1_glob else '.wrangler/state/v3/d1/miniflare-D1DatabaseObject/948839c3e7f80a5fb5986eb251d4f968929b96850e32efd3994a2fc878af7216.sqlite'
+if not os.path.exists(db_path):
+    print(f'D1 SQLite not found at {db_path}. Run wrangler d1 migrations apply DB --local first.')
+    exit(1)
 conn = sqlite3.connect(db_path)
 cur = conn.cursor()
 uid = '374307fe-6de5-4a4e-b77e-0ed981584f96'

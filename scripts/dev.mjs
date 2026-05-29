@@ -33,7 +33,12 @@ step('Building shared types', 'npm run build --workspace=shared', root);
 step('Syncing rules from production', 'node scripts/sync-rules.mjs');
 step('Syncing product catalog from production', 'node scripts/sync-catalog.mjs');
 step('Applying catalog ordering', 'node scripts/apply-catalog-order.mjs --local');
-step('Syncing requests from production', 'node scripts/sync-requests.mjs --limit 50');
+// Production request sync is opt-in — only runs when DEATHCLOCK_SYNC_REQUESTS=1
+// is set. This avoids pulling PII (customer name/phone/email/address) into the
+// local dev environment on every startup.
+if (process.env.DEATHCLOCK_SYNC_REQUESTS === '1') {
+  step('Syncing requests from production', 'node scripts/sync-requests.mjs --limit 50');
+}
 
 // ── Start dev servers (parallel) ─────────────────────────────
 // The worker's `npm run dev` applies migrations + syncs tokens/cookies before

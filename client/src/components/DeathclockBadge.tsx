@@ -78,7 +78,7 @@ export function getLabel(ageSeconds: number): string {
   }
 
   if (totalHours < 24) {
-    return `${Math.round(totalHours)}h`;
+    return `${Math.floor(totalHours)}h`;
   }
 
   if (totalDays < 7) {
@@ -181,7 +181,6 @@ export default function DeathclockBadge({
       )}
       <div
         style={containerStyle}
-        role="status"
         aria-label={ariaLabel}
         title={titleText}
       >

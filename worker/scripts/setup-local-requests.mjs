@@ -13,7 +13,7 @@
  * Example:
  *   node scripts/setup-local-requests.mjs 374307fe-a278-4411-9ea8-3967268ce3d1
  */
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 import { writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -26,15 +26,19 @@ if (!TARGET_USER_ID) {
   process.exit(1);
 }
 
-function run(cmd) {
-  return execSync(cmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+function run(cmd, args) {
+  const result = spawnSync(cmd, args, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+  if (result.status !== 0) {
+    throw new Error(`Command failed: ${cmd} ${args.join(' ')}\n${result.stderr}`);
+  }
+  return result.stdout;
 }
 
 function runWithFile(sql) {
   const tmpFile = join(tmpdir(), `setup-local-req-${Date.now()}-${Math.random().toString(36).slice(2)}.sql`);
   try {
     writeFileSync(tmpFile, sql, 'utf8');
-    return run(`npx wrangler d1 execute DB --local --yes --file "${tmpFile}"`);
+    return run('npx', ['wrangler', 'd1', 'execute', 'DB', '--local', '--yes', '--file', tmpFile]);
   } finally {
     try { unlinkSync(tmpFile); } catch {}
   }
@@ -42,7 +46,7 @@ function runWithFile(sql) {
 
 function query(sql) {
   try {
-    const output = run(`npx wrangler d1 execute DB --local --json --command "${sql.replace(/"/g, '\\"')}"`);
+    const output = run('npx', ['wrangler', 'd1', 'execute', 'DB', '--local', '--json', '--command', sql]);
     const parsed = JSON.parse(output);
     return parsed[0]?.results || [];
   } catch (err) {
@@ -139,6 +143,6 @@ try {
   }
 
 } catch (err) {
-  console.log(`[setup-local-requests] Failed: ${err.message}`);
-  process.exit(0);
+  console.error(`[setup-local-requests] Failed: ${err.message}`);
+  process.exit(1);
 }

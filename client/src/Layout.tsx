@@ -399,6 +399,7 @@ export default function Layout() {
               <li key={item.to} style={{ marginBottom: '0.5rem' }}>
                 <NavLink
                   to={item.to}
+                  end={item.to === '/quotes'}
                   style={({ isActive }) => ({
                     color: isActive ? '#00a89d' : '#ccc',
                     textDecoration: 'none',

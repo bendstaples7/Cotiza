@@ -120,7 +120,7 @@ async function refreshToken(accessToken, refreshToken) {
   return newAccessToken;
 }
 
-async function fetchRequests(accessToken) {
+async function fetchRequests(accessToken, targetIds) {
   const query = `
     query FetchRequests($first: Int!, $after: String) {
       requests(first: $first, after: $after, sort: [{ key: REQUESTED_AT, direction: DESCENDING }]) {
@@ -141,8 +141,9 @@ async function fetchRequests(accessToken) {
   const results = {};
   let cursor = null;
   let pages = 0;
+  const remaining = new Set(targetIds);
 
-  while (pages < 3) { // Max 3 pages = ~150 requests (plenty for 29 IDs)
+  while (remaining.size > 0) {
     pages++;
     const variables = { first: 50 };
     if (cursor) variables.after = cursor;
@@ -176,6 +177,7 @@ async function fetchRequests(accessToken) {
         title: node.title || null,
         customerName: clientName || node.contactName || node.companyName || node.client?.companyName || null,
       };
+      remaining.delete(node.id);
     }
 
     const pageInfo = result?.data?.requests?.pageInfo;
@@ -183,7 +185,7 @@ async function fetchRequests(accessToken) {
     cursor = pageInfo.endCursor;
   }
 
-  console.log(`[enrich-names] Fetched ${Object.keys(results).length} request details across ${pages} page(s).`);
+  console.log(`[enrich-names] Fetched ${Object.keys(results).length} request details across ${pages} page(s). ${remaining.size} IDs still unmatched.`);
   return results;
 }
 
@@ -224,7 +226,7 @@ async function main() {
 
   // ── 4. Fetch request details from Jobber ──────────────────
   console.log('[enrich-names] Fetching request details from Jobber...');
-  const requestMap = await fetchRequests(accessToken);
+  const requestMap = await fetchRequests(accessToken, targetIds);
 
   // Match fetched requests to our IDs
   const matched = {};

@@ -10,6 +10,8 @@ export interface ManualRequest {
   mediaItemIds: string[];
   requestSource: 'manual';
   createdAt: Date;
+  /** Deathclock: ISO 8601 timestamp when the request was backfilled (pre-deathclock). */
+  backfilledAt?: string | null;
 }
 
 /** Payload for creating a manual request */
@@ -223,6 +225,16 @@ export interface QuoteDraft {
   spaceContext?: SpaceContext[] | null;
   /** Full generation pipeline trace for debugging and triage */
   generationTrace?: GenerationTrace | null;
+  /** Deathclock: ISO 8601 timestamp of when the quote was sent to the customer. */
+  quoteSentAt?: string | null;
+  /** Deathclock: ISO 8601 timestamp of when the first draft was created for this request. */
+  firstDraftCreatedAt?: string | null;
+  /** Deathclock: pre-computed seconds from request creation to quote send. */
+  requestToQuoteSeconds?: number | null;
+  /** Deathclock: ISO 8601 timestamp of the most recent quote send. */
+  lastQuoteSentAt?: string | null;
+  /** Deathclock: metric status for pre-deathclock backfill ('no_data' or 'backfilled'). */
+  metricStatus?: 'no_data' | 'backfilled' | null;
   createdAt: Date;
   updatedAt: Date;
 }

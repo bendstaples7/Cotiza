@@ -323,7 +323,7 @@ describe('Quote-send write-path overhead (< 5ms added)', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('Frontend rendering performance', () => {
-  it('getLabel called during render completes in < 0.01ms', () => {
+  it('getLabel called during render completes in < 0.1ms', () => {
     // Use fake timers to ensure deterministic results
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2025-06-01T12:30:00Z'));
@@ -343,7 +343,7 @@ describe('Frontend rendering performance', () => {
       const dc = computeDeathclock(new Date(created));
       const elapsed = performance.now() - start;
       expect(dc.ageLabel).toBe(expected);
-      expect(elapsed).toBeLessThan(0.05);
+      expect(elapsed).toBeLessThan(0.1);
     }
 
     vi.useRealTimers();

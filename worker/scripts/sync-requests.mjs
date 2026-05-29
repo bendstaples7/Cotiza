@@ -26,8 +26,22 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 const listOnly = process.argv.includes('--list');
-const limitArg = process.argv.find(a => a.startsWith('--limit='));
-const LIMIT = limitArg ? parseInt(limitArg.split('=')[1], 10) : 50;
+// Support both `--limit=<value>` and `--limit <value>` forms
+const limitFlagIdx = process.argv.findIndex(a => a.startsWith('--limit'));
+const limitArg = limitFlagIdx >= 0 ? process.argv[limitFlagIdx] : null;
+let LIMIT = 50;
+if (limitArg) {
+  const eqIdx = limitArg.indexOf('=');
+  if (eqIdx >= 0) {
+    LIMIT = parseInt(limitArg.slice(eqIdx + 1), 10);
+  } else if (limitFlagIdx + 1 < process.argv.length) {
+    // `--limit <value>` — next arg is the value
+    const next = process.argv[limitFlagIdx + 1];
+    if (!next.startsWith('-')) {
+      LIMIT = parseInt(next, 10);
+    }
+  }
+}
 
 function run(cmd) {
   return execSync(cmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
