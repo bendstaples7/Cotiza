@@ -238,7 +238,11 @@ export default function QuoteDraftPage() {
     setMarkingSent(true);
     setMarkSentError(null);
     try {
-      const timestamp = markSentTimestamp.trim() || undefined;
+      const raw = markSentTimestamp.trim();
+      // datetime-local returns "YYYY-MM-DDTHH:mm" without timezone.
+      // Convert to a proper UTC ISO 8601 string so the backend's
+      // elapsed-time calculations are accurate.
+      const timestamp = raw ? new Date(raw).toISOString() : undefined;
       await markRequestSent(draft.manualRequestId, timestamp);
       // Refresh the deathclock to show the completed state
       const dc = await fetchDeathclock(draft.manualRequestId);
