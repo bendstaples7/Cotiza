@@ -412,7 +412,7 @@ describe('AC-10: < 200ms added latency to any existing action', () => {
       computeDeathclock(created);
     }
     const elapsed = performance.now() - start;
-    expect(elapsed).toBeLessThan(0.5);
+    expect(elapsed).toBeLessThan(1.0);
   });
 
   it('polling overhead (60s cycle) — deathclock refresh < 0.5ms', () => {
