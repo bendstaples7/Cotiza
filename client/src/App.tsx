@@ -15,6 +15,8 @@ import QuoteDraftPage from './pages/QuoteDraftPage';
 import QuoteDraftsListPage from './pages/QuoteDraftsListPage';
 import ManualFallbackPage from './pages/ManualFallbackPage';
 import RulesPage from './pages/RulesPage';
+import RequestQueuePage from './pages/RequestQueuePage';
+import DeathclockDashboardPage from './pages/DeathclockDashboardPage';
 
 function LegacyPostRedirect() {
   const { id } = useParams();
@@ -39,6 +41,8 @@ export default function App() {
                 <Route path="/social/activity-log" element={<ActivityLogPage />} />
 
                 {/* Quotes section */}
+                <Route path="/quotes/queue" element={<RequestQueuePage />} />
+                <Route path="/quotes/deathclock-dashboard" element={<DeathclockDashboardPage />} />
                 <Route path="/quotes" element={<QuoteInputPage />} />
                 <Route path="/quotes/drafts" element={<QuoteDraftsListPage />} />
                 <Route path="/quotes/drafts/:id" element={<QuoteDraftPage />} />

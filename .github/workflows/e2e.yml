@@ -42,13 +42,13 @@ jobs:
       - name: Start dev servers
         run: |
           # Apply D1 migrations to local database
-          cd worker && npx wrangler d1 migrations apply DB --local && cd ..
+          cd "${{ github.workspace }}/worker" && npx wrangler d1 migrations apply DB --local
 
-          # Start the Vite client dev server
-          npm run dev:client &
+          # Start the Vite client dev server from project root
+          cd "${{ github.workspace }}" && npm run dev:client &
 
           # Start the worker directly with wrangler (skip sync scripts)
-          (cd worker && npx wrangler dev) &
+          cd "${{ github.workspace }}/worker" && npx wrangler dev &
 
           # Wait for both servers to be ready
           echo "Waiting for client on :5173..."

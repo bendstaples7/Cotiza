@@ -480,7 +480,7 @@ describe('Property 6: Deposit schedule persistence round-trip', () => {
           expect(roundTripped.milestones[i].description).toBe(
             schedule.milestones[i].description,
           );
-          expect(roundTripped.milestones[i].percentage).toBe(
+          expect(roundTripped.milestones[i].percentage).toEqual(
             schedule.milestones[i].percentage,
           );
         }

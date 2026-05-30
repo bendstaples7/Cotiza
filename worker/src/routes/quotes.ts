@@ -22,6 +22,8 @@ import {
 import { JobberWebhookService } from '../services/jobber-webhook-service.js';
 import { JobberTokenStore } from '../services/jobber-token-store.js';
 import { RulesSyncService } from '../services/rules-sync.js';
+import { invalidateDeathclockCache, invalidateTrendsCache } from './dashboard.js';
+import { computeDeathclock } from '../services/deathclock-service.js';
 
 function createRulesSync(env: Bindings): RulesSyncService {
   const isLocal = env.ENABLE_LOCAL_SYNC === 'true';
@@ -303,6 +305,43 @@ app.post('/rules/auto-categorize', async (c) => {
 // ── Manual Request endpoints ──────────────────────────────────
 
 /**
+ * GET /manual-requests
+ * List manual requests for the authenticated user.
+ *
+ * Query params:
+ *   ?include_deathclock=true — embed a {@link DeathclockState} object in each item
+ *   ?sort_by=age_asc         — sort by age, oldest first
+ *   ?sort_by=age_desc        — sort by age, newest first
+ */
+app.get('/manual-requests', async (c) => {
+  const userId = c.get('user').id;
+  const db = c.env.DB;
+
+  const includeDeathclock = c.req.query('include_deathclock') === 'true';
+  const sortBy = c.req.query('sort_by') as 'age_asc' | 'age_desc' | undefined;
+
+  if (sortBy && sortBy !== 'age_asc' && sortBy !== 'age_desc') {
+    return c.json({ error: "sort_by must be 'age_asc' or 'age_desc'" }, 400);
+  }
+
+  const manualRequestService = new ManualRequestService(db);
+  const rows = await manualRequestService.list({ userId, sortBy, includeDeathclock });
+
+  if (includeDeathclock) {
+    const items = rows.map(row => ({
+      ...row,
+      // Use the SQL-computed ageSeconds from the list query rather than
+      // re-computing from createdAt, which would produce a slightly different
+      // value (SQL NOW() vs JS Date() — different moments of evaluation).
+      deathclock: computeDeathclock(row.createdAt, row.quoteSentAt, row.ageSeconds),
+    }));
+    return c.json({ requests: items });
+  }
+
+  return c.json({ requests: rows });
+});
+
+/**
  * POST /manual-requests
  * Create a manual customer request.
  */
@@ -327,6 +366,195 @@ app.get('/manual-requests/:id', async (c) => {
   const manualRequestService = new ManualRequestService(db);
   const manualRequest = await manualRequestService.getById(c.req.param('id'), userId);
   return c.json(manualRequest);
+});
+
+/**
+ * GET /manual-requests/:id/deathclock
+ * Get live deathclock state for a single manual request.
+ *
+ * Fetches the request (returns 404 if not found), retrieves quote_sent_at
+ * from the earliest sent quote draft (if any), and returns the computed
+ * DeathclockState. When a quote has been sent the clock freezes at that
+ * point in time (isComplete=true, frozen=true); otherwise the clock ticks
+ * live from the request's created_at timestamp.
+ */
+app.get('/manual-requests/:id/deathclock', async (c) => {
+  const userId = c.get('user').id;
+  const db = c.env.DB;
+  const requestId = c.req.param('id');
+
+  const manualRequestService = new ManualRequestService(db);
+
+  // Resolves the request; throws 404 via PlatformError if not found
+  const manualRequest = await manualRequestService.getById(requestId, userId);
+
+  // Fetch quote_sent_at, first_draft_created_at, and request_to_quote_seconds from quote drafts
+  const quoteRow = await db.prepare(
+    `SELECT MIN(quote_sent_at) AS quote_sent_at,
+            MAX(quote_sent_at) AS last_quote_sent_at,
+            MIN(first_draft_created_at) AS first_draft_created_at,
+            MIN(request_to_quote_seconds) AS request_to_quote_seconds
+       FROM quote_drafts
+      WHERE manual_request_id = ?`
+  ).bind(requestId).first<{ quote_sent_at: string | null; last_quote_sent_at: string | null; first_draft_created_at: string | null; request_to_quote_seconds: number | null }>();
+
+  const quoteSentAt = quoteRow?.quote_sent_at ?? null;
+  const lastQuoteSentAt = quoteRow?.last_quote_sent_at ?? null;
+  const firstDraftCreatedAt = quoteRow?.first_draft_created_at ?? null;
+  const requestToQuoteSeconds = quoteRow?.request_to_quote_seconds ?? undefined;
+
+  const deathclock = computeDeathclock(manualRequest.createdAt, quoteSentAt);
+
+  // Compute creation lag and send lag from the raw timestamps
+  const requestCreatedAt = new Date(manualRequest.createdAt).getTime();
+  let quoteCreationLagSeconds: number | undefined;
+  let sendLagSeconds: number | undefined;
+
+  if (firstDraftCreatedAt) {
+    quoteCreationLagSeconds = Math.floor(
+      (new Date(firstDraftCreatedAt).getTime() - requestCreatedAt) / 1000,
+    );
+    if (quoteSentAt) {
+      sendLagSeconds = Math.floor(
+        (new Date(quoteSentAt).getTime() - new Date(firstDraftCreatedAt).getTime()) / 1000,
+      );
+    }
+  }
+
+  // Fetch QuoteSendEvents for this request
+  const sendEventRows = await db.prepare(
+    `SELECT id, quote_id, request_id, sent_at, elapsed_seconds_from_request, send_type
+       FROM quote_send_events
+      WHERE request_id = ?
+      ORDER BY sent_at ASC`
+  ).bind(requestId).all<{ id: number; quote_id: string; request_id: string; sent_at: string; elapsed_seconds_from_request: number; send_type: string }>();
+
+  const sendEvents = sendEventRows.results?.map((row) => ({
+    id: row.id,
+    quoteId: row.quote_id,
+    requestId: row.request_id,
+    sentAt: row.sent_at,
+    elapsedSecondsFromRequest: row.elapsed_seconds_from_request,
+    sendType: row.send_type as 'first' | 'resend',
+  })) ?? [];
+
+  // Fetch sibling quotes — all quote drafts belonging to this request
+  const siblingRows = await db.prepare(
+    `SELECT id, draft_number, quote_sent_at, first_draft_created_at, request_to_quote_seconds
+       FROM quote_drafts
+      WHERE manual_request_id = ?
+      ORDER BY created_at ASC`
+  ).bind(requestId).all<{ id: string; draft_number: number; quote_sent_at: string | null; first_draft_created_at: string | null; request_to_quote_seconds: number | null }>();
+
+  const siblingQuotes = siblingRows.results?.map((row) => ({
+    id: row.id,
+    draftNumber: row.draft_number,
+    quoteSentAt: row.quote_sent_at,
+    firstDraftCreatedAt: row.first_draft_created_at,
+    requestToQuoteSeconds: row.request_to_quote_seconds,
+  })) ?? [];
+
+  return c.json({ ...deathclock, quoteCreationLagSeconds, sendLagSeconds, requestToQuoteSeconds, lastQuoteSentAt, sendEvents, siblingQuotes });
+});
+
+/**
+ * POST /requests/:id/mark-sent
+ * Mark a manual request's quote as sent (for manual/offline sends).
+ *
+ * This endpoint is used when a quote is sent to the customer outside of the
+ * app (e.g., email, in-person). It records the send event for deathclock
+ * analytics and freezes the deathclock timer.
+ *
+ * NOTE: quote_sent_at is set on ALL quote drafts linked to this request,
+ * not a single specific draft. The semantic meaning is "a quote for this
+ * request was sent," not "this specific draft was sent." All drafts for the
+ * same request share the same quote_sent_at timestamp.
+ *
+ * Body (optional):
+ *   { "sentAt": "2025-06-01T12:00:00Z" }  — ISO 8601 UTC timestamp.
+ *     Defaults to datetime('now') if omitted.
+ *
+ * Returns the updated manual request with the send event details.
+ */
+app.post('/requests/:id/mark-sent', async (c) => {
+  const userId = c.get('user').id;
+  const db = c.env.DB;
+  const requestId = c.req.param('id');
+
+  // Parse optional body — graceful if empty or not JSON
+  let sentAt: string | undefined;
+  try {
+    const body = await c.req.json<{ sentAt?: string }>();
+    sentAt = body?.sentAt;
+  } catch {
+    // No body provided — will default to now
+  }
+
+  // Resolve the manual request (throws 404 if not found)
+  const manualRequestService = new ManualRequestService(db);
+  const manualRequest = await manualRequestService.getById(requestId, userId);
+
+  // Use provided timestamp or default to SQLite datetime('now')
+  const nowIso = sentAt
+    ? sentAt
+    : new Date().toISOString();
+
+  // Set quote_sent_at on all quote drafts linked to this manual request
+  await db.prepare(
+    `UPDATE quote_drafts
+        SET quote_sent_at = ?,
+            last_quote_sent_at = ?
+      WHERE manual_request_id = ?`
+  ).bind(nowIso, nowIso, requestId).run();
+
+  // Compute elapsed seconds from request creation to sent time
+  const createdAt = manualRequest.createdAt instanceof Date
+    ? manualRequest.createdAt
+    : new Date(manualRequest.createdAt);
+  const sentDate = new Date(nowIso);
+  const elapsedSeconds = Math.floor((sentDate.getTime() - createdAt.getTime()) / 1000);
+
+  // Also update request_to_quote_seconds on drafts where not already set
+  await db.prepare(
+    `UPDATE quote_drafts
+        SET request_to_quote_seconds = ?
+      WHERE manual_request_id = ?
+        AND request_to_quote_seconds IS NULL`
+  ).bind(elapsedSeconds, requestId).run();
+
+  // Fetch the IDs of all quote drafts linked to this request
+  const draftRows = await db.prepare(
+    `SELECT id FROM quote_drafts WHERE manual_request_id = ?`
+  ).bind(requestId).all<{ id: string }>();
+
+  // Create a QuoteSendEvent for each associated draft
+  if (draftRows.results && draftRows.results.length > 0) {
+    const insertStmt = db.prepare(
+      `INSERT INTO quote_send_events (quote_id, request_id, sent_at, elapsed_seconds_from_request, send_type)
+       VALUES (?, ?, ?, ?, 'first')`
+    );
+
+    for (const row of draftRows.results) {
+      // Use INSERT OR IGNORE to gracefully handle the unique constraint
+      // on uq_quote_send_events_first_send (prevents double-counting).
+      const insertOrIgnoreStmt = db.prepare(
+        `INSERT OR IGNORE INTO quote_send_events (quote_id, request_id, sent_at, elapsed_seconds_from_request, send_type)
+         VALUES (?, ?, ?, ?, 'first')`
+      );
+      await insertOrIgnoreStmt.bind(row.id, requestId, nowIso, elapsedSeconds).run();
+    }
+  }
+
+  // Invalidate deathclock and trends caches for this user
+  invalidateDeathclockCache(userId);
+  invalidateTrendsCache(userId);
+
+  // Return the updated request data
+  return c.json({
+    ...manualRequest,
+    quoteSentAt: nowIso,
+    elapsedSecondsFromRequest: elapsedSeconds,
+  });
 });
 
 // ── Helper functions ──────────────────────────────────────────
@@ -831,6 +1059,30 @@ app.post('/drafts/:id/push', async (c) => {
   const { jobberIntegration } = await createJobberIntegration(db, c.env);
   const pushService = new JobberQuotePushService(db, jobberIntegration);
   const result = await pushService.pushToJobber(draft);
+
+  // ── Deathclock: record send event ───────────────────────────────────────
+  // After successful push, update the draft's sent timestamps and (if linked
+  // to a manual request) insert a send event with elapsed time from request.
+  await db.prepare(
+    `UPDATE quote_drafts
+        SET quote_sent_at = datetime('now'),
+            last_quote_sent_at = datetime('now')
+      WHERE id = ?`
+  ).bind(draftId).run();
+
+  if (draft.manualRequestId) {
+    const sendType = (draft.status === 'finalized' || draft.jobberQuoteId) ? 'resend' : 'first';
+    await db.prepare(
+      `INSERT INTO quote_send_events (quote_id, request_id, sent_at, elapsed_seconds_from_request, send_type)
+       VALUES (?, ?, datetime('now'),
+               CAST((unixepoch('now') - unixepoch((SELECT created_at FROM manual_requests WHERE id = ?))) AS INTEGER),
+               ?)`
+    ).bind(draftId, draft.manualRequestId, draft.manualRequestId, sendType).run();
+  }
+
+  // Invalidate deathclock and trends caches for this user
+  invalidateDeathclockCache(userId);
+  invalidateTrendsCache(userId);
 
   return c.json(result);
 });

@@ -10,6 +10,8 @@ export interface ManualRequest {
   mediaItemIds: string[];
   requestSource: 'manual';
   createdAt: Date;
+  /** Deathclock: ISO 8601 timestamp when the request was backfilled (pre-deathclock). */
+  backfilledAt?: string | null;
 }
 
 /** Payload for creating a manual request */
@@ -223,6 +225,16 @@ export interface QuoteDraft {
   spaceContext?: SpaceContext[] | null;
   /** Full generation pipeline trace for debugging and triage */
   generationTrace?: GenerationTrace | null;
+  /** Deathclock: ISO 8601 timestamp of when the quote was sent to the customer. */
+  quoteSentAt?: string | null;
+  /** Deathclock: ISO 8601 timestamp of when the first draft was created for this request. */
+  firstDraftCreatedAt?: string | null;
+  /** Deathclock: pre-computed seconds from request creation to quote send. */
+  requestToQuoteSeconds?: number | null;
+  /** Deathclock: ISO 8601 timestamp of the most recent quote send. */
+  lastQuoteSentAt?: string | null;
+  /** Deathclock: metric status for pre-deathclock backfill ('no_data' or 'backfilled'). */
+  metricStatus?: 'no_data' | 'backfilled' | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -595,4 +607,62 @@ export interface UpdateProductivityRatePayload {
   sqftPerHour: number;
   displayName?: string;
   description?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Deathclock / Send Metrics Types
+// ---------------------------------------------------------------------------
+
+/** The type of quote send event */
+export type SendType = 'first' | 'resend';
+
+/** A record of a quote being sent to a customer, used for cycle-time analytics (Deathclock). */
+export interface QuoteSendEvent {
+  id: number;
+  quoteId: string;
+  requestId: string;
+  /** ISO 8601 UTC timestamp of when the quote was sent */
+  sentAt: string;
+  /** Seconds elapsed between the original customer request and this send */
+  elapsedSecondsFromRequest: number;
+  /** Whether this was the first send or a resend */
+  sendType: SendType;
+}
+
+/** The color buckets for the deathclock badge (server-side computed) */
+export type DeathclockColor = 'green' | 'yellow' | 'orange' | 'red';
+
+/** The computed visual state of a deathclock badge, returned by computeDeathclock(). */
+export interface DeathclockState {
+  /** Elapsed seconds from request creation (or frozen time if quote was sent). */
+  ageSeconds: number;
+  /** Human-readable label: e.g. "8h", "2.5d", "5d 12h", "99+ days" */
+  ageLabel: string;
+  /** Color bucket: green < 24h, yellow < 48h, orange < 72h, red >= 72h */
+  color: DeathclockColor;
+  /** True when the quote has been sent and the clock is frozen */
+  isComplete: boolean;
+  /** True when the badge should not animate / tick */
+  frozen: boolean;
+  /** Seconds from request creation to first draft creation (optional). */
+  quoteCreationLagSeconds?: number;
+  /** Seconds from first draft creation to quote sent (optional, only present for completed quotes). */
+  sendLagSeconds?: number;
+  /** Frozen request-to-quote seconds (same as ageSeconds when isComplete). */
+  requestToQuoteSeconds?: number;
+  /** Quote send events for re-send tracking. */
+  sendEvents?: QuoteSendEvent[];
+  /** Sibling quotes belonging to the same request, with their individual send info. */
+  siblingQuotes?: SiblingQuoteInfo[];
+  /** ISO 8601 timestamp of the most recent quote send (null/undefined if never sent). */
+  lastQuoteSentAt?: string | null;
+}
+
+/** Brief info about a single quote draft in the context of its parent request. */
+export interface SiblingQuoteInfo {
+  id: string;
+  draftNumber: number;
+  quoteSentAt: string | null;
+  firstDraftCreatedAt: string | null;
+  requestToQuoteSeconds: number | null;
 }

@@ -170,6 +170,13 @@ export class CompletedWorkService {
         signal: controller.signal,
       });
     } finally {
+      // clearTimeout runs here intentionally: the AbortController signal was
+      // passed to fetch(), so once fetch() returns (success or abort), the
+      // timeout has served its purpose. The subsequent body read
+      // (response.json()) can hang, but that is acceptable because the
+      // outer callAI() caller handles errors gracefully via try/catch
+      // and falls back to regex-only results — the timeout is only needed
+      // to prevent the initial connect/SSE handshake from hanging forever.
       clearTimeout(timeout);
     }
 

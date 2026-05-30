@@ -21,6 +21,8 @@ const socialNavItems = [
 ];
 
 const quotesNavItems = [
+  { to: '/quotes/queue', label: 'Request Queue' },
+  { to: '/quotes/deathclock-dashboard', label: 'Deathclock Dashboard' },
   { to: '/quotes', label: 'New Quote' },
   { to: '/quotes/drafts', label: 'Saved Drafts' },
   { to: '/quotes/rules', label: 'Rules & Product Ordering' },
@@ -397,6 +399,7 @@ export default function Layout() {
               <li key={item.to} style={{ marginBottom: '0.5rem' }}>
                 <NavLink
                   to={item.to}
+                  end={item.to === '/quotes'}
                   style={({ isActive }) => ({
                     color: isActive ? '#00a89d' : '#ccc',
                     textDecoration: 'none',

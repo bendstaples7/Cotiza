@@ -9,7 +9,16 @@ import type {
   RuleCondition, RuleAction, TriggerMode,
   ManualRequest, CreateManualRequestPayload,
   ProductivityRate, UpdateProductivityRatePayload,
+  DeathclockState,
 } from 'shared';
+
+/** A manual request row returned by the list endpoint with deathclock enrichment. */
+export interface ManualRequestWithDeathclock extends ManualRequest {
+  ageSeconds: number;
+  quoteSentAt: string | null;
+  deathclock: DeathclockState;
+  jobberRequestId: string | null;
+}
 
 const TOKEN_KEY = 'session_token';
 
@@ -682,12 +691,44 @@ export async function fetchManualRequest(id: string): Promise<ManualRequest> {
   return handleResponse(res);
 }
 
+export async function fetchManualRequests(sortBy?: 'age_asc' | 'age_desc'): Promise<ManualRequestWithDeathclock[]> {
+  const params = new URLSearchParams({ include_deathclock: 'true' });
+  if (sortBy) params.set('sort_by', sortBy);
+  const res = await fetch(API_BASE + '/api/quotes/manual-requests?' + params.toString(), {
+    headers: { ...authHeaders() },
+  });
+  const data = await handleResponse<{ requests: ManualRequestWithDeathclock[] }>(res);
+  return data.requests;
+}
+
 export async function fetchDraftManualRequest(draftId: string): Promise<ManualRequest | null> {
   const res = await fetch(API_BASE + '/api/quotes/drafts/' + draftId + '/manual-request', {
     headers: { ...authHeaders() },
   });
   const data = await handleResponse<{ manualRequest: ManualRequest | null }>(res);
   return data?.manualRequest ?? null;
+}
+
+export async function fetchDeathclock(requestId: string): Promise<DeathclockState> {
+  const res = await fetch(API_BASE + '/api/quotes/manual-requests/' + requestId + '/deathclock', {
+    headers: { ...authHeaders() },
+  });
+  return handleResponse(res);
+}
+
+/** Mark a manual request's quote as sent (for manual/offline sends). */
+export async function markRequestSent(
+  requestId: string,
+  sentAt?: string,
+): Promise<ManualRequest> {
+  const body: Record<string, string> = {};
+  if (sentAt) body.sentAt = sentAt;
+  const res = await fetch(API_BASE + '/api/quotes/requests/' + requestId + '/mark-sent', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  return handleResponseWithToast(res);
 }
 
 // ── Rules Engine ──
@@ -849,4 +890,42 @@ export async function updateProductivityRate(
     body: JSON.stringify(payload),
   });
   return handleResponseWithToast(res);
+}
+
+// ── Deathclock Dashboard ──
+
+export interface DeathclockBucketCounts {
+  green: number;
+  yellow: number;
+  orange: number;
+  red: number;
+  totalActive: number;
+}
+
+export async function fetchDeathclockStats(): Promise<DeathclockBucketCounts> {
+  const res = await fetch(API_BASE + '/api/dashboard/deathclock-stats', {
+    headers: { ...authHeaders() },
+  });
+  return handleResponse(res);
+}
+
+export interface BucketHistoryEntry {
+  date: string;
+  green: number;
+  yellow: number;
+  orange: number;
+  red: number;
+}
+
+export interface DeathclockTrends {
+  avg7Days: number;
+  avg30Days: number;
+  bucketHistory: BucketHistoryEntry[];
+}
+
+export async function fetchTrends(): Promise<DeathclockTrends> {
+  const res = await fetch(API_BASE + '/api/dashboard/trends', {
+    headers: { ...authHeaders() },
+  });
+  return handleResponse(res);
 }

@@ -18,6 +18,7 @@ import quoteRoutes from './routes/quotes.js';
 import webhookRoutes from './routes/webhooks.js';
 import jobberAuthRoutes from './routes/jobber-auth.js';
 import systemsRoutes from './routes/systems.js';
+import dashboardRoutes from './routes/dashboard.js';
 
 const app = new Hono<{ Bindings: Bindings }>();
 
@@ -26,7 +27,7 @@ app.route('/api/webhooks', webhookRoutes);
 
 // CORS – allow the Pages frontend to call the Worker API
 app.use('*', cors({
-  origin: ['https://cotiza-e4h.pages.dev'],
+  origin: ['https://cotiza-e4h.pages.dev', 'http://localhost:5173', 'http://192.168.0.31:5173'],
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization'],
 }));
@@ -82,6 +83,34 @@ app.get('/health', async (c) => {
   return c.json({ status, checks });
 });
 
+/**
+ * POST /api/admin/backfill-deathclock
+ * One-shot endpoint to backfill deathclock metrics for pre-existing requests.
+ *
+ * Protected by a secret key passed in the `Authorization: Bearer <key>` header.
+ * The key must match the `BACKFILL_SECRET_KEY` env var.
+ *
+ * Response:
+ *   { success: true, summary: { totalRequests, markedRequests, noDataDrafts, unchangedDrafts, sentDrafts, errors } }
+ */
+app.post('/api/admin/backfill-deathclock', async (c) => {
+  const authHeader = c.req.header('Authorization') || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+
+  if (!token || token !== c.env.BACKFILL_SECRET_KEY) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  const { runBackfill } = await import('./scripts/backfill-deathclock.js');
+  try {
+    const summary = await runBackfill(c.env.DB);
+    return c.json({ success: true, summary });
+  } catch (err) {
+    console.error(`[backfill] Failed: ${err instanceof Error ? err.message : String(err)}`);
+    return c.json({ success: false, error: 'Backfill failed. See server logs.' }, 500);
+  }
+});
+
 // API routes
 app.route('/api/auth', authRoutes);
 app.route('/api/media', mediaRoutes);
@@ -94,6 +123,7 @@ app.route('/api/content-ideas', contentIdeasRoutes);
 app.route('/api/quotes', quoteRoutes);
 app.route('/api/jobber-auth', jobberAuthRoutes);
 app.route('/api/systems', systemsRoutes);
+app.route('/api/dashboard', dashboardRoutes);
 
 // Error handler (must be registered after routes)
 app.onError(errorHandler);
