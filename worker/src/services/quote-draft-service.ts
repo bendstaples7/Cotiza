@@ -102,14 +102,25 @@ export class QuoteDraftService {
     // time from manual request creation to first draft creation.
     // Uses the WHERE first_draft_created_at IS NULL guard so subsequent drafts for
     // the same request are no-ops (< 1ms cost).
-    await this.db.prepare(
-      `UPDATE quote_drafts
-          SET first_draft_created_at = datetime('now'),
-              request_to_quote_seconds = CAST(
-                (unixepoch('now') - unixepoch((SELECT created_at FROM manual_requests WHERE id = ?))) AS INTEGER
-              )
-        WHERE id = ? AND first_draft_created_at IS NULL`
-    ).bind(draft.manualRequestId ?? null, draft.id).run();
+    if (draft.manualRequestId) {
+      await this.db.prepare(
+        `UPDATE quote_drafts
+            SET first_draft_created_at = datetime('now'),
+                request_to_quote_seconds = CAST(
+                  (unixepoch('now') - unixepoch((SELECT created_at FROM manual_requests WHERE id = ?))) AS INTEGER
+                )
+          WHERE id = ? AND first_draft_created_at IS NULL`
+      ).bind(draft.manualRequestId, draft.id).run();
+    } else if (draft.manualRequestId === null && draft.jobberRequestId) {
+      // Jobber-linked draft without manual request — still record draft creation time
+      await this.db.prepare(
+        `UPDATE quote_drafts
+            SET first_draft_created_at = datetime('now')
+          WHERE id = ? AND first_draft_created_at IS NULL`
+      ).bind(draft.id).run();
+    } else if (draft.manualRequestId === null) {
+      console.warn(`[QuoteDraftService] Draft ${draft.id} has no manualRequestId — request_to_quote_seconds not computed`);
+    }
 
     // Re-read the saved row to get DB-assigned fields (draft_number, timestamps).
     // We reuse the original draft's lineItems/unresolvedItems since they were just inserted.

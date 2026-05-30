@@ -102,9 +102,13 @@ app.post('/api/admin/backfill-deathclock', async (c) => {
   }
 
   const { runBackfill } = await import('./scripts/backfill-deathclock.js');
-  const summary = await runBackfill(c.env.DB);
-
-  return c.json({ success: true, summary });
+  try {
+    const summary = await runBackfill(c.env.DB);
+    return c.json({ success: true, summary });
+  } catch (err) {
+    console.error(`[backfill] Failed: ${err instanceof Error ? err.message : String(err)}`);
+    return c.json({ success: false, error: 'Backfill failed. See server logs.' }, 500);
+  }
 });
 
 // API routes

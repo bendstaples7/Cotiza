@@ -7,6 +7,12 @@ import { ManualRequestService } from '../services/index.js';
 // ── Deathclock stats: in-memory cache ──────────────────────────
 // Simple 60s TTL cache keyed by userId. Resets on worker cold start,
 // which is acceptable — first request after cold start fetches fresh.
+//
+// NOTE: In Cloudflare Workers, each isolate has its own memory space. This
+// cache is module-level and only invalidates the local isolate. A mark-sent
+// call on isolate A will not invalidate isolate B's cache. For a single-user
+// internal tool this is low-impact — the 60s TTL means stale data is served
+// for at most one minute after a send event on another isolate.
 const cacheStore = new Map<string, { data: unknown; timestamp: number }>();
 const CACHE_TTL_MS = 60_000;
 const TRENDS_CACHE_TTL_MS = 300_000; // 5 minutes

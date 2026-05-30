@@ -23,6 +23,7 @@ import { JobberWebhookService } from '../services/jobber-webhook-service.js';
 import { JobberTokenStore } from '../services/jobber-token-store.js';
 import { RulesSyncService } from '../services/rules-sync.js';
 import { invalidateDeathclockCache, invalidateTrendsCache } from './dashboard.js';
+import { computeDeathclock } from '../services/deathclock-service.js';
 
 function createRulesSync(env: Bindings): RulesSyncService {
   const isLocal = env.ENABLE_LOCAL_SYNC === 'true';
@@ -327,10 +328,12 @@ app.get('/manual-requests', async (c) => {
   const rows = await manualRequestService.list({ userId, sortBy, includeDeathclock });
 
   if (includeDeathclock) {
-    const { computeDeathclock } = await import('../services/deathclock-service.js');
     const items = rows.map(row => ({
       ...row,
-      deathclock: computeDeathclock(row.createdAt, row.quoteSentAt),
+      // Use the SQL-computed ageSeconds from the list query rather than
+      // re-computing from createdAt, which would produce a slightly different
+      // value (SQL NOW() vs JS Date() — different moments of evaluation).
+      deathclock: computeDeathclock(row.createdAt, row.quoteSentAt, row.ageSeconds),
     }));
     return c.json({ requests: items });
   }
@@ -400,7 +403,6 @@ app.get('/manual-requests/:id/deathclock', async (c) => {
   const firstDraftCreatedAt = quoteRow?.first_draft_created_at ?? null;
   const requestToQuoteSeconds = quoteRow?.request_to_quote_seconds ?? undefined;
 
-  const { computeDeathclock } = await import('../services/deathclock-service.js');
   const deathclock = computeDeathclock(manualRequest.createdAt, quoteSentAt);
 
   // Compute creation lag and send lag from the raw timestamps
@@ -462,6 +464,11 @@ app.get('/manual-requests/:id/deathclock', async (c) => {
  * This endpoint is used when a quote is sent to the customer outside of the
  * app (e.g., email, in-person). It records the send event for deathclock
  * analytics and freezes the deathclock timer.
+ *
+ * NOTE: quote_sent_at is set on ALL quote drafts linked to this request,
+ * not a single specific draft. The semantic meaning is "a quote for this
+ * request was sent," not "this specific draft was sent." All drafts for the
+ * same request share the same quote_sent_at timestamp.
  *
  * Body (optional):
  *   { "sentAt": "2025-06-01T12:00:00Z" }  — ISO 8601 UTC timestamp.
@@ -528,7 +535,13 @@ app.post('/requests/:id/mark-sent', async (c) => {
     );
 
     for (const row of draftRows.results) {
-      await insertStmt.bind(row.id, requestId, nowIso, elapsedSeconds).run();
+      // Use INSERT OR IGNORE to gracefully handle the unique constraint
+      // on uq_quote_send_events_first_send (prevents double-counting).
+      const insertOrIgnoreStmt = db.prepare(
+        `INSERT OR IGNORE INTO quote_send_events (quote_id, request_id, sent_at, elapsed_seconds_from_request, send_type)
+         VALUES (?, ?, ?, ?, 'first')`
+      );
+      await insertOrIgnoreStmt.bind(row.id, requestId, nowIso, elapsedSeconds).run();
     }
   }
 

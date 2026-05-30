@@ -95,6 +95,7 @@ function getLabel(ageSeconds: number): string {
 export function computeDeathclock(
   requestCreatedAt: Date | string,
   quoteSentAt?: Date | string | null,
+  precomputedAgeSeconds?: number,
 ): DeathclockState {
   const created = toDate(requestCreatedAt);
 
@@ -108,6 +109,11 @@ export function computeDeathclock(
     ageSeconds = Math.floor((sent.getTime() - created.getTime()) / 1000);
     isComplete = true;
     frozen = true;
+  } else if (precomputedAgeSeconds !== undefined) {
+    // Use pre-computed age (from SQL, matching the list query's age_seconds)
+    ageSeconds = precomputedAgeSeconds;
+    isComplete = false;
+    frozen = false;
   } else {
     // Live: age = NOW() - requestCreatedAt
     const now = new Date();
