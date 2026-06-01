@@ -7,8 +7,10 @@ import { test, expect } from '@playwright/test';
 // All navigable pages across both sections
 // ---------------------------------------------------------------------------
 const pages = [
+  // Dashboard (homepage)
+  { name: 'Dashboard', url: '/dashboard' },
   // Social
-  { name: 'Dashboard', url: '/social/dashboard' },
+  { name: 'Social Dashboard', url: '/social/dashboard' },
   { name: 'Quick Post', url: '/social/posts/quick' },
   { name: 'Media Library', url: '/social/media' },
   { name: 'Settings', url: '/social/settings' },

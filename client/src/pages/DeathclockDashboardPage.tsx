@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ErrorResponse } from 'shared';
-import { fetchDeathclockStats, fetchTrends } from '../api';
+import { fetchDeathclockStats, fetchTrends, fetchPosts, fetchChannels } from '../api';
 import type { DeathclockBucketCounts, DeathclockTrends } from '../api';
+import type { Post, ChannelConnection } from 'shared';
 import { getLabel } from '../components/DeathclockBadge';
 
 const BUCKET_COLORS: Record<string, string> = {
@@ -39,7 +40,7 @@ export default function DeathclockDashboardPage() {
       const result = await fetchDeathclockStats();
       setStats(result);
     } catch (err) {
-      setError((err as ErrorResponse).message ?? 'Failed to load deathclock stats.');
+      setError((err as ErrorResponse).message ?? 'Failed to load stats.');
     } finally {
       setLoading(false);
     }
@@ -159,7 +160,7 @@ export default function DeathclockDashboardPage() {
       <div style={containerStyle}>
         <div style={loadingContainerStyle}>
           <span style={spinnerStyle} />
-          <p style={{ margin: '0.75rem 0 0', color: '#555' }}>Loading deathclock stats…</p>
+          <p style={{ margin: '0.75rem 0 0', color: '#555' }}>Loading stats…</p>
         </div>
       </div>
     );
@@ -185,7 +186,7 @@ export default function DeathclockDashboardPage() {
   if (!stats || stats.totalActive === 0) {
     return (
       <div style={containerStyle}>
-        <h1 style={titleStyle}>Deathclock Dashboard</h1>
+        <h1 style={titleStyle}>Dashboard</h1>
         <div style={emptyStyle}>
           <p style={{ margin: 0, color: '#888' }}>No active requests.</p>
         </div>
@@ -197,7 +198,7 @@ export default function DeathclockDashboardPage() {
 
   return (
     <div style={containerStyle}>
-      <h1 style={titleStyle}>Deathclock Dashboard</h1>
+      <h1 style={titleStyle}>Dashboard</h1>
       <p style={summaryStyle}>{total} active request{total !== 1 ? 's' : ''}</p>
 
       <div style={chartContainerStyle}>
@@ -246,6 +247,9 @@ export default function DeathclockDashboardPage() {
         error={trendsError}
         onRetry={loadTrends}
       />
+
+      {/* ── Social Media Summary ── */}
+      <SocialSummary />
     </div>
   );
 }
@@ -502,6 +506,78 @@ function TrendsSection({ trends, loading, error, onRetry }: {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ── SocialSummary Component ──
+
+function SocialSummary() {
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [channels, setChannels] = useState<ChannelConnection[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    Promise.all([
+      fetchPosts().then((r) => setPosts(r.posts)).catch(() => {}),
+      fetchChannels().then((r) => setChannels(r.channels)).catch(() => {}),
+    ]).finally(() => setLoading(false));
+  }, []);
+
+  const drafts = posts.filter((p) => p.status === 'draft');
+  const published = posts.filter((p) => p.status === 'published');
+  const failed = posts.filter((p) => p.status === 'failed');
+  const awaiting = posts.filter((p) => p.status === 'awaiting_approval');
+  const connected = channels.filter((c) => c.status === 'connected');
+
+  const socialStatBox: React.CSSProperties = {
+    background: '#fff',
+    borderRadius: 8,
+    padding: '1.25rem',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+    textAlign: 'center',
+  };
+
+  return (
+    <div style={{ background: '#fff', borderRadius: 8, border: '1px solid #e0e0e0', padding: '1.5rem', marginTop: '1.5rem' }}>
+      <h2 style={{ margin: '0 0 1rem', fontSize: '1.2rem', fontWeight: 600, color: '#061216' }}>
+        Social Media Summary
+      </h2>
+
+      {loading ? (
+        <p style={{ color: '#999', textAlign: 'center', padding: '1rem 0' }}>Loading...</p>
+      ) : (
+        <>
+          {connected.length === 0 && (
+            <div style={{ background: '#fff3e0', border: '1px solid #ffe0b2', borderRadius: 8, padding: '0.75rem 1rem', marginBottom: '1rem', fontSize: '0.9rem' }}>
+              {channels.some((c) => c.status === 'expired') ? '📡 Instagram token expired.' : '📡 No channels connected.'}
+            </div>
+          )}
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '1rem' }}>
+            <div style={socialStatBox}>
+              <div style={{ fontSize: '1.75rem', fontWeight: 700, color: '#0a1e24' }}>{posts.length}</div>
+              <div style={{ fontSize: '0.85rem', color: '#888' }}>Total Posts</div>
+            </div>
+            <div style={socialStatBox}>
+              <div style={{ fontSize: '1.75rem', fontWeight: 700, color: '#ff9800' }}>{drafts.length}</div>
+              <div style={{ fontSize: '0.85rem', color: '#888' }}>Drafts</div>
+            </div>
+            <div style={socialStatBox}>
+              <div style={{ fontSize: '1.75rem', fontWeight: 700, color: '#2196f3' }}>{awaiting.length}</div>
+              <div style={{ fontSize: '0.85rem', color: '#888' }}>Awaiting Review</div>
+            </div>
+            <div style={socialStatBox}>
+              <div style={{ fontSize: '1.75rem', fontWeight: 700, color: '#4caf50' }}>{published.length}</div>
+              <div style={{ fontSize: '0.85rem', color: '#888' }}>Published</div>
+            </div>
+            <div style={socialStatBox}>
+              <div style={{ fontSize: '1.75rem', fontWeight: 700, color: '#f44336' }}>{failed.length}</div>
+              <div style={{ fontSize: '0.85rem', color: '#888' }}>Failed</div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

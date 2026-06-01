@@ -617,7 +617,7 @@ export default function QuoteDraftPage() {
           />
         )}
         {deathclockLoading && !deathclock && (
-          <span style={{ fontSize: '0.8rem', color: '#999' }}>Loading deathclock...</span>
+          <span style={{ fontSize: '0.8rem', color: '#999' }}>Loading...</span>
         )}
         {deathclock && deathclock.siblingQuotes && deathclock.siblingQuotes.length > 1 && (
           <span style={{ fontSize: '0.8rem', color: '#666', fontWeight: 500 }}>
