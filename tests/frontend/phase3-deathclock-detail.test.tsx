@@ -81,6 +81,8 @@ vi.mock('../../client/src/api', () => ({
   fetchRules: vi.fn().mockResolvedValue([]),
   fetchJobberRequestDetail: vi.fn().mockRejectedValue(new Error('not found')),
   fetchCatalog: vi.fn().mockResolvedValue([]),
+  fetchPosts: vi.fn().mockResolvedValue({ posts: [], page: 1, limit: 20 }),
+  fetchChannels: vi.fn().mockResolvedValue({ channels: [] }),
 }));
 
 // ---------------------------------------------------------------------------

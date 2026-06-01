@@ -3,13 +3,12 @@ import { useAuth } from './AuthContext';
 import { useEffect, useRef, useState } from 'react';
 import { API_BASE, triggerCookieRefresh } from './api';
 
-const TAB_STORAGE_KEY = 'app_active_tab';
-
-type TabId = 'social' | 'quotes';
-
-const tabs: { id: TabId; label: string; path: string }[] = [
-  { id: 'social', label: 'Social Media', path: '/social/dashboard' },
-  { id: 'quotes', label: 'Quotes', path: '/quotes' },
+const quotesNavItems = [
+  { to: '/quotes/queue', label: 'Request Queue' },
+  { to: '/quotes', label: 'New Quote' },
+  { to: '/quotes/drafts', label: 'Saved Drafts' },
+  { to: '/quotes/rules', label: 'Rules & Product Ordering' },
+  { to: '/quotes/catalog', label: 'Catalog & Templates' },
 ];
 
 const socialNavItems = [
@@ -19,38 +18,6 @@ const socialNavItems = [
   { to: '/social/settings', label: 'Settings' },
   { to: '/social/activity-log', label: 'Activity Log' },
 ];
-
-const quotesNavItems = [
-  { to: '/quotes/queue', label: 'Request Queue' },
-  { to: '/quotes/deathclock-dashboard', label: 'Deathclock Dashboard' },
-  { to: '/quotes', label: 'New Quote' },
-  { to: '/quotes/drafts', label: 'Saved Drafts' },
-  { to: '/quotes/rules', label: 'Rules & Product Ordering' },
-  { to: '/quotes/catalog', label: 'Catalog & Templates' },
-];
-
-function getActiveTab(pathname: string): TabId {
-  if (pathname.startsWith('/quotes')) return 'quotes';
-  return 'social';
-}
-
-function getStoredTab(): TabId {
-  try {
-    const stored = localStorage.getItem(TAB_STORAGE_KEY);
-    if (stored === 'social' || stored === 'quotes') return stored;
-  } catch {
-    // localStorage unavailable
-  }
-  return 'social';
-}
-
-function storeTab(tab: TabId) {
-  try {
-    localStorage.setItem(TAB_STORAGE_KEY, tab);
-  } catch {
-    // localStorage unavailable
-  }
-}
 
 function SystemsCheckOverlay({ children }: { children: React.ReactNode }) {
   return (
@@ -255,29 +222,6 @@ export default function Layout() {
   const { user, logout, systemsStatus, recheckSystems, recheckSystemsSilent, skipInstagram, skipJobberSession } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
-  const activeTab = getActiveTab(location.pathname);
-  const [lastSocialPath, setLastSocialPath] = useState('/social/dashboard');
-  const [lastQuotesPath, setLastQuotesPath] = useState('/quotes');
-
-  // Track the last visited path within each section for state preservation
-  useEffect(() => {
-    if (location.pathname.startsWith('/social')) {
-      setLastSocialPath(location.pathname);
-    } else if (location.pathname.startsWith('/quotes')) {
-      setLastQuotesPath(location.pathname);
-    }
-  }, [location.pathname]);
-
-  // Persist active tab to localStorage
-  useEffect(() => {
-    storeTab(activeTab);
-  }, [activeTab]);
-
-  const handleTabClick = (tab: TabId) => {
-    if (tab === activeTab) return;
-    const targetPath = tab === 'social' ? lastSocialPath : lastQuotesPath;
-    navigate(targetPath);
-  };
 
   // Systems check states — render before the normal shell
   if (systemsStatus.state === 'checking') {
@@ -354,11 +298,9 @@ export default function Layout() {
     );
   }
 
-  const navItems = activeTab === 'social' ? socialNavItems : quotesNavItems;
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
-      {/* Instagram warning banner — shown above the tab bar when instagram_issue */}
+      {/* Instagram warning banner — shown above everything when instagram_issue */}
       {systemsStatus.state === 'instagram_issue' && (
         <InstagramBanner
           instagram={systemsStatus.instagram}
@@ -367,46 +309,71 @@ export default function Layout() {
         />
       )}
 
-      {/* Top-level tab bar */}
-      <div style={{ display: 'flex', background: '#061216', borderBottom: '2px solid #0a1e24' }}>
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => handleTabClick(tab.id)}
-            style={{
-              padding: '0.75rem 1.5rem',
-              background: activeTab === tab.id ? '#0a1e24' : 'transparent',
-              color: activeTab === tab.id ? '#00a89d' : '#888',
-              border: 'none',
-              borderBottom: activeTab === tab.id ? '2px solid #00a89d' : '2px solid transparent',
-              cursor: 'pointer',
-              fontWeight: activeTab === tab.id ? 700 : 400,
-              fontSize: '0.95rem',
-              transition: 'color 0.15s, background 0.15s',
-            }}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
       {/* Sidebar + content area */}
       <div style={{ display: 'flex', flex: 1 }}>
         <nav style={{ width: 220, background: '#0a1e24', color: '#fff', padding: '1rem', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ fontWeight: 700, fontSize: '1.1rem', marginBottom: '2rem' }}>Cotiza</div>
+          <div style={{ fontWeight: 700, fontSize: '1.1rem', marginBottom: '1rem' }}>Cotiza</div>
           <ul style={{ listStyle: 'none', padding: 0, margin: 0, flex: 1 }}>
-            {navItems.map((item) => (
-              <li key={item.to} style={{ marginBottom: '0.5rem' }}>
+            {/* Dashboard — always visible */}
+            <li style={{ marginBottom: '0.5rem' }}>
+              <NavLink
+                to="/dashboard"
+                end
+                style={({ isActive }) => ({
+                  color: isActive ? '#00a89d' : '#fff',
+                  textDecoration: 'none',
+                  display: 'block',
+                  padding: '0.5rem 0.75rem',
+                  borderRadius: 4,
+                  background: isActive ? 'rgba(0,168,157,0.1)' : 'transparent',
+                  fontWeight: isActive ? 600 : 400,
+                  fontSize: '0.9rem',
+                })}
+              >
+                Dashboard
+              </NavLink>
+            </li>
+
+            {/* Quotes section */}
+            <li style={{ marginBottom: '0.25rem', padding: '0.5rem 0.75rem 0.25rem', fontSize: '0.85rem', color: '#fff', fontWeight: 700, letterSpacing: '0.02em' }}>
+              Quotes
+            </li>
+            {quotesNavItems.map((item) => (
+              <li key={item.to} style={{ marginBottom: '0.25rem', paddingLeft: '0.5rem' }}>
                 <NavLink
                   to={item.to}
                   end={item.to === '/quotes'}
                   style={({ isActive }) => ({
-                    color: isActive ? '#00a89d' : '#ccc',
+                    color: isActive ? '#00a89d' : '#999',
                     textDecoration: 'none',
                     display: 'block',
-                    padding: '0.5rem 0.75rem',
+                    padding: '0.4rem 0.75rem',
                     borderRadius: 4,
-                    background: isActive ? 'rgba(0,168,157,0.1)' : 'transparent',
+                    fontSize: '0.88rem',
+                    background: isActive ? 'rgba(0,168,157,0.08)' : 'transparent',
+                  })}
+                >
+                  {item.label}
+                </NavLink>
+              </li>
+            ))}
+
+            {/* Social Media section */}
+            <li style={{ marginTop: '0.5rem', marginBottom: '0.25rem', padding: '0.5rem 0.75rem 0.25rem', fontSize: '0.85rem', color: '#fff', fontWeight: 700, letterSpacing: '0.02em' }}>
+              Social Media
+            </li>
+            {socialNavItems.map((item) => (
+              <li key={item.to} style={{ marginBottom: '0.25rem', paddingLeft: '0.5rem' }}>
+                <NavLink
+                  to={item.to}
+                  style={({ isActive }) => ({
+                    color: isActive ? '#00a89d' : '#999',
+                    textDecoration: 'none',
+                    display: 'block',
+                    padding: '0.4rem 0.75rem',
+                    borderRadius: 4,
+                    fontSize: '0.88rem',
+                    background: isActive ? 'rgba(0,168,157,0.08)' : 'transparent',
                   })}
                 >
                   {item.label}

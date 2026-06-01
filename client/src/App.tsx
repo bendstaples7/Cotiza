@@ -32,6 +32,9 @@ export default function App() {
             <Route path="/login" element={<LoginPage />} />
             <Route element={<ProtectedRoute />}>
               <Route element={<Layout />}>
+                {/* Main Dashboard — homepage */}
+                <Route path="/dashboard" element={<DeathclockDashboardPage />} />
+
                 {/* Social Media section */}
                 <Route path="/social/dashboard" element={<DashboardPage />} />
                 <Route path="/social/posts/quick" element={<QuickPostPage />} />
@@ -42,7 +45,6 @@ export default function App() {
 
                 {/* Quotes section */}
                 <Route path="/quotes/queue" element={<RequestQueuePage />} />
-                <Route path="/quotes/deathclock-dashboard" element={<DeathclockDashboardPage />} />
                 <Route path="/quotes" element={<QuoteInputPage />} />
                 <Route path="/quotes/drafts" element={<QuoteDraftsListPage />} />
                 <Route path="/quotes/drafts/:id" element={<QuoteDraftPage />} />
@@ -50,14 +52,13 @@ export default function App() {
                 <Route path="/quotes/catalog" element={<ManualFallbackPage />} />
               </Route>
             </Route>
-            {/* Redirect legacy routes to new /social/* prefix */}
-            <Route path="/dashboard" element={<Navigate to="/social/dashboard" replace />} />
+            {/* Redirect legacy routes to new paths */}
             <Route path="/posts/quick" element={<Navigate to="/social/posts/quick" replace />} />
             <Route path="/posts/:id" element={<LegacyPostRedirect />} />
             <Route path="/media" element={<Navigate to="/social/media" replace />} />
             <Route path="/settings" element={<Navigate to="/social/settings" replace />} />
             <Route path="/activity-log" element={<Navigate to="/social/activity-log" replace />} />
-            <Route path="*" element={<Navigate to="/social/dashboard" replace />} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </ErrorToastProvider>
       </AuthProvider>
