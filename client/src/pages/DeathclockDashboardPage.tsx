@@ -516,19 +516,23 @@ function SocialSummary() {
   const [posts, setPosts] = useState<Post[]>([]);
   const [channels, setChannels] = useState<ChannelConnection[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
 
   useEffect(() => {
     // Trigger Instagram sync so the social summary shows fresh data
-    syncInstagramPosts().catch((err) =>
-      console.error('Instagram sync failed on dashboard load:', err)
-    );
+    syncInstagramPosts().catch((err) => {
+      console.error('Instagram sync failed on dashboard load:', err);
+      setFetchError(true);
+    });
 
     Promise.all([
       fetchPosts().then((r) => setPosts(r.posts)).catch((err) => {
         console.error('Failed to fetch posts:', err);
+        setFetchError(true);
       }),
       fetchChannels().then((r) => setChannels(r.channels)).catch((err) => {
         console.error('Failed to fetch channels:', err);
+        setFetchError(true);
       }),
     ]).finally(() => setLoading(false));
   }, []);
@@ -554,7 +558,11 @@ function SocialSummary() {
       </h2>
 
       {loading ? (
-        <p style={{ color: '#999', textAlign: 'center', padding: '1rem 0' }}>Loading...</p>
+        <p style={{ color: '#999', textAlign: 'center', padding: '1rem 0' }}>Loading stats...</p>
+      ) : fetchError ? (
+        <div style={{ background: '#fff0f0', border: '1px solid #ffcccc', borderRadius: 8, padding: '0.75rem 1rem', fontSize: '0.9rem', color: '#cc0000' }}>
+          ⚠️ Could not load social media data. <a href="/dashboard" style={{ color: '#cc0000', textDecoration: 'underline' }}>Retry</a>
+        </div>
       ) : (
         <>
           {connected.length === 0 && (
