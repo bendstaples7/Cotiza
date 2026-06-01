@@ -519,22 +519,32 @@ function SocialSummary() {
   const [fetchError, setFetchError] = useState(false);
 
   useEffect(() => {
-    // Trigger Instagram sync so the social summary shows fresh data
-    syncInstagramPosts().catch((err) => {
-      console.error('Instagram sync failed on dashboard load:', err);
-      setFetchError(true);
-    });
+    let cancelled = false;
 
-    Promise.all([
-      fetchPosts().then((r) => setPosts(r.posts)).catch((err) => {
-        console.error('Failed to fetch posts:', err);
-        setFetchError(true);
-      }),
-      fetchChannels().then((r) => setChannels(r.channels)).catch((err) => {
-        console.error('Failed to fetch channels:', err);
-        setFetchError(true);
-      }),
-    ]).finally(() => setLoading(false));
+    // Trigger Instagram sync first so fresh data is available before the fetch
+    syncInstagramPosts()
+      .catch((err) => {
+        console.error('Instagram sync failed on dashboard load:', err);
+        // Sync failure is ancillary — don't set fetchError, the main fetch might still succeed
+      })
+      .then(() => {
+        if (cancelled) return;
+        return Promise.all([
+          fetchPosts().then((r) => setPosts(r.posts)).catch((err) => {
+            console.error('Failed to fetch posts:', err);
+            setFetchError(true);
+          }),
+          fetchChannels().then((r) => setChannels(r.channels)).catch((err) => {
+            console.error('Failed to fetch channels:', err);
+            setFetchError(true);
+          }),
+        ]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => { cancelled = true; };
   }, []);
 
   const drafts = posts.filter((p) => p.status === 'draft');
