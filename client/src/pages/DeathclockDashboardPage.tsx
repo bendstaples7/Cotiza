@@ -530,14 +530,18 @@ function SocialSummary() {
       .then(() => {
         if (cancelled) return;
         return Promise.all([
-          fetchPosts().then((r) => setPosts(r.posts)).catch((err) => {
-            console.error('Failed to fetch posts:', err);
-            setFetchError(true);
-          }),
-          fetchChannels().then((r) => setChannels(r.channels)).catch((err) => {
-            console.error('Failed to fetch channels:', err);
-            setFetchError(true);
-          }),
+          fetchPosts()
+            .then((r) => { if (!cancelled) setPosts(r.posts); })
+            .catch((err) => {
+              console.error('Failed to fetch posts:', err);
+              if (!cancelled) setFetchError(true);
+            }),
+          fetchChannels()
+            .then((r) => { if (!cancelled) setChannels(r.channels); })
+            .catch((err) => {
+              console.error('Failed to fetch channels:', err);
+              if (!cancelled) setFetchError(true);
+            }),
         ]);
       })
       .finally(() => {
