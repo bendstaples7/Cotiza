@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ErrorResponse } from 'shared';
-import { fetchDeathclockStats, fetchTrends, fetchPosts, fetchChannels } from '../api';
+import { fetchDeathclockStats, fetchTrends, fetchPosts, fetchChannels, syncInstagramPosts } from '../api';
 import type { DeathclockBucketCounts, DeathclockTrends } from '../api';
 import type { Post, ChannelConnection } from 'shared';
 import { getLabel } from '../components/DeathclockBadge';
@@ -518,9 +518,18 @@ function SocialSummary() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Trigger Instagram sync so the social summary shows fresh data
+    syncInstagramPosts().catch((err) =>
+      console.error('Instagram sync failed on dashboard load:', err)
+    );
+
     Promise.all([
-      fetchPosts().then((r) => setPosts(r.posts)).catch(() => {}),
-      fetchChannels().then((r) => setChannels(r.channels)).catch(() => {}),
+      fetchPosts().then((r) => setPosts(r.posts)).catch((err) => {
+        console.error('Failed to fetch posts:', err);
+      }),
+      fetchChannels().then((r) => setChannels(r.channels)).catch((err) => {
+        console.error('Failed to fetch channels:', err);
+      }),
     ]).finally(() => setLoading(false));
   }, []);
 

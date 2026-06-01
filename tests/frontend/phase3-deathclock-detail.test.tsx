@@ -83,6 +83,7 @@ vi.mock('../../client/src/api', () => ({
   fetchCatalog: vi.fn().mockResolvedValue([]),
   fetchPosts: vi.fn().mockResolvedValue({ posts: [], page: 1, limit: 20 }),
   fetchChannels: vi.fn().mockResolvedValue({ channels: [] }),
+  syncInstagramPosts: vi.fn().mockResolvedValue({ synced: 0, skipped: 0, errors: [] }),
 }));
 
 // ---------------------------------------------------------------------------
