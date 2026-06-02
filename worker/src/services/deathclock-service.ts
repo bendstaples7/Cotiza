@@ -63,14 +63,15 @@ function getLabel(ageSeconds: number): string {
     return `${Math.round(totalHours)}h`;
   }
 
-  // < 7 days — one decimal place
+  // < 7 days — one decimal place (floor-based to prevent rounding across 7-day boundary)
   if (totalDays < 7) {
-    return `${totalDays.toFixed(1)}d`;
+    return `${(Math.floor(totalDays * 10) / 10).toFixed(1)}d`;
   }
 
   // < 90 days — whole days + remaining hours
-  const wholeDays = Math.floor(totalDays);
-  const remainingHours = Math.round(totalHours % 24);
+  const wholeHours = Math.floor(totalHours);
+  const wholeDays = Math.floor(wholeHours / 24);
+  const remainingHours = wholeHours % 24;
   return `${wholeDays}d ${remainingHours}h`;
 }
 

@@ -10,6 +10,7 @@ import type {
   ManualRequest, CreateManualRequestPayload,
   ProductivityRate, UpdateProductivityRatePayload,
   DeathclockState,
+  DeathclockDetail,
 } from 'shared';
 
 /** A manual request row returned by the list endpoint with deathclock enrichment. */
@@ -709,7 +710,7 @@ export async function fetchDraftManualRequest(draftId: string): Promise<ManualRe
   return data?.manualRequest ?? null;
 }
 
-export async function fetchDeathclock(requestId: string): Promise<DeathclockState> {
+export async function fetchDeathclock(requestId: string): Promise<DeathclockDetail> {
   const res = await fetch(API_BASE + '/api/quotes/manual-requests/' + requestId + '/deathclock', {
     headers: { ...authHeaders() },
   });

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { QuoteDraft, QuoteLineItem, LineItemRationale, GenerationTrace, ErrorResponse, RuleGroupWithRules, Rule, ProductCatalogEntry, ActionItem, QuantityPredictionMeta, QuantitySource, ResolutionConfidence, ResolutionTier, DeathclockState } from 'shared';
+import type { QuoteDraft, QuoteLineItem, LineItemRationale, GenerationTrace, ErrorResponse, RuleGroupWithRules, Rule, ProductCatalogEntry, ActionItem, QuantityPredictionMeta, QuantitySource, ResolutionConfidence, ResolutionTier, DeathclockState, DeathclockDetail } from 'shared';
 import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber, fetchDeathclock, markRequestSent } from '../api';
 import type { JobberRequestDetail } from '../api';
 import SimilarQuotesPanel from './SimilarQuotesPanel';
@@ -32,7 +32,7 @@ export default function QuoteDraftPage() {
   const [ruleCreatedMsg, setRuleCreatedMsg] = useState<string | null>(null);
   const [ruleCreationWarning, setRuleCreationWarning] = useState<string | null>(null);
   const [requestDetail, setRequestDetail] = useState<JobberRequestDetail | null>(null);
-  const [deathclock, setDeathclock] = useState<DeathclockState | null>(null);
+  const [deathclock, setDeathclock] = useState<DeathclockDetail | null>(null);
   const [deathclockLoading, setDeathclockLoading] = useState(false);
   const [showMarkSentDialog, setShowMarkSentDialog] = useState(false);
   const [markSentTimestamp, setMarkSentTimestamp] = useState('');

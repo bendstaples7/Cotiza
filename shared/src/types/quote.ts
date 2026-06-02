@@ -644,6 +644,15 @@ export interface DeathclockState {
   isComplete: boolean;
   /** True when the badge should not animate / tick */
   frozen: boolean;
+}
+
+/**
+ * Extended deathclock state returned by the detail endpoint.
+ * Includes all DeathclockState fields plus enrichment data
+ * (creation lag, send lag, events, sibling quotes) that are
+ * only available when fetching a single request in detail.
+ */
+export interface DeathclockDetail extends DeathclockState {
   /** Seconds from request creation to first draft creation (optional). */
   quoteCreationLagSeconds?: number;
   /** Seconds from first draft creation to quote sent (optional, only present for completed quotes). */

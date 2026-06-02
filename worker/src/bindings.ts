@@ -25,5 +25,5 @@ export interface Bindings {
   D1_DATABASE_ID: string;
   ENABLE_LOCAL_SYNC?: string;
   /** Secret key for admin operations (e.g. deathclock backfill). */
-  BACKFILL_SECRET_KEY: string;
+  BACKFILL_SECRET_KEY?: string;
 }

@@ -111,14 +111,14 @@ export class QuoteDraftService {
                 )
           WHERE id = ? AND first_draft_created_at IS NULL`
       ).bind(draft.manualRequestId, draft.id).run();
-    } else if (draft.manualRequestId === null && draft.jobberRequestId) {
+    } else if (draft.manualRequestId == null && draft.jobberRequestId) {
       // Jobber-linked draft without manual request — still record draft creation time
       await this.db.prepare(
         `UPDATE quote_drafts
             SET first_draft_created_at = datetime('now')
           WHERE id = ? AND first_draft_created_at IS NULL`
       ).bind(draft.id).run();
-    } else if (draft.manualRequestId === null) {
+    } else if (draft.manualRequestId == null) {
       console.warn(`[QuoteDraftService] Draft ${draft.id} has no manualRequestId — request_to_quote_seconds not computed`);
     }
 
