@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ErrorResponse } from 'shared';
 import { fetchDeathclockStats, fetchTrends, fetchPosts, fetchChannels, syncInstagramPosts } from '../api';
@@ -517,39 +517,49 @@ function SocialSummary() {
   const [channels, setChannels] = useState<ChannelConnection[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(false);
+  const cancelledRef = useRef(false);
 
-  useEffect(() => {
-    let cancelled = false;
+  const loadSocialData = useCallback(async () => {
+    cancelledRef.current = false;
+    setLoading(true);
+    setFetchError(false);
 
     // Trigger Instagram sync first so fresh data is available before the fetch
-    syncInstagramPosts()
+    await syncInstagramPosts()
       .catch((err) => {
         console.error('Instagram sync failed on dashboard load:', err);
         // Sync failure is ancillary — don't set fetchError, the main fetch might still succeed
-      })
-      .then(() => {
-        if (cancelled) return;
-        return Promise.all([
-          fetchPosts()
-            .then((r) => { if (!cancelled) setPosts(r.posts); })
-            .catch((err) => {
-              console.error('Failed to fetch posts:', err);
-              if (!cancelled) setFetchError(true);
-            }),
-          fetchChannels()
-            .then((r) => { if (!cancelled) setChannels(r.channels); })
-            .catch((err) => {
-              console.error('Failed to fetch channels:', err);
-              if (!cancelled) setFetchError(true);
-            }),
-        ]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
       });
 
-    return () => { cancelled = true; };
+    if (cancelledRef.current) return;
+
+    try {
+      const [postsResult, channelsResult] = await Promise.all([
+        fetchPosts(),
+        fetchChannels(),
+      ]);
+
+      if (!cancelledRef.current) {
+        setPosts(postsResult.posts);
+        setChannels(channelsResult.channels);
+      }
+    } catch (err) {
+      if (!cancelledRef.current) {
+        console.error('Failed to fetch social data:', err);
+        setFetchError(true);
+      }
+    } finally {
+      if (!cancelledRef.current) {
+        setLoading(false);
+      }
+    }
   }, []);
+
+  useEffect(() => {
+    cancelledRef.current = false;
+    loadSocialData();
+    return () => { cancelledRef.current = true; };
+  }, [loadSocialData]);
 
   const drafts = posts.filter((p) => p.status === 'draft');
   const published = posts.filter((p) => p.status === 'published');
@@ -574,8 +584,9 @@ function SocialSummary() {
       {loading ? (
         <p style={{ color: '#999', textAlign: 'center', padding: '1rem 0' }}>Loading stats...</p>
       ) : fetchError ? (
-        <div style={{ background: '#fff0f0', border: '1px solid #ffcccc', borderRadius: 8, padding: '0.75rem 1rem', fontSize: '0.9rem', color: '#cc0000' }}>
-          ⚠️ Could not load social media data. <a href="/dashboard" style={{ color: '#cc0000', textDecoration: 'underline' }}>Retry</a>
+        <div style={{ background: '#fff0f0', border: '1px solid #ffcccc', borderRadius: 8, padding: '0.75rem 1rem', fontSize: '0.9rem', color: '#cc0000', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+          <span>⚠️ Could not load social media data.</span>
+          <button type="button" onClick={loadSocialData} style={{ background: '#cc0000', color: '#fff', border: 'none', borderRadius: 4, padding: '0.35rem 0.75rem', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Retry</button>
         </div>
       ) : (
         <>
