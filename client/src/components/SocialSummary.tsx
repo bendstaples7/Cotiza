@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { fetchPosts, fetchChannels, syncInstagramPosts } from '../api';
+import { fetchPosts, fetchChannels } from '../api';
 import type { Post, ChannelConnection } from 'shared';
 
 interface SocialSummaryProps {
@@ -10,10 +10,13 @@ interface SocialSummaryProps {
 /**
  * Shared social-media summary component.
  *
- * Fetches posts/channels (after triggering an Instagram sync) and renders
- * a 5-column metric grid showing total posts, drafts, awaiting review,
- * published, and failed counts. Also shows a channel-status callout when no
- * channels are connected or the token has expired.
+ * Fetches posts/channels and renders a 5-column metric grid showing total
+ * posts, drafts, awaiting review, published, and failed counts. Also shows
+ * a channel-status callout when no channels are connected or the token has
+ * expired.
+ *
+ * Note: Instagram sync is NOT triggered on mount — the dashboard is a
+ * passive read view. Sync should be triggered on a schedule or manually.
  *
  * Props:
  *   onRetry  - optional hook fired after the user clicks Retry (e.g. for analytics)
@@ -29,15 +32,6 @@ export default function SocialSummary({ onRetry }: SocialSummaryProps) {
     cancelledRef.current = false;
     setLoading(true);
     setFetchError(false);
-
-    // Trigger Instagram sync first so fresh data is available before the fetch
-    await syncInstagramPosts()
-      .catch((err) => {
-        console.error('Instagram sync failed:', err);
-        // Sync failure is ancillary — don't set fetchError, the main fetch might still succeed
-      });
-
-    if (cancelledRef.current) return;
 
     try {
       const [postsResult, channelsResult] = await Promise.all([

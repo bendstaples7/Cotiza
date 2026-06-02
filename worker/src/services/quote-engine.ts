@@ -5,6 +5,7 @@ import { QuantityEngine } from './quantity-engine.js';
 import { SqftResolutionService } from './sqft-resolution-service.js';
 import type { SqftResolutionResult } from './sqft-resolution-service.js';
 import { ProductivityRatesService } from './productivity-rates-service.js';
+import { MaterialPriceService } from './material-price-service.js';
 import { SPACE_ALLOCATIONS } from './space-allocation-service.js';
 import { CompletedWorkService, filterCompletedWork } from './completed-work-service.js';
 import type { ProductCatalogEntry, QuoteTemplate, QuoteDraft, QuoteLineItem, LineItemRationale, SimilarQuote, StructuredRule, AuditEntry, EngineLineItem, ActionItem, QuantityPredictionMeta, RuleCondition, DepositSchedule } from 'shared';
@@ -25,6 +26,9 @@ export interface QuoteEngineInput {
   jobberPropertyAddress?: string | null;
   /** Customer address from a manual request (for sqft public records lookup) */
   manualRequestAddress?: string | null;
+  /** When true, material price calculation (markup on catalog base prices)
+   *  is applied to all matched line items during quote generation. */
+  materialPriceMode?: boolean;
 }
 
 export interface QuoteEngineOutput {
@@ -731,6 +735,42 @@ export class QuoteEngine {
       // Always sort by catalog sort order. Rule positioning intent (placeAfter/
       // placeBefore) is reflected in the catalog sort_order values.
       aiResult.lineItems = sortLineItemsByCatalog(aiResult.lineItems, catalog);
+
+      // --- Material Price Calculation ---
+      // When materialPriceMode is enabled, apply a markup multiplier to all
+      // matched line items' unit prices. The markup covers material handling,
+      // waste, consumables, and profit margin.
+      if (input.materialPriceMode) {
+        const materialPriceService = new MaterialPriceService();
+        const lineItemsArray = aiResult.lineItems.map((item) => {
+          // Convert AILineItem to QuoteLineItem shape for the service
+          return {
+            ...item,
+            id: item.id ?? '',
+            description: item.description ?? '',
+            originalText: item.originalText ?? '',
+            resolved: item.confidenceScore >= CONFIDENCE_THRESHOLD && item.productCatalogEntryId !== null,
+            ruleIdsApplied: item.ruleIdsApplied ?? [],
+          } as QuoteLineItem;
+        });
+
+        const { adjustedItems } = materialPriceService.calculateMaterialPrices(
+          lineItemsArray,
+          catalog,
+        );
+
+        // Map the adjusted unit prices back to AILineItem format
+        const adjustedPrices = new Map(
+          adjustedItems.map((item) => [item.id, item.unitPrice]),
+        );
+        for (const item of aiResult.lineItems) {
+          const id = item.id ?? '';
+          const newPrice = adjustedPrices.get(id);
+          if (newPrice !== undefined) {
+            item.unitPrice = newPrice;
+          }
+        }
+      }
 
       return this.buildDraft(input, aiResult, auditTrail, rulesCustomerNote, sqftResolutionResult, rulesDepositSchedule, trace);
     } catch (err) {

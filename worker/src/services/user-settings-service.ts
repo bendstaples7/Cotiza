@@ -14,7 +14,7 @@ export class UserSettingsService {
 
   async getSettings(userId: string): Promise<UserSettings> {
     const row = await this.db.prepare(
-      'SELECT id, user_id, advisor_mode, approval_mode, updated_at FROM user_settings WHERE user_id = ?'
+      'SELECT id, user_id, advisor_mode, approval_mode, material_price_mode, updated_at FROM user_settings WHERE user_id = ?'
     ).bind(userId).first() as any;
 
     if (!row) {
@@ -32,13 +32,14 @@ export class UserSettingsService {
       userId: row.user_id as string,
       advisorMode: row.advisor_mode as AdvisorMode,
       approvalMode: row.approval_mode as ApprovalMode,
+      materialPriceMode: row.material_price_mode === 1 || row.material_price_mode === true,
       updatedAt: new Date(row.updated_at as string),
     };
   }
 
   async updateSettings(
     userId: string,
-    updates: { advisorMode?: AdvisorMode; approvalMode?: ApprovalMode },
+    updates: { advisorMode?: AdvisorMode; approvalMode?: ApprovalMode; materialPriceMode?: boolean },
   ): Promise<UserSettings> {
     if (updates.approvalMode !== undefined) {
       if (!VALID_APPROVAL_MODES.includes(updates.approvalMode)) {
@@ -71,6 +72,16 @@ export class UserSettingsService {
       });
     }
 
+    if (updates.materialPriceMode !== undefined && typeof updates.materialPriceMode !== 'boolean') {
+      throw new PlatformError({
+        severity: 'error',
+        component: 'UserSettingsService',
+        operation: 'updateSettings',
+        description: 'materialPriceMode must be a boolean value.',
+        recommendedActions: ['Provide true or false for materialPriceMode'],
+      });
+    }
+
     const setClauses: string[] = [];
     const params: unknown[] = [];
 
@@ -82,6 +93,11 @@ export class UserSettingsService {
     if (updates.approvalMode !== undefined) {
       setClauses.push('approval_mode = ?');
       params.push(updates.approvalMode);
+    }
+
+    if (updates.materialPriceMode !== undefined) {
+      setClauses.push('material_price_mode = ?');
+      params.push(updates.materialPriceMode ? 1 : 0);
     }
 
     if (setClauses.length === 0) {
@@ -96,7 +112,7 @@ export class UserSettingsService {
     ).bind(...params).run();
 
     const row = await this.db.prepare(
-      'SELECT id, user_id, advisor_mode, approval_mode, updated_at FROM user_settings WHERE user_id = ?'
+      'SELECT id, user_id, advisor_mode, approval_mode, material_price_mode, updated_at FROM user_settings WHERE user_id = ?'
     ).bind(userId).first() as any;
 
     if (!row) {
@@ -114,6 +130,7 @@ export class UserSettingsService {
       userId: row.user_id as string,
       advisorMode: row.advisor_mode as AdvisorMode,
       approvalMode: row.approval_mode as ApprovalMode,
+      materialPriceMode: row.material_price_mode === 1 || row.material_price_mode === true,
       updatedAt: new Date(row.updated_at as string),
     };
   }
