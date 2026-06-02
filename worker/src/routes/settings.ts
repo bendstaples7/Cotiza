@@ -33,18 +33,21 @@ app.get('/settings', sessionMiddleware, async (c) => {
 
 /**
  * PUT /settings
- * Updates the authenticated user's advisor mode and/or approval mode.
+ * Updates the authenticated user's advisor mode, approval mode, and/or
+ * material price mode.
  */
 app.put('/settings', sessionMiddleware, async (c) => {
   const userId = c.get('user').id;
   const body = await c.req.json() as {
     advisorMode?: AdvisorMode;
     approvalMode?: ApprovalMode;
+    materialPriceMode?: boolean;
   };
   const userSettingsService = new UserSettingsService(c.env.DB);
   const settings = await userSettingsService.updateSettings(userId, {
     advisorMode: body.advisorMode,
     approvalMode: body.approvalMode,
+    materialPriceMode: body.materialPriceMode,
   });
   return c.json({ settings });
 });

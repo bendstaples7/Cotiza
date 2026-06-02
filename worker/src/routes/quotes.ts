@@ -18,6 +18,7 @@ import {
   ManualRequestService,
   QuantityEngine,
   ProductivityRatesService,
+  UserSettingsService,
 } from '../services/index.js';
 import { JobberWebhookService } from '../services/jobber-webhook-service.js';
 import { JobberTokenStore } from '../services/jobber-token-store.js';
@@ -789,6 +790,16 @@ app.post('/generate', async (c) => {
     }
   }
 
+  // Fetch user settings to check material price mode (graceful degradation)
+  let materialPriceMode = false;
+  try {
+    const userSettingsService = new UserSettingsService(db);
+    const userSettings = await userSettingsService.getSettings(userId);
+    materialPriceMode = userSettings.materialPriceMode;
+  } catch {
+    // Graceful degradation — settings fetch failure must not block quote generation
+  }
+
   const result = await quoteEngine.generateQuote(
     {
       customerText: body.customerText ?? '',
@@ -800,6 +811,7 @@ app.post('/generate', async (c) => {
       similarQuotes,
       jobberPropertyAddress,
       manualRequestAddress,
+      materialPriceMode,
     },
     catalog,
     templates,

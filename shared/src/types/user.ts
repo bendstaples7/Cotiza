@@ -15,6 +15,9 @@ export interface UserSettings {
   userId: string;
   advisorMode: AdvisorMode;
   approvalMode: ApprovalMode;
+  /** When true, quote generation will calculate material prices using
+   *  the predefined formula instead of using the catalog's unit price directly. */
+  materialPriceMode: boolean;
   updatedAt: Date;
 }
 

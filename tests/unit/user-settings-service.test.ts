@@ -24,6 +24,7 @@ describe('UserSettingsService', () => {
             user_id: 'user-1',
             advisor_mode: 'manual',
             approval_mode: 'manual_review',
+            material_price_mode: 1,
             updated_at: '2024-06-01T00:00:00Z',
           },
         },
@@ -35,7 +36,26 @@ describe('UserSettingsService', () => {
       expect(settings.userId).toBe('user-1');
       expect(settings.advisorMode).toBe(AdvisorMode.Manual);
       expect(settings.approvalMode).toBe('manual_review');
+      expect(settings.materialPriceMode).toBe(true);
       expect(settings.updatedAt).toBeInstanceOf(Date);
+    });
+
+    it('maps material_price_mode 0 to false', async () => {
+      configurePrepareResults(db, [
+        {
+          first: {
+            id: 'settings-1',
+            user_id: 'user-1',
+            advisor_mode: 'manual',
+            approval_mode: 'manual_review',
+            material_price_mode: 0,
+            updated_at: '2024-06-01T00:00:00Z',
+          },
+        },
+      ]);
+
+      const settings = await service.getSettings('user-1');
+      expect(settings.materialPriceMode).toBe(false);
     });
 
     it('throws PlatformError when settings not found', async () => {
@@ -58,6 +78,7 @@ describe('UserSettingsService', () => {
             user_id: 'user-1',
             advisor_mode: 'smart',
             approval_mode: 'manual_review',
+            material_price_mode: 0,
             updated_at: '2024-06-01T12:00:00Z',
           },
         },
@@ -80,6 +101,7 @@ describe('UserSettingsService', () => {
             user_id: 'user-1',
             advisor_mode: 'manual',
             approval_mode: 'manual_review',
+            material_price_mode: 0,
             updated_at: '2024-06-01T12:00:00Z',
           },
         },
@@ -121,6 +143,7 @@ describe('UserSettingsService', () => {
             user_id: 'user-1',
             advisor_mode: 'manual',
             approval_mode: 'manual_review',
+            material_price_mode: 0,
             updated_at: '2024-06-01T00:00:00Z',
           },
         },
@@ -132,6 +155,74 @@ describe('UserSettingsService', () => {
       expect(db.prepare).toHaveBeenCalledWith(
         expect.stringContaining('SELECT'),
       );
+    });
+
+    it('updates materialPriceMode to true', async () => {
+      configurePrepareResults(db, [
+        { run: { success: true } },
+        {
+          first: {
+            id: 'settings-1',
+            user_id: 'user-1',
+            advisor_mode: 'manual',
+            approval_mode: 'manual_review',
+            material_price_mode: 1,
+            updated_at: '2024-06-01T12:00:00Z',
+          },
+        },
+      ]);
+
+      const result = await service.updateSettings('user-1', { materialPriceMode: true });
+
+      expect(result.materialPriceMode).toBe(true);
+      // Verify the SQL includes material_price_mode in the SET clause
+      expect(db.prepare).toHaveBeenCalledWith(
+        expect.stringContaining('material_price_mode = ?'),
+      );
+    });
+
+    it('updates materialPriceMode to false', async () => {
+      configurePrepareResults(db, [
+        { run: { success: true } },
+        {
+          first: {
+            id: 'settings-1',
+            user_id: 'user-1',
+            advisor_mode: 'manual',
+            approval_mode: 'manual_review',
+            material_price_mode: 0,
+            updated_at: '2024-06-01T12:00:00Z',
+          },
+        },
+      ]);
+
+      const result = await service.updateSettings('user-1', { materialPriceMode: false });
+
+      expect(result.materialPriceMode).toBe(false);
+    });
+
+    it('updates multiple fields including materialPriceMode', async () => {
+      configurePrepareResults(db, [
+        { run: { success: true } },
+        {
+          first: {
+            id: 'settings-1',
+            user_id: 'user-1',
+            advisor_mode: 'smart',
+            approval_mode: 'manual_review',
+            material_price_mode: 1,
+            updated_at: '2024-06-01T12:00:00Z',
+          },
+        },
+      ]);
+
+      const result = await service.updateSettings('user-1', {
+        advisorMode: AdvisorMode.Smart,
+        materialPriceMode: true,
+      });
+
+      expect(result.advisorMode).toBe('smart');
+      expect(result.materialPriceMode).toBe(true);
     });
 
     it('throws PlatformError when user settings row not found on update', async () => {

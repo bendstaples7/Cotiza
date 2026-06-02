@@ -361,6 +361,7 @@ export async function fetchSettings(): Promise<{ settings: UserSettings }> {
 
 export async function updateSettings(data: {
   advisorMode?: AdvisorMode;
+  materialPriceMode?: boolean;
 }): Promise<{ settings: UserSettings }> {
   const res = await fetch(API_BASE + '/api/settings', {
     method: 'PUT',
