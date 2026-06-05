@@ -131,6 +131,15 @@ export default function SettingsPage() {
     try {
       const result = await syncInstagramPosts();
       setSyncResult({ synced: result.synced, skipped: result.skipped });
+
+      // Refetch channels and posts to update the dashboard
+      const [postsRes, channelsRes] = await Promise.all([
+        fetchPosts(),
+        fetchChannels(),
+      ]);
+      setChannels(channelsRes.channels); // Update channels in SettingsPage state
+      // Note: SocialSummary will also refetch on its own if it's mounted and its dependency changes
+
       if (result.errors.length > 0) {
         setChannelError('Some posts failed to sync: ' + result.errors[0]);
       }

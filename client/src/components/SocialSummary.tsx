@@ -26,6 +26,7 @@ export default function SocialSummary({ onRetry }: SocialSummaryProps) {
   const [channels, setChannels] = useState<ChannelConnection[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(false);
+  const [noChannelsConfigured, setNoChannelsConfigured] = useState(false);
   const cancelledRef = useRef(false);
 
   const loadSocialData = useCallback(async () => {
@@ -42,6 +43,7 @@ export default function SocialSummary({ onRetry }: SocialSummaryProps) {
       if (!cancelledRef.current) {
         setPosts(postsResult.posts);
         setChannels(channelsResult.channels);
+        setNoChannelsConfigured(channelsResult.channels.length === 0 && postsResult.posts.length === 0);
       }
     } catch (err) {
       if (!cancelledRef.current) {
@@ -85,7 +87,11 @@ export default function SocialSummary({ onRetry }: SocialSummaryProps) {
         </div>
       ) : (
         <>
-          {connected.length === 0 && (
+          {noChannelsConfigured && !channels.some((c) => c.status === 'expired') ? (
+            <div style={{ background: '#e0f7fa', border: '1px solid #b2ebf2', borderRadius: 8, padding: '0.75rem 1rem', marginBottom: '1rem', fontSize: '0.9rem' }}>
+              <span>ℹ️ No channels configured yet. Connect an Instagram account to get started.</span>
+            </div>
+          ) : (connected.length === 0 && !noChannelsConfigured) && (
             <div style={{ background: '#fff3e0', border: '1px solid #ffe0b2', borderRadius: 8, padding: '0.75rem 1rem', marginBottom: '1rem', fontSize: '0.9rem' }}>
               {channels.some((c) => c.status === 'expired') ? '📡 Instagram token expired.' : '📡 No channels connected.'}
             </div>
