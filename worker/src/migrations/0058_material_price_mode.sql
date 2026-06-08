@@ -3,4 +3,5 @@
 -- predefined formula (base unit price × markup multiplier) instead of using
 -- the catalog's unit price directly.
 
+-- IDEMPOTENCY: column may already exist
 ALTER TABLE user_settings ADD COLUMN material_price_mode INTEGER NOT NULL DEFAULT 0;
