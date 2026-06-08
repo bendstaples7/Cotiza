@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
-import { fetchPosts, fetchChannels, syncInstagramPosts } from '../api';
-import type { Post, ChannelConnection } from 'shared';
+import SocialSummary from '../components/SocialSummary';
+import { fetchPosts } from '../api';
+import type { Post } from 'shared';
 
 const cardStyle: React.CSSProperties = {
   background: '#fff',
@@ -13,35 +14,18 @@ const cardStyle: React.CSSProperties = {
   transition: 'box-shadow 0.15s',
 };
 
-const statBox: React.CSSProperties = {
-  background: '#fff',
-  borderRadius: 8,
-  padding: '1.25rem',
-  boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-  textAlign: 'center',
-};
-
 export default function DashboardPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [posts, setPosts] = useState<Post[]>([]);
-  const [channels, setChannels] = useState<ChannelConnection[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [postsLoading, setPostsLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([
-      fetchPosts().then((r) => setPosts(r.posts)).catch(() => {}),
-      fetchChannels().then((r) => setChannels(r.channels)).catch(() => {}),
-    ]).finally(() => setLoading(false));
-    // Fire-and-forget Instagram sync — non-blocking, cooldown-protected
-    syncInstagramPosts().catch(() => {});
+    fetchPosts()
+      .then((r) => setPosts(r.posts))
+      .catch(() => {})
+      .finally(() => setPostsLoading(false));
   }, []);
-
-  const drafts = posts.filter((p) => p.status === 'draft');
-  const published = posts.filter((p) => p.status === 'published');
-  const failed = posts.filter((p) => p.status === 'failed');
-  const awaiting = posts.filter((p) => p.status === 'awaiting_approval');
-  const connected = channels.filter((c) => c.status === 'connected');
 
   const actions = [
     {
@@ -71,46 +55,8 @@ export default function DashboardPage() {
         Welcome back, {user?.name ?? 'team member'}.
       </p>
 
-      {/* Stats row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '1rem', marginBottom: '2rem' }}>
-        <div style={statBox}>
-          <div style={{ fontSize: '1.75rem', fontWeight: 700, color: '#0a1e24' }}>{loading ? '–' : posts.length}</div>
-          <div style={{ fontSize: '0.85rem', color: '#888' }}>Total Posts</div>
-        </div>
-        <div style={statBox}>
-          <div style={{ fontSize: '1.75rem', fontWeight: 700, color: '#ff9800' }}>{loading ? '–' : drafts.length}</div>
-          <div style={{ fontSize: '0.85rem', color: '#888' }}>Drafts</div>
-        </div>
-        <div style={statBox}>
-          <div style={{ fontSize: '1.75rem', fontWeight: 700, color: '#2196f3' }}>{loading ? '–' : awaiting.length}</div>
-          <div style={{ fontSize: '0.85rem', color: '#888' }}>Awaiting Review</div>
-        </div>
-        <div style={statBox}>
-          <div style={{ fontSize: '1.75rem', fontWeight: 700, color: '#4caf50' }}>{loading ? '–' : published.length}</div>
-          <div style={{ fontSize: '0.85rem', color: '#888' }}>Published</div>
-        </div>
-        <div style={statBox}>
-          <div style={{ fontSize: '1.75rem', fontWeight: 700, color: '#f44336' }}>{loading ? '–' : failed.length}</div>
-          <div style={{ fontSize: '0.85rem', color: '#888' }}>Failed</div>
-        </div>
-      </div>
-
-      {/* Channel status */}
-      {!loading && connected.length === 0 && (
-        <div style={{ background: '#fff3e0', border: '1px solid #ffe0b2', borderRadius: 8, padding: '1rem', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <span style={{ fontSize: '1.25rem' }}>📡</span>
-          <div>
-            <strong>{channels.some((c) => c.status === 'expired') ? 'Instagram token expired.' : 'No channels connected.'}</strong>{' '}
-            <span style={{ color: '#666' }}>
-              Head to{' '}
-              <a href="/social/settings" onClick={(e) => { e.preventDefault(); navigate('/social/settings'); }} style={{ color: '#e65100' }}>
-                Settings
-              </a>{' '}
-              to {channels.some((c) => c.status === 'expired') ? 'reconnect' : 'connect'} your Instagram account before publishing.
-            </span>
-          </div>
-        </div>
-      )}
+      {/* Social media summary */}
+      <SocialSummary />
 
       {/* Action cards */}
       <h2 style={{ fontSize: '1.1rem', marginBottom: '1rem', color: '#333' }}>Quick Actions</h2>
@@ -134,7 +80,7 @@ export default function DashboardPage() {
 
       {/* Recent posts */}
       <h2 style={{ fontSize: '1.1rem', marginBottom: '1rem', color: '#333' }}>Recent Posts</h2>
-      {loading ? (
+      {postsLoading ? (
         <p style={{ color: '#999' }}>Loading...</p>
       ) : posts.length === 0 ? (
         <div style={{ ...cardStyle, cursor: 'default', textAlign: 'center', color: '#999', padding: '2rem' }}>

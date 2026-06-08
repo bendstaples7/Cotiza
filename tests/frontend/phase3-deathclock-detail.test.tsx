@@ -81,6 +81,9 @@ vi.mock('../../client/src/api', () => ({
   fetchRules: vi.fn().mockResolvedValue([]),
   fetchJobberRequestDetail: vi.fn().mockRejectedValue(new Error('not found')),
   fetchCatalog: vi.fn().mockResolvedValue([]),
+  fetchPosts: vi.fn().mockResolvedValue({ posts: [], page: 1, limit: 20 }),
+  fetchChannels: vi.fn().mockResolvedValue({ channels: [] }),
+  syncInstagramPosts: vi.fn().mockResolvedValue({ synced: 0, skipped: 0, errors: [] }),
 }));
 
 // ---------------------------------------------------------------------------
@@ -250,7 +253,7 @@ describe('QuoteDraftPage — Phase 3 deathclock features', () => {
     renderDraftPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Loading deathclock...')).toBeInTheDocument();
+      expect(screen.getByText('Loading...')).toBeInTheDocument();
     });
   });
 
@@ -266,7 +269,7 @@ describe('QuoteDraftPage — Phase 3 deathclock features', () => {
     // No badge should be rendered
     expect(screen.queryByRole('img', { name: /Request age:/ })).toBeNull();
     // No deathclock loading text
-    expect(screen.queryByText('Loading deathclock...')).toBeNull();
+    expect(screen.queryByText('Loading...')).toBeNull();
   });
 
   it('error fetching deathclock does not break page', async () => {
@@ -469,10 +472,10 @@ describe('DeathclockDashboardPage — Phase 3', () => {
 
   // ── T3.3: Dashboard bucket bars ──
 
-  it('renders title "Deathclock Dashboard"', async () => {
+  it('renders title "Dashboard"', async () => {
     renderDashboardPage();
 
-    expect(await screen.findByText('Deathclock Dashboard')).toBeInTheDocument();
+    expect(await screen.findByText('Dashboard')).toBeInTheDocument();
   });
 
   it('shows active request count', async () => {
@@ -485,7 +488,7 @@ describe('DeathclockDashboardPage — Phase 3', () => {
   it('renders 4 bucket bars (green/yellow/orange/red)', async () => {
     renderDashboardPage();
 
-    await screen.findByText('Deathclock Dashboard');
+    await screen.findByText('Dashboard');
 
     // Each bucket label should render (appears in both bar label and legend)
     expect(screen.getAllByText('Green').length).toBeGreaterThanOrEqual(1);
@@ -500,7 +503,7 @@ describe('DeathclockDashboardPage — Phase 3', () => {
     );
     renderDashboardPage();
 
-    await screen.findByText('Deathclock Dashboard');
+    await screen.findByText('Dashboard');
 
     // aria-label shows percentage: green=50%, yellow=25%, orange=15%, red=10%
     const [greenBar, yellowBar, orangeBar, redBar] = screen.getAllByRole('button');
@@ -518,7 +521,7 @@ describe('DeathclockDashboardPage — Phase 3', () => {
     mockFetchDeathclockStats.mockReturnValue(new Promise(() => {}));
     renderDashboardPage();
 
-    expect(screen.getByText('Loading deathclock stats…')).toBeInTheDocument();
+    expect(screen.getByText('Loading stats…')).toBeInTheDocument();
   });
 
   it('shows error state with retry button', async () => {
@@ -537,14 +540,14 @@ describe('DeathclockDashboardPage — Phase 3', () => {
     );
     renderDashboardPage();
 
-    expect(await screen.findByText('Deathclock Dashboard')).toBeInTheDocument();
+    expect(await screen.findByText('Dashboard')).toBeInTheDocument();
     expect(screen.getByText('No active requests.')).toBeInTheDocument();
   });
 
   it('clicking a bar navigates to queue', async () => {
     renderDashboardPage();
 
-    await screen.findByText('Deathclock Dashboard');
+    await screen.findByText('Dashboard');
 
     const [firstBar] = screen.getAllByRole('button');
     fireEvent.click(firstBar);
@@ -569,7 +572,7 @@ describe('DeathclockDashboardPage — Phase 3', () => {
   it('renders SVG chart with bucket bars', async () => {
     renderDashboardPage();
 
-    await screen.findByText('Deathclock Dashboard');
+    await screen.findByText('Dashboard');
 
     // The trends section renders an SVG element
     const svg = document.querySelector('svg');
@@ -602,7 +605,7 @@ describe('DeathclockDashboardPage — Phase 3', () => {
     renderDashboardPage();
 
     // Wait for dashboard stats to load first
-    await screen.findByText('Deathclock Dashboard');
+    await screen.findByText('Dashboard');
 
     // Trends section should show error
     expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load trends.');
@@ -619,7 +622,7 @@ describe('DeathclockDashboardPage — Phase 3', () => {
     );
     renderDashboardPage();
 
-    await screen.findByText('Deathclock Dashboard');
+    await screen.findByText('Dashboard');
     // Should hit the empty state, not try to render bars
     expect(screen.getByText('No active requests.')).toBeInTheDocument();
   });
@@ -632,7 +635,7 @@ describe('DeathclockDashboardPage — Phase 3', () => {
     );
     renderDashboardPage();
 
-    await screen.findByText('Deathclock Dashboard');
+    await screen.findByText('Dashboard');
     // Should show empty state, no bars rendered
     expect(screen.getByText('No active requests.')).toBeInTheDocument();
     expect(screen.queryByRole('button')).toBeNull();

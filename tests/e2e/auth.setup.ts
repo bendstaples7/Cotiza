@@ -9,8 +9,8 @@ setup('authenticate', async ({ page }) => {
   await page.getByLabel('Email').fill('office@chicago-reno.com');
   await page.getByRole('button', { name: 'Sign in' }).click();
 
-  // Wait for redirect to the social dashboard after login
-  await page.waitForURL('**/social/dashboard', { timeout: 15_000 });
+  // Wait for redirect to the dashboard after login — exact path so we don't match /social/dashboard
+  await page.waitForURL(/\/dashboard$/, { timeout: 15_000 });
 
   // After login the app runs a systems check before showing the main shell.
   // In CI (no real Jobber/Instagram tokens) this lands on an overlay screen

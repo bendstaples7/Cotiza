@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ErrorResponse } from 'shared';
 import { fetchDeathclockStats, fetchTrends } from '../api';
+import SocialSummary from '../components/SocialSummary';
 import type { DeathclockBucketCounts, DeathclockTrends } from '../api';
 import { getLabel } from '../components/DeathclockBadge';
 
@@ -39,7 +40,7 @@ export default function DeathclockDashboardPage() {
       const result = await fetchDeathclockStats();
       setStats(result);
     } catch (err) {
-      setError((err as ErrorResponse).message ?? 'Failed to load deathclock stats.');
+      setError((err as ErrorResponse).message ?? 'Failed to load stats.');
     } finally {
       setLoading(false);
     }
@@ -159,7 +160,7 @@ export default function DeathclockDashboardPage() {
       <div style={containerStyle}>
         <div style={loadingContainerStyle}>
           <span style={spinnerStyle} />
-          <p style={{ margin: '0.75rem 0 0', color: '#555' }}>Loading deathclock stats…</p>
+          <p style={{ margin: '0.75rem 0 0', color: '#555' }}>Loading stats…</p>
         </div>
       </div>
     );
@@ -185,7 +186,7 @@ export default function DeathclockDashboardPage() {
   if (!stats || stats.totalActive === 0) {
     return (
       <div style={containerStyle}>
-        <h1 style={titleStyle}>Deathclock Dashboard</h1>
+        <h1 style={titleStyle}>Dashboard</h1>
         <div style={emptyStyle}>
           <p style={{ margin: 0, color: '#888' }}>No active requests.</p>
         </div>
@@ -197,7 +198,7 @@ export default function DeathclockDashboardPage() {
 
   return (
     <div style={containerStyle}>
-      <h1 style={titleStyle}>Deathclock Dashboard</h1>
+      <h1 style={titleStyle}>Dashboard</h1>
       <p style={summaryStyle}>{total} active request{total !== 1 ? 's' : ''}</p>
 
       <div style={chartContainerStyle}>
@@ -246,6 +247,14 @@ export default function DeathclockDashboardPage() {
         error={trendsError}
         onRetry={loadTrends}
       />
+
+      {/* ── Social Media Summary ── */}
+      <div style={{ marginTop: '1.5rem' }}>
+        <h2 style={{ margin: '0 0 1rem', fontSize: '1.2rem', fontWeight: 600, color: '#061216' }}>
+          Social Media Summary
+        </h2>
+        <SocialSummary />
+      </div>
     </div>
   );
 }
