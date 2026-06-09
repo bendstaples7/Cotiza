@@ -565,7 +565,7 @@ app.post('/requests/:id/mark-sent', async (c) => {
  */
 async function fetchCatalog(db: D1Database, userId: string): Promise<ProductCatalogEntry[]> {
   const result = await db.prepare(
-    'SELECT id, name, unit_price, description, category, sort_order, keywords, scope, source FROM product_catalog WHERE user_id = ? ORDER BY sort_order ASC, name ASC'
+    'SELECT id, name, unit_price, description, category, sort_order, keywords, scope, source, quantity_mode, default_hours FROM product_catalog WHERE user_id = ? ORDER BY sort_order ASC, name ASC'
   ).bind(userId).all();
 
   return (result.results as any[]).map((row) => ({
@@ -578,6 +578,8 @@ async function fetchCatalog(db: D1Database, userId: string): Promise<ProductCata
     keywords: (row.keywords as string) ?? undefined,
     scope: (row.scope as import('shared').Scope) ?? null,
     source: (row.source as 'jobber' | 'manual') ?? 'manual',
+    quantityMode: (row.quantity_mode as import('shared').QuantityMode) ?? null,
+    defaultHours: row.default_hours != null ? Number(row.default_hours) : null,
   }));
 }
 

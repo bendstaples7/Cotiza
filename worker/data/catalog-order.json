@@ -32,7 +32,7 @@
     },
     {
       "name": "Permit",
-      "sortOrder": 25
+      "sortOrder": 950
     },
     {
       "name": "Spam Request Administration Fee",
@@ -856,7 +856,7 @@
     },
     {
       "name": "Tile: Install Durock Shower Surround",
-      "sortOrder": 467
+      "sortOrder": 460
     },
     {
       "name": "Tile: Install Durock Sub Floor",
@@ -888,7 +888,7 @@
     },
     {
       "name": "Tile: Install Tiled Shower Surround",
-      "sortOrder": 475
+      "sortOrder": 464
     },
     {
       "name": "Tile: Install Tiled Steps",
@@ -916,7 +916,7 @@
     },
     {
       "name": "Tile: Schluter Tile Edge Trim",
-      "sortOrder": 482
+      "sortOrder": 465
     },
     {
       "name": "Tile: Shower Ceiling",
@@ -948,7 +948,7 @@
     },
     {
       "name": "Tile: Waterproof Shower Surround",
-      "sortOrder": 490
+      "sortOrder": 462
     },
     {
       "name": "Tub Reglaze",
@@ -972,7 +972,7 @@
     },
     {
       "name": "Materials: Durock",
-      "sortOrder": 496
+      "sortOrder": 461
     },
     {
       "name": "Materials: Grout",
@@ -992,7 +992,7 @@
     },
     {
       "name": "Materials: Redgard",
-      "sortOrder": 501
+      "sortOrder": 463
     },
     {
       "name": "Materials: Schluter Tile Edge Trim",
