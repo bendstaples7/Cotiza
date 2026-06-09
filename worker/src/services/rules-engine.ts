@@ -1312,6 +1312,48 @@ export function executeAction(
         const li = updatedLineItems[i];
         if (!matchesProductName(li.productName, action.productNamePattern, action.matchMode)) continue;
 
+        // Check quantity_mode on the catalog entry for this product.
+        // hourly-mode and fixed-mode items bypass sqft formula computation entirely.
+        const catalogEntry = catalog.find(
+          (c) => c.name.trim().toLowerCase() === li.productName.trim().toLowerCase(),
+        );
+        const qMode = catalogEntry?.quantityMode ?? null;
+
+        if (qMode === 'fixed') {
+          // Fixed items always stay at qty 1 — never recompute
+          continue;
+        }
+
+        if (qMode === 'hourly') {
+          // Hourly items use default_hours as the quantity when set.
+          // QuantityEngine historical prediction already ran before the rules engine
+          // (in QuoteEngine.generateQuote) and set li.quantity if confident.
+          // If the item's quantity is still 1 (AI default) AND default_hours is set,
+          // apply the default_hours as a sensible fallback.
+          const defaultHours = catalogEntry?.defaultHours ?? null;
+          if (defaultHours !== null && li.quantity === 1) {
+            beforeSnapshots.push({ id: li.id, productName: li.productName, description: li.description, quantity: li.quantity, unitPrice: li.unitPrice });
+            updatedLineItems[i] = {
+              ...li,
+              quantity: defaultHours,
+              ruleIdsApplied: [...li.ruleIdsApplied, ruleId],
+            };
+            anyModifiedByCompute = true;
+            afterSnapshots.push({ id: li.id, productName: li.productName, description: li.description, quantity: defaultHours, unitPrice: li.unitPrice });
+            lastComputedMeta = {
+              formula: `default_hours=${defaultHours}`,
+              variableValues: { default_hours: defaultHours },
+              rawExtractedText: {},
+              previousQuantity: li.quantity,
+              computedQuantity: defaultHours,
+            };
+          }
+          // Otherwise leave the quantity as-is (historical prediction or AI estimate)
+          continue;
+        }
+
+        // sqft mode (or null = default sqft): run the formula as before
+
         // Build per-item variable map: start from shared context, then inject
         // this item's sqftOverride if present (space-specific sqft wins).
         const itemVars = new Map<string, number>(sharedVars);

@@ -1,5 +1,5 @@
 import type { SpaceContext } from 'shared';
-import { resolveSpaceAllocation } from './space-allocation-service.js';
+import { resolveSpaceAllocation, resolveFloorZone } from './space-allocation-service.js';
 
 /** Raw entry returned by the AI extraction call */
 interface RawSpaceEntry {
@@ -123,18 +123,51 @@ export class SpaceExtractionService {
     const trimmedName = entry.spaceName.trim();
 
     // Only attempt allocation estimate when we have a whole-property sqft and no explicit value
-    const allocation =
-      !sqftIsExplicit && totalSqft !== null
-        ? resolveSpaceAllocation(trimmedName, totalSqft)
-        : null;
+    if (sqftIsExplicit || totalSqft === null) {
+      return {
+        spaceName: trimmedName,
+        normalizedLabel: trimmedName,
+        explicitSqft,
+        estimatedSqft: null,
+        sqftIsExplicit,
+        allocationFraction: null,
+      };
+    }
 
+    // First try individual room allocation (e.g. "kitchen", "master bedroom")
+    const allocation = resolveSpaceAllocation(trimmedName, totalSqft);
+    if (allocation !== null) {
+      return {
+        spaceName: trimmedName,
+        normalizedLabel: allocation.normalizedLabel,
+        explicitSqft,
+        estimatedSqft: allocation.estimatedSqft,
+        sqftIsExplicit,
+        allocationFraction: allocation.fraction,
+      };
+    }
+
+    // Fallback: try floor zone resolution (e.g. "upstairs", "main floor")
+    const zoneResult = resolveFloorZone(trimmedName, totalSqft);
+    if (zoneResult !== null) {
+      return {
+        spaceName: trimmedName,
+        normalizedLabel: zoneResult.label,
+        explicitSqft,
+        estimatedSqft: zoneResult.estimatedSqft,
+        sqftIsExplicit,
+        allocationFraction: zoneResult.fraction,
+      };
+    }
+
+    // No match — return with null estimates
     return {
       spaceName: trimmedName,
-      normalizedLabel: allocation?.normalizedLabel ?? trimmedName,
+      normalizedLabel: trimmedName,
       explicitSqft,
-      estimatedSqft: allocation?.estimatedSqft ?? null,
+      estimatedSqft: null,
       sqftIsExplicit,
-      allocationFraction: allocation?.fraction ?? null,
+      allocationFraction: null,
     };
   }
 }

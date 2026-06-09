@@ -50,4 +50,46 @@ try {
   console.warn(`[rule-overrides] ⚠️  Failed to apply painting/baseboard override: ${err.message}`);
 }
 
+// Override 2: "remove-unneeded-plumbing-inspection"
+// - The product name is "Plumbing: Certified Plumbing Inspection" so the
+//   productNamePattern must include the "Plumbing:" prefix. Previous version
+//   used "Certified Plumbing Inspection" with starts_with which never matched.
+// - Also fixes condition field from "text" to "substring" (schema requirement).
+const plumbingInspectionOverride = `
+UPDATE rules
+SET
+  condition_json = '{"type":"compound","conditions":[{"type":"line_item_exists","productNamePattern":"Plumbing: Certified Plumbing Inspection","matchMode":"exact"},{"type":"request_text_not_contains","substring":"inspection"}]}',
+  action_json = '[{"type":"remove_line_item","productNamePattern":"Plumbing: Certified Plumbing Inspection","matchMode":"exact"}]',
+  locally_modified_at = datetime('now'),
+  updated_at = datetime('now')
+WHERE id = 'remove-unneeded-plumbing-inspection';
+`;
+
+try {
+  execSql(plumbingInspectionOverride);
+  console.log('[rule-overrides] ✅ Applied: plumbing inspection removal fix');
+} catch (err) {
+  console.warn(`[rule-overrides] ⚠️  Failed to apply plumbing inspection override: ${err.message}`);
+}
+
+// Override 3: "Default Note Rule" — neutral base text with no permit-specific content.
+// The permit sentence is handled by conditional rules: note-no-permit (no permit on quote)
+// and append-permit-note (permit IS on quote). This keeps the note composable.
+// sync-rules restores the production text on every startup, so this override re-applies it.
+const defaultNoteOverride = `
+UPDATE rules
+SET
+  action_json = '[{"type":"set_customer_note","text":"All work will be completed by licensed and insured contractors. Pricing is based on information provided and is subject to change if scope of work changes during construction."}]',
+  locally_modified_at = datetime('now'),
+  updated_at = datetime('now')
+WHERE id = 'b2c3d4e5-f6a7-4b8c-9d0e-f1a2b3c4d5e6';
+`;
+
+try {
+  execSql(defaultNoteOverride);
+  console.log('[rule-overrides] ✅ Applied: default note rule base text');
+} catch (err) {
+  console.warn(`[rule-overrides] ⚠️  Failed to apply default note override: ${err.message}`);
+}
+
 console.log('[rule-overrides] Done.');

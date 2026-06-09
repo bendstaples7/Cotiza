@@ -69,7 +69,7 @@ const SYSTEM_PROMPT = [
   '',
   'RULES:',
   '- CRITICAL: Do NOT include line items for work the customer did not ask about. Every line item must be directly traceable to something in the customer request text.',
-  '- CRITICAL: "Clearly implied" means the work is physically unavoidable given what the customer asked for — NOT that it is commonly done alongside the requested work. Examples of what is NOT implied: a customer asking for ceiling drywall does NOT imply baseboard trim (different surface); a customer asking for floor tile does NOT imply wall painting; a customer asking for one room does NOT imply work in adjacent rooms.',
+  '- CRITICAL: "Clearly implied" means the work is physically unavoidable given what the customer asked for — NOT that it is commonly done alongside the requested work. Examples of what is NOT implied: a customer asking for ceiling drywall does NOT imply baseboard trim (different surface); a customer asking for floor tile does NOT imply wall painting; a customer asking for one room does NOT imply work in adjacent rooms. A customer asking for plumbing work (fixture install, drain rough-in, etc.) does NOT imply a plumbing inspection — inspections are a separate billable service that must be explicitly requested by the customer.',
   '- CRITICAL: Do NOT include line items for work the customer states has ALREADY been completed. Past-tense phrases like "I recently had X done", "we just finished X", "X was already installed", "X has been completed", or "I had X spray foamed/installed/repaired" indicate completed work — not work to be quoted. If you are uncertain whether work is completed or requested, assign a confidence score below 70 and explain in unmatchedReason.',
   '- SCOPE CONSTRAINTS: If the customer specifies a surface (ceiling, floor, walls), a room, or a limited scope, restrict all line items strictly to that scope. Do not add companion items that belong to a different surface, elevation, or area than what the customer described.',
   '- Only match to products that exist in the provided catalog — never invent new products.',
@@ -365,7 +365,17 @@ export class QuoteEngine {
           };
 
           if (resolutionResult.resolved && resolutionResult.value !== null) {
-            preResolvedContext = new Map([['sqft', resolutionResult.value]]);
+            // Only inject whole-property sqft from Tier 3 (public records) if the
+            // sqft value came from the customer text (Tier 1) or a layout diagram (Tier 2).
+            // Tier 3 returns the entire building's sqft which is wrong for room-specific
+            // items. hourly-mode items ignore sqft entirely; sqft-mode items that are
+            // room-specific will get their sqft from SpaceExtractionService (sqftOverride).
+            // Tier 3 is still used for whole-property jobs (exterior painting, full house
+            // flooring) where the space context will aggregate to the full property sqft.
+            const shouldInjectSqft = resolutionResult.tier !== 'public_records';
+            if (shouldInjectSqft) {
+              preResolvedContext = new Map([['sqft', resolutionResult.value]]);
+            }
           }
           // Populate trace
           trace.wholePropSqft = resolutionResult.value;
@@ -836,6 +846,13 @@ export class QuoteEngine {
         if (p.description) line += ' — ' + p.description;
         if (p.scope && p.scope !== 'any') {
           line += ` [scope: ${p.scope}]`;
+        }
+        // Annotate quantity mode so the AI knows not to estimate sqft for hourly items
+        if (p.quantityMode === 'hourly') {
+          const hrs = p.defaultHours != null ? `~${p.defaultHours}hrs` : 'hourly';
+          line += ` [qty: ${hrs}]`;
+        } else if (p.quantityMode === 'fixed') {
+          line += ` [qty: fixed]`;
         }
         if (p.keywords) {
           // Sanitize: strip control chars, brackets, clamp length
