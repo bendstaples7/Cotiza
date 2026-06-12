@@ -790,15 +790,10 @@ app.post('/generate', async (c) => {
     }
   }
 
-  // Fetch user settings to check material price mode (graceful degradation)
-  let materialPriceMode = false;
-  try {
-    const userSettingsService = new UserSettingsService(db);
-    const userSettings = await userSettingsService.getSettings(userId);
-    materialPriceMode = userSettings.materialPriceMode;
-  } catch {
-    // Graceful degradation — settings fetch failure must not block quote generation
-  }
+  // Fetch user settings to check material price mode
+  const userSettingsService = new UserSettingsService(db);
+  const userSettings = await userSettingsService.getSettings(userId);
+  const materialPriceMode = userSettings.materialPriceMode;
 
   const result = await quoteEngine.generateQuote(
     {

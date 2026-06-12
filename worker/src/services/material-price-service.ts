@@ -53,6 +53,16 @@ export class MaterialPriceService {
     catalog: ProductCatalogEntry[],
     markupMultiplier: number = DEFAULT_MARKUP_MULTIPLIER,
   ): { adjustedItems: QuoteLineItem[]; adjustments: MaterialPriceAdjustment[] } {
+    // Validate markupMultiplier to prevent zero/negative/NaN/Infinity prices
+    if (!Number.isFinite(markupMultiplier) || markupMultiplier <= 0) {
+      throw new Error(
+        `markupMultiplier must be a positive finite number (received ${markupMultiplier}).`,
+      );
+    }
+
+    const catalogById = new Map(
+      catalog.map((p) => [p.id, p]),
+    );
     const catalogByName = new Map(
       catalog.map((p) => [p.name.trim().toLowerCase(), p]),
     );
@@ -60,7 +70,12 @@ export class MaterialPriceService {
     const adjustments: MaterialPriceAdjustment[] = [];
 
     const adjustedItems = lineItems.map((item) => {
-      const catalogEntry = catalogByName.get(item.productName.trim().toLowerCase());
+      // Prefer ID-based lookup; fall back to name-based
+      const catalogEntry =
+        (item.productCatalogEntryId
+          ? catalogById.get(item.productCatalogEntryId)
+          : undefined) ??
+        catalogByName.get(item.productName.trim().toLowerCase());
 
       // If we can find the catalog entry, use its unitPrice as the base
       const baseUnitPrice = catalogEntry?.unitPrice ?? item.unitPrice;

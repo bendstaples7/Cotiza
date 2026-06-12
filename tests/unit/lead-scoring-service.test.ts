@@ -481,6 +481,24 @@ describe('scoreLead — configurable weights', () => {
     expect(result.totalScore).toBeGreaterThanOrEqual(0);
     expect(result.totalScore).toBeLessThanOrEqual(100);
   });
+
+  it('throws on invalid weight sums', () => {
+    // Weights sum to 2.0 instead of 1.0
+    expect(() =>
+      scoreLead({
+        ...hotLeadInput(),
+        weights: { budgetAlignment: 0.50, geographicFit: 0.50, archetypeMatch: 0.50, projectScope: 0.50 },
+      }),
+    ).toThrow('Scoring weights must sum to 1.0');
+
+    // Negative weight
+    expect(() =>
+      scoreLead({
+        ...hotLeadInput(),
+        weights: { budgetAlignment: 0.5, geographicFit: 0.5, archetypeMatch: 0.5, projectScope: -0.5 },
+      }),
+    ).toThrow('Scoring weights must be finite non-negative numbers.');
+  });
 });
 
 // ── Edge Cases ──────────────────────────────────────────────────────

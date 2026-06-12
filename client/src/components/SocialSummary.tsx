@@ -26,39 +26,48 @@ export default function SocialSummary({ onRetry }: SocialSummaryProps) {
   const [channels, setChannels] = useState<ChannelConnection[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(false);
-  const cancelledRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const loadSocialData = useCallback(async () => {
-    cancelledRef.current = false;
+    // Cancel any in-flight request before starting a new one
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
+
     setLoading(true);
     setFetchError(false);
 
     try {
       const [postsResult, channelsResult] = await Promise.all([
-        fetchPosts(),
-        fetchChannels(),
+        fetchPosts(signal),
+        fetchChannels(signal),
       ]);
 
-      if (!cancelledRef.current) {
+      if (!signal.aborted) {
         setPosts(postsResult.posts);
         setChannels(channelsResult.channels);
       }
     } catch (err) {
-      if (!cancelledRef.current) {
+      if (!signal.aborted) {
         console.error('Failed to fetch social data:', err);
         setFetchError(true);
       }
     } finally {
-      if (!cancelledRef.current) {
+      if (!signal.aborted) {
         setLoading(false);
       }
     }
   }, []);
 
   useEffect(() => {
-    cancelledRef.current = false;
     loadSocialData();
-    return () => { cancelledRef.current = true; };
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
   }, [loadSocialData]);
 
   const drafts = posts.filter((p) => p.status === 'draft');

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { MaterialPriceService } from '../../worker/src/services/material-price-service.js';
 import type { QuoteLineItem, ProductCatalogEntry } from 'shared';
 

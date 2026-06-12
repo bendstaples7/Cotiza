@@ -755,7 +755,7 @@ export class QuoteEngine {
         });
 
         const { adjustedItems } = materialPriceService.calculateMaterialPrices(
-          lineItemsArray,
+          lineItemsArray.filter((item) => item.resolved),
           catalog,
         );
 

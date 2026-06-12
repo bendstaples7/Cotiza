@@ -230,9 +230,10 @@ export async function fetchContentTypes(): Promise<{ contentTypes: ContentTypeTe
 
 // ── Channels ──
 
-export async function fetchChannels(): Promise<{ channels: ChannelConnection[] }> {
+export async function fetchChannels(signal?: AbortSignal): Promise<{ channels: ChannelConnection[] }> {
   const res = await fetch(API_BASE + '/api/channels', {
     headers: { ...authHeaders() },
+    signal,
   });
   return handleResponse(res);
 }
@@ -246,9 +247,10 @@ export async function fetchPost(id: string): Promise<Post> {
   return handleResponse(res);
 }
 
-export async function fetchPosts(): Promise<{ posts: Post[]; page: number; limit: number }> {
+export async function fetchPosts(signal?: AbortSignal): Promise<{ posts: Post[]; page: number; limit: number }> {
   const res = await fetch(API_BASE + '/api/posts', {
     headers: { ...authHeaders() },
+    signal,
   });
   return handleResponse(res);
 }
