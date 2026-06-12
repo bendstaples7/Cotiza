@@ -65,3 +65,58 @@ export function resolveSpaceAllocation(
 
   return null;
 }
+
+/**
+ * Floor zone groupings for scoped sqft calculation.
+ * When the customer says "upstairs flooring" or "downstairs flooring" without
+ * specifying individual rooms, these groups define which SPACE_ALLOCATIONS entries
+ * belong to each zone and the zone's total fraction of whole-property sqft.
+ *
+ * Fractions are approximate for a typical Chicago 2-story home.
+ * upstairs:   master bedroom (1/8) + 2 bedrooms (2×1/10) + hallway (1/20) ≈ 0.475
+ * downstairs: kitchen (1/10) + living area (1/8) + dining (1/12) + hallway (1/20) ≈ 0.38
+ * Remainder: basement, garage, bathrooms, utilities — addressed by their own keywords.
+ */
+export interface FloorZoneEntry {
+  keywords: string[];
+  fraction: number;
+  label: string;
+  roomKeywords: string[]; // space names that belong to this zone
+}
+
+export const FLOOR_ZONES: FloorZoneEntry[] = [
+  {
+    keywords: ['upstairs', 'upper level', 'upper floor', 'second floor', '2nd floor'],
+    fraction: 0.475,
+    label: 'Upstairs',
+    roomKeywords: ['master bedroom', 'primary bedroom', 'master suite', 'bedroom', 'hallway', 'foyer', 'entryway'],
+  },
+  {
+    keywords: ['downstairs', 'main floor', 'main level', 'first floor', '1st floor', 'ground floor'],
+    fraction: 0.38,
+    label: 'Main Floor',
+    roomKeywords: ['kitchen', 'living room', 'great room', 'family room', 'dining room', 'hallway', 'foyer', 'entryway', 'mudroom'],
+  },
+];
+
+/**
+ * Resolve a floor zone reference to an estimated sqft.
+ * Returns null if the input doesn't match any known floor zone.
+ */
+export function resolveFloorZone(
+  text: string,
+  totalSqft: number,
+): { fraction: number; label: string; estimatedSqft: number } | null {
+  if (!text || !Number.isFinite(totalSqft) || totalSqft <= 0) return null;
+  const normalized = text.toLowerCase().replace(/^the\s+/, '').trim();
+  for (const zone of FLOOR_ZONES) {
+    if (zone.keywords.some((kw) => normalized.includes(kw))) {
+      return {
+        fraction: zone.fraction,
+        label: zone.label,
+        estimatedSqft: Math.round((totalSqft * zone.fraction) / 10) * 10,
+      };
+    }
+  }
+  return null;
+}

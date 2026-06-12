@@ -24,6 +24,9 @@ export interface CreateManualRequestPayload {
   mediaItemIds?: string[];
 }
 
+/** How a catalog product's quantity is determined during quote generation */
+export type QuantityMode = 'sqft' | 'hourly' | 'fixed';
+
 /** A product from the Jobber catalog or manual entry */
 export interface ProductCatalogEntry {
   id: string;
@@ -41,6 +44,32 @@ export interface ProductCatalogEntry {
    * Null/undefined means no constraint (same as 'any').
    */
   scope?: Scope | null;
+  /**
+   * How this product's quantity should be determined during quote generation.
+   *
+   * - 'sqft'    — quantity is calculated from square footage via the compute_quantity
+   *               rules pipeline. The sqft value is scoped to the relevant space(s)
+   *               mentioned in the customer request (e.g. "upstairs" uses the sum of
+   *               upstairs room allocations, not the whole-property sqft).
+   *               Use for: flooring, drywall, paint, insulation, subfloor, baseboard.
+   *
+   * - 'hourly'  — quantity represents labor hours. Derived from historical quote data
+   *               (QuantityEngine weighted median). Falls back to `defaultHours` when
+   *               there is insufficient history. sqft formulas never run for these items.
+   *               Use for: tile installation, shower surrounds, plumbing labor.
+   *
+   * - 'fixed'   — quantity is always 1 (or the AI's estimate). sqft formulas never run.
+   *               Use for: permits, inspections, individual fixture installs.
+   *
+   * Null/undefined defaults to 'sqft' for backward compatibility.
+   */
+  quantityMode?: QuantityMode | null;
+  /**
+   * Default labor hours used when quantityMode = 'hourly' and the QuantityEngine
+   * has insufficient historical data (fewer than 2 data points or confidence < threshold).
+   * Null means no default — the AI's original estimate is preserved as-is.
+   */
+  defaultHours?: number | null;
 }
 
 /** A line item within a quote template */

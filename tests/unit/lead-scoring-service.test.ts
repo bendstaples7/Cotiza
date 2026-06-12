@@ -481,7 +481,6 @@ describe('scoreLead — configurable weights', () => {
     expect(result.totalScore).toBeGreaterThanOrEqual(0);
     expect(result.totalScore).toBeLessThanOrEqual(100);
   });
-
   it('throws on invalid weight sums', () => {
     // Weights sum to 2.0 instead of 1.0
     expect(() =>
