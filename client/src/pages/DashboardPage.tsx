@@ -19,12 +19,21 @@ export default function DashboardPage() {
   const navigate = useNavigate();
   const [posts, setPosts] = useState<Post[]>([]);
   const [postsLoading, setPostsLoading] = useState(true);
+  const [postsError, setPostsError] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     fetchPosts()
-      .then((r) => setPosts(r.posts))
-      .catch(() => {})
-      .finally(() => setPostsLoading(false));
+      .then((r) => {
+        if (!cancelled) setPosts(r.posts);
+      })
+      .catch(() => {
+        if (!cancelled) setPostsError(true);
+      })
+      .finally(() => {
+        if (!cancelled) setPostsLoading(false);
+      });
+    return () => { cancelled = true; };
   }, []);
 
   const actions = [
@@ -82,6 +91,10 @@ export default function DashboardPage() {
       <h2 style={{ fontSize: '1.1rem', marginBottom: '1rem', color: '#333' }}>Recent Posts</h2>
       {postsLoading ? (
         <p style={{ color: '#999' }}>Loading...</p>
+      ) : postsError ? (
+        <div style={{ ...cardStyle, cursor: 'default', textAlign: 'center', color: '#cc0000', padding: '2rem' }}>
+          Could not load posts. Please try again later.
+        </div>
       ) : posts.length === 0 ? (
         <div style={{ ...cardStyle, cursor: 'default', textAlign: 'center', color: '#999', padding: '2rem' }}>
           No posts yet. Create your first post to get started.

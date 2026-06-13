@@ -365,13 +365,15 @@ export class QuoteEngine {
           };
 
           if (resolutionResult.resolved && resolutionResult.value !== null) {
-            // Only inject whole-property sqft from Tier 3 (public records) if the
-            // sqft value came from the customer text (Tier 1) or a layout diagram (Tier 2).
-            // Tier 3 returns the entire building's sqft which is wrong for room-specific
-            // items. hourly-mode items ignore sqft entirely; sqft-mode items that are
-            // room-specific will get their sqft from SpaceExtractionService (sqftOverride).
-            // Tier 3 is still used for whole-property jobs (exterior painting, full house
-            // flooring) where the space context will aggregate to the full property sqft.
+            // Only inject whole-property sqft from Tier 3 (public records) as the raw
+            // `sqft` variable if the value came from customer text (Tier 1) or a layout
+            // diagram (Tier 2). Tier 3 returns the entire building's sqft which is wrong
+            // for room-specific items — they get per-room sqft from SpaceExtractionService.
+            // hourly-mode items ignore sqft entirely; sqft-mode items that are room-specific
+            // will get their sqft from SpaceExtractionService (sqftOverride).
+            // Tier 3 values ARE still used: they are injected as `total_space_sqft` below
+            // (Option 3b) when no room-scoped sqft values are available from space extraction,
+            // covering whole-property jobs like exterior painting or full-house flooring.
             const shouldInjectSqft = resolutionResult.tier !== 'public_records';
             if (shouldInjectSqft) {
               preResolvedContext = new Map([['sqft', resolutionResult.value]]);
@@ -423,6 +425,23 @@ export class QuoteEngine {
             preResolvedContext.set('total_space_sqft', totalSpaceSqft);
           }
         }
+      }
+
+      // --- Option 3b: Fallback to public_records whole-property sqft ---
+      // If no room-scoped sqft values were extracted (spaceContexts was empty or
+      // had no known sqft), use the public_records value as total_space_sqft.
+      // This covers whole-property jobs (exterior painting, full-house flooring,
+      // etc.) where the resolution tier was public_records and no room breakdown
+      // exists. The value was intentionally not injected as raw `sqft` earlier
+      // (it would be wrong for room-scoped items), but is safe to use here as
+      // `total_space_sqft` when there are no per-room sqft values to prefer.
+      if (
+        (!preResolvedContext || !preResolvedContext.has('total_space_sqft')) &&
+        sqftResolutionResult?.resolution?.tier === 'public_records' &&
+        sqftResolutionResult?.resolution?.value !== null
+      ) {
+        if (!preResolvedContext) preResolvedContext = new Map();
+        preResolvedContext.set('total_space_sqft', sqftResolutionResult.resolution.value);
       }
 
       // --- Description Prefix Logic (Task 12) ---
@@ -765,7 +784,7 @@ export class QuoteEngine {
         });
 
         const { adjustedItems } = materialPriceService.calculateMaterialPrices(
-          lineItemsArray,
+          lineItemsArray.filter((item) => item.resolved),
           catalog,
         );
 

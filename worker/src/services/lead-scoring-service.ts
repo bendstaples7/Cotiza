@@ -30,7 +30,7 @@ import type { ScoringTier } from 'shared';
  * @returns A structured scoring result with tier, breakdown, and audit trail.
  */
 export function scoreLead(input: LeadScoringInput): LeadScoringResult {
-  const weights: ScoringWeights = input.weights ?? DEFAULT_SCORING_WEIGHTS;
+  const weights: ScoringWeights = validateWeights(input.weights ?? DEFAULT_SCORING_WEIGHTS);
   const overrides: ScoreOverride[] = input.overrides ?? [];
 
   // ── Step 1: Score each dimension ──────────────────────────────────
@@ -95,6 +95,30 @@ export function scoreLead(input: LeadScoringInput): LeadScoringResult {
 // ── Dimension Scorers ───────────────────────────────────────────────
 
 /**
+ * Validate that scoring weights are finite, non-negative, and sum to approximately 1.0.
+ *
+ * @throws {Error} if weights are invalid.
+ */
+function validateWeights(weights: ScoringWeights): ScoringWeights {
+  const values = [
+    weights.budgetAlignment,
+    weights.geographicFit,
+    weights.archetypeMatch,
+    weights.projectScope,
+  ];
+
+  if (values.some((v) => !Number.isFinite(v) || v < 0)) {
+    throw new Error('Scoring weights must be finite non-negative numbers.');
+  }
+
+  const sum = values.reduce((a, b) => a + b, 0);
+  if (Math.abs(sum - 1) > 1e-6) {
+    throw new Error(`Scoring weights must sum to 1.0 (received ${sum}).`);
+  }
+  return weights;
+}
+
+/**
  * Budget Alignment (weight: 0.25)
  *
  * Compares the customer's declared budget against the estimated project cost.
@@ -136,6 +160,14 @@ function scoreBudgetAlignment(input: {
   }
 
   // Both values available → score by ratio
+  if (input.estimatedCost! <= 0) {
+    // Zero or negative cost estimate is invalid — treat as missing data
+    return {
+      dimension: 'budgetAlignment',
+      score: 50,
+      rationale: `Estimated cost ($${formatCurrency(input.estimatedCost!)}) is invalid. Defaulting to neutral score.`,
+    };
+  }
   const ratio = input.declaredBudget! / input.estimatedCost!;
   let score: number;
   let rationale: string;
@@ -248,6 +280,9 @@ function scoreArchetypeMatch(input: {
   };
   const totalSubWeight = Object.values(subtypeWeights).reduce((s, w) => s + w, 0);
 
+  // Guard against division by zero when all sub-weights are zero
+  const safeTotalWeight = totalSubWeight > 0 ? totalSubWeight : 1;
+
   // Score each sub-dimension
   const subScores: Array<{ score: number; detail: string }> = [];
 
@@ -293,7 +328,7 @@ function scoreArchetypeMatch(input: {
   // Weighted composite
   const weightKeys = Object.keys(subtypeWeights);
   const composite = subScores.reduce(
-    (sum, s, i) => sum + s.score * (subtypeWeights[weightKeys[i]] / totalSubWeight),
+    (sum, s, i) => sum + s.score * (subtypeWeights[weightKeys[i]] / safeTotalWeight),
     0,
   );
 
