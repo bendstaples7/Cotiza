@@ -9,3 +9,4 @@ export * from './content';
 export * from './activity-log';
 export * from './quote';
 export * from './lead-scoring';
+export * from './review';

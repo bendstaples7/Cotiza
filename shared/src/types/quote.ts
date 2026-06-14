@@ -264,6 +264,8 @@ export interface QuoteDraft {
   lastQuoteSentAt?: string | null;
   /** Deathclock: metric status for pre-deathclock backfill ('no_data' or 'backfilled'). */
   metricStatus?: 'no_data' | 'backfilled' | null;
+  /** Review status for the quote review workflow (null = no review started) */
+  reviewStatus?: 'pending_review' | 'changes_requested' | null;
   createdAt: Date;
   updatedAt: Date;
 }
