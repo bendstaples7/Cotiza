@@ -1070,6 +1070,18 @@ app.post('/drafts/:id/push', async (c) => {
     });
   }
 
+  // Block push while under review (must go through review completion)
+  if (draft.reviewStatus === 'pending_review') {
+    throw new PlatformError({
+      severity: 'error',
+      component: 'QuoteRoutes',
+      operation: 'pushToJobber',
+      description: 'Cannot push directly while quote is under review. Complete the review first.',
+      recommendedActions: ['Use the review flow to push this quote to Jobber'],
+      statusCode: 400,
+    });
+  }
+
   const { jobberIntegration } = await createJobberIntegration(db, c.env);
   const pushService = new JobberQuotePushService(db, jobberIntegration);
   const result = await pushService.pushToJobber(draft);

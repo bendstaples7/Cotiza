@@ -51,3 +51,7 @@ export { CompletedWorkService, extractCompletedWorkPatterns, filterCompletedWork
 export type { CompletedWorkContext } from './completed-work-service.js';
 export { scoreLead } from './lead-scoring-service.js';
 export type { LeadScoringInput, LeadScoringResult, DimensionScore } from 'shared';
+export { ReviewSnapshotService } from './review-snapshot-service.js';
+export type { SnapshotPayload } from './review-snapshot-service.js';
+export { ReviewService } from './review-service.js';
+export type { ReviewDiff, ReviewQueueItem, ReviewDetail } from './review-service.js';

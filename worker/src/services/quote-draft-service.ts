@@ -125,7 +125,7 @@ export class QuoteDraftService {
     // Re-read the saved row to get DB-assigned fields (draft_number, timestamps).
     // We reuse the original draft's lineItems/unresolvedItems since they were just inserted.
     const row = await this.db.prepare(
-      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, deposit_schedule, space_context_json, generation_trace_json, created_at, updated_at FROM quote_drafts WHERE id = ?'
+      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, review_status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, deposit_schedule, space_context_json, generation_trace_json, created_at, updated_at FROM quote_drafts WHERE id = ?'
     ).bind(draft.id).first() as any;
 
     return this.mapDraftRow(row, draft.lineItems, draft.unresolvedItems, draft.actionItems);
@@ -136,7 +136,7 @@ export class QuoteDraftService {
    */
   async getById(draftId: string, userId: string): Promise<QuoteDraft> {
     const row = await this.db.prepare(
-      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, deposit_schedule, space_context_json, generation_trace_json, created_at, updated_at FROM quote_drafts WHERE id = ? AND user_id = ?'
+      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, review_status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, deposit_schedule, space_context_json, generation_trace_json, created_at, updated_at FROM quote_drafts WHERE id = ? AND user_id = ?'
     ).bind(draftId, userId).first() as any;
 
     if (!row) {
@@ -159,7 +159,7 @@ export class QuoteDraftService {
    */
   async list(userId: string): Promise<QuoteDraft[]> {
     const result = await this.db.prepare(
-      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, deposit_schedule, space_context_json, generation_trace_json, created_at, updated_at FROM quote_drafts WHERE user_id = ? ORDER BY created_at DESC'
+      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, review_status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, deposit_schedule, space_context_json, generation_trace_json, created_at, updated_at FROM quote_drafts WHERE user_id = ? ORDER BY created_at DESC'
     ).bind(userId).all();
 
     const drafts: QuoteDraft[] = [];
@@ -176,7 +176,19 @@ export class QuoteDraftService {
    */
   async update(draftId: string, userId: string, updates: QuoteDraftUpdate): Promise<QuoteDraft> {
     // Verify the draft exists and belongs to the user
-    await this.getById(draftId, userId);
+    const existingDraft = await this.getById(draftId, userId);
+
+    // Block modifications when under review
+    if (existingDraft.reviewStatus === 'pending_review') {
+      throw new PlatformError({
+        severity: 'error',
+        component: 'QuoteDraftService',
+        operation: 'update',
+        description: 'Cannot modify a quote that is currently under review. Complete or cancel the review first.',
+        recommendedActions: ['Wait for the review to complete, or request changes'],
+        statusCode: 400,
+      });
+    }
 
     const setClauses: string[] = ["updated_at = datetime('now')"];
     const values: unknown[] = [];
@@ -299,7 +311,7 @@ export class QuoteDraftService {
     await this.db.batch(statements);
 
     const row = await this.db.prepare(
-      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, deposit_schedule, space_context_json, generation_trace_json, created_at, updated_at FROM quote_drafts WHERE id = ?'
+      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, review_status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, deposit_schedule, space_context_json, generation_trace_json, created_at, updated_at FROM quote_drafts WHERE id = ?'
     ).bind(draftId).first() as any;
 
     const { lineItems, unresolvedItems } = await this.fetchLineItems(draftId);
@@ -318,6 +330,18 @@ export class QuoteDraftService {
    */
   async updateSqftResolution(draftId: string, userId: string, sqftOverride: number | null): Promise<QuoteDraft> {
     const draft = await this.getById(draftId, userId);
+
+    // Block modifications when under review
+    if (draft.reviewStatus === 'pending_review') {
+      throw new PlatformError({
+        severity: 'error',
+        component: 'QuoteDraftService',
+        operation: 'updateSqftResolution',
+        description: 'Cannot modify a quote that is currently under review.',
+        recommendedActions: ['Wait for the review to complete, or request changes'],
+        statusCode: 400,
+      });
+    }
 
     let newResolutionJson: string | null;
 
@@ -555,6 +579,7 @@ export class QuoteDraftService {
       jobberQuoteNumber: (row.jobber_quote_number as string) ?? null,
       jobberQuoteWebUri: (row.jobber_quote_web_uri as string) ?? null,
       status: row.status as QuoteDraft['status'],
+      reviewStatus: (row.review_status as QuoteDraft['reviewStatus']) ?? null,
       actionItems,
       customerNote: (row.customer_note as string) ?? null,
       depositSchedule,
