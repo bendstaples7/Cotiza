@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import type { QuoteDraft, QuoteLineItem, LineItemRationale, GenerationTrace, ErrorResponse, RuleGroupWithRules, Rule, ProductCatalogEntry, ActionItem, QuantityPredictionMeta, QuantitySource, ResolutionConfidence, ResolutionTier, DeathclockState } from 'shared';
-import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber, fetchDeathclock, markRequestSent } from '../api';
+import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber, fetchDeathclock, markRequestSent, submitForReview, reSubmitForReview, getPendingReviews } from '../api';
 import type { JobberRequestDetail } from '../api';
 import SimilarQuotesPanel from './SimilarQuotesPanel';
 import DeathclockBadge, { getLabel } from '../components/DeathclockBadge';
+import ReviewBadge from '../components/review/ReviewBadge';
 
 const MANUALLY_ADDED_SENTINEL = 'Manually added';
 
@@ -43,6 +44,11 @@ export default function QuoteDraftPage() {
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [templateSavedMsg, setTemplateSavedMsg] = useState<string | null>(null);
   const [templateSaveError, setTemplateSaveError] = useState(false);
+
+  // Review workflow state
+  const [submittingReview, setSubmittingReview] = useState(false);
+  const [submitReviewError, setSubmitReviewError] = useState<string | null>(null);
+  const [currentReviewId, setCurrentReviewId] = useState<string | null>(null);
 
   // Inline editing state
   const [editingCell, setEditingCell] = useState<{ itemId: string; field: 'quantity' | 'unitPrice' | 'productName' | 'description' } | null>(null);
@@ -138,6 +144,18 @@ export default function QuoteDraftPage() {
     setCustomerNoteValue(note);
     setCustomerNoteSaved(note);
   }, [draft?.customerNote]);
+
+  // Look up reviewId when draft has reviewStatus but no stored reviewId
+  useEffect(() => {
+    if (id && draft?.reviewStatus === 'pending_review' && !currentReviewId) {
+      getPendingReviews()
+        .then((reviews) => {
+          const match = reviews.find((r) => r.quoteDraftId === id);
+          if (match) setCurrentReviewId(match.id);
+        })
+        .catch(() => {});
+    }
+  }, [id, draft?.reviewStatus, currentReviewId]);
 
   const handleSubmitFeedback = async () => {
     if (!id || !feedbackText.trim()) {
@@ -253,6 +271,38 @@ export default function QuoteDraftPage() {
       setMarkSentError((err as ErrorResponse).message ?? 'Failed to mark as sent. Please try again.');
     } finally {
       setMarkingSent(false);
+    }
+  };
+
+  /** Submit the quote draft for review. */
+  const handleSubmitForReview = async () => {
+    if (!id || submittingReview) return;
+    setSubmittingReview(true);
+    setSubmitReviewError(null);
+    try {
+      const result = await submitForReview(id);
+      setCurrentReviewId(result.reviewId);
+      await loadDraft();
+    } catch (err) {
+      setSubmitReviewError((err as ErrorResponse).message ?? 'Failed to submit for review.');
+    } finally {
+      setSubmittingReview(false);
+    }
+  };
+
+  /** Re-submit after changes_requested. */
+  const handleReSubmitForReview = async () => {
+    if (!id || submittingReview) return;
+    setSubmittingReview(true);
+    setSubmitReviewError(null);
+    try {
+      const result = await reSubmitForReview(id);
+      setCurrentReviewId(result.reviewId);
+      await loadDraft();
+    } catch (err) {
+      setSubmitReviewError((err as ErrorResponse).message ?? 'Failed to re-submit for review.');
+    } finally {
+      setSubmittingReview(false);
     }
   };
 
@@ -594,6 +644,7 @@ export default function QuoteDraftPage() {
 
   const hasUnresolved = draft.unresolvedItems.length > 0;
   const showSidePanel = !!(draft.customerRequestText || requestDetail);
+  const isReadOnly = draft.reviewStatus === 'pending_review';
 
   return (
     <div style={{ display: 'flex', gap: '1.5rem', maxWidth: showSidePanel ? 1200 : 800, margin: '0 auto' }}>
@@ -636,6 +687,89 @@ export default function QuoteDraftPage() {
           📋 Save as Template
         </button>
       </div>
+
+      {/* Review status badge and actions */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.75rem', paddingLeft: 12 }}>
+        <ReviewBadge status={draft.reviewStatus as any} />
+        {(!draft.reviewStatus || draft.reviewStatus === 'none' || draft.reviewStatus === 'changes_requested') && (
+          draft.reviewStatus === 'changes_requested' ? (
+            <button
+              onClick={handleReSubmitForReview}
+              disabled={submittingReview}
+              style={{
+                padding: '0.4rem 1rem', borderRadius: 6, border: 'none',
+                background: submittingReview ? '#ccc' : '#7c3aed', color: '#fff',
+                fontWeight: 600, fontSize: '0.85rem',
+                cursor: submittingReview ? 'not-allowed' : 'pointer',
+                opacity: submittingReview ? 0.5 : 1,
+              }}
+              aria-label="Re-submit quote for review"
+            >
+              {submittingReview ? 'Submitting…' : 'Re-submit for Review'}
+            </button>
+          ) : (
+            <button
+              onClick={handleSubmitForReview}
+              disabled={submittingReview}
+              style={{
+                padding: '0.4rem 1rem', borderRadius: 6, border: 'none',
+                background: submittingReview ? '#ccc' : '#7c3aed', color: '#fff',
+                fontWeight: 600, fontSize: '0.85rem',
+                cursor: submittingReview ? 'not-allowed' : 'pointer',
+                opacity: submittingReview ? 0.5 : 1,
+              }}
+              aria-label="Submit quote for review"
+            >
+              {submittingReview ? 'Submitting…' : 'Submit for Review'}
+            </button>
+          )
+        )}
+        {draft.reviewStatus === 'pending_review' && currentReviewId && (
+          <button
+            onClick={() => navigate(`/quotes/reviews/${currentReviewId}`)}
+            style={{
+              padding: '0.4rem 1rem', borderRadius: 6, border: '1px solid #c4b5fd',
+              background: '#ede9fe', color: '#7c3aed', fontWeight: 600, fontSize: '0.85rem',
+              cursor: 'pointer',
+            }}
+            aria-label="View current review"
+          >
+            View Review
+          </button>
+        )}
+      </div>
+
+      {/* Changes requested banner */}
+      {draft.reviewStatus === 'changes_requested' && (
+        <div role="alert" style={{
+          padding: '0.65rem 1rem', background: '#fff7ed', border: '1px solid #fdba74',
+          borderRadius: 6, marginBottom: '0.75rem', fontSize: '0.88rem', color: '#9a3412',
+          display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap',
+        }}>
+          <span>⚠️ Changes requested — </span>
+          {currentReviewId ? (
+            <a
+              href={`/quotes/reviews/${currentReviewId}`}
+              style={{ color: '#ea580c', fontWeight: 600, textDecoration: 'underline' }}
+              onClick={(e) => { e.preventDefault(); navigate(`/quotes/reviews/${currentReviewId}`); }}
+            >
+              view feedback
+            </a>
+          ) : (
+            <span style={{ color: '#9a3412' }}>review feedback provided</span>
+          )}
+        </div>
+      )}
+
+      {/* Submit review error */}
+      {submitReviewError && (
+        <div role="alert" style={{
+          padding: '0.5rem 0.75rem', background: '#fdecea', border: '1px solid #ef9a9a',
+          borderRadius: 6, marginBottom: '0.75rem', fontSize: '0.85rem', color: '#b71c1c',
+        }}>
+          {submitReviewError}
+        </div>
+      )}
 
       {deathclock && (
         <div style={{ marginBottom: '0.5rem' }}>
@@ -1073,22 +1207,24 @@ export default function QuoteDraftPage() {
                   return (
                     <React.Fragment key={item.id}>
                       <tr
-                        draggable
-                        onDragStart={(e) => { setDragIndex(idx); e.dataTransfer.effectAllowed = 'move'; }}
-                        onDragOver={(e) => { e.preventDefault(); setDragOverIndex(idx); }}
-                        onDragLeave={() => setDragOverIndex(null)}
-                        onDrop={(e) => { e.preventDefault(); handleReorder(dragIndex!, idx); setDragIndex(null); setDragOverIndex(null); }}
-                        onDragEnd={() => { setDragIndex(null); setDragOverIndex(null); }}
+                        draggable={!isReadOnly}
+                        onDragStart={isReadOnly ? undefined : (e) => { setDragIndex(idx); e.dataTransfer.effectAllowed = 'move'; }}
+                        onDragOver={isReadOnly ? undefined : (e) => { e.preventDefault(); setDragOverIndex(idx); }}
+                        onDragLeave={isReadOnly ? undefined : () => setDragOverIndex(null)}
+                        onDrop={isReadOnly ? undefined : (e) => { e.preventDefault(); handleReorder(dragIndex!, idx); setDragIndex(null); setDragOverIndex(null); }}
+                        onDragEnd={isReadOnly ? undefined : () => { setDragIndex(null); setDragOverIndex(null); }}
                         style={{
                           verticalAlign: 'top',
-                          cursor: 'grab',
+                          cursor: isReadOnly ? 'default' : 'grab',
                           opacity: dragIndex === idx ? 0.4 : 1,
                           borderTop: dragOverIndex === idx ? '2px solid #00a89d' : undefined,
                         }}
                       >
+                        {!isReadOnly && (
                         <td style={{ ...tdStyle, padding: '0.5rem 0.25rem', textAlign: 'center' }}>
                           <span style={dragHandleStyle}>⠿</span>
                         </td>
+                        )}
                         <td style={tdStyle}>
                           {isEditingName ? (
                             <div>
@@ -1117,6 +1253,11 @@ export default function QuoteDraftPage() {
                             </div>
                           ) : (
                             <div>
+                              {isReadOnly ? (
+                                <span style={{ textAlign: 'left', display: 'inline-block', minWidth: 80, color: '#333' }}>
+                                  {item.productName}
+                                </span>
+                              ) : (
                               <span
                                 onClick={() => startEditing(item.id, 'productName', item.productName)}
                                 style={{ ...editableCellStyle, textAlign: 'left', display: 'inline-block', minWidth: 80 }}
@@ -1127,6 +1268,7 @@ export default function QuoteDraftPage() {
                               >
                                 {item.productName}
                               </span>
+                              )}
                             </div>
                           )}
                           {isEditingDesc ? (
@@ -1155,6 +1297,11 @@ export default function QuoteDraftPage() {
                               )}
                             </div>
                           ) : item.description ? (
+                            {isReadOnly ? (
+                              <div style={{ ...lineItemDescStyle, display: 'inline-block' }}>
+                                {item.description}
+                              </div>
+                            ) : (
                             <div
                               onClick={() => startEditing(item.id, 'description', item.description)}
                               style={{ ...lineItemDescStyle, cursor: 'pointer', borderBottom: '1px dashed #ccc', display: 'inline-block' }}
@@ -1165,7 +1312,8 @@ export default function QuoteDraftPage() {
                             >
                               {item.description}
                             </div>
-                          ) : (
+                            )}
+                          ) : isReadOnly ? null : (
                             <div
                               onClick={() => startEditing(item.id, 'description', '')}
                               style={{ fontSize: '0.75rem', color: '#bbb', cursor: 'pointer', marginTop: '0.15rem' }}
@@ -1193,6 +1341,21 @@ export default function QuoteDraftPage() {
                               autoFocus
                               aria-label={`Edit quantity for ${item.productName}`}
                             />
+                          ) : isReadOnly ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.2rem' }}>
+                              <span style={{ color: '#333' }}>
+                                {item.quantity}
+                              </span>
+                              {item.quantityPrediction && (
+                                <span
+                                  style={quantitySourceBadgeStyle(item.quantityPrediction.quantitySource)}
+                                  title={getQuantitySourceTooltip(item.quantityPrediction)}
+                                  aria-label={getQuantitySourceTooltip(item.quantityPrediction)}
+                                >
+                                  {getQuantitySourceLabel(item.quantityPrediction.quantitySource)}
+                                </span>
+                              )}
+                            </div>
                           ) : (
                             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.2rem' }}>
                               <span
