@@ -113,7 +113,7 @@ export default function ReviewQuotePage() {
           <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
             <PushToJobberButton
               onPush={handlePush}
-              onRequestChanges={() => setShowRequestChangesForm(true)}
+              onRequestChanges={async () => setShowRequestChangesForm(true)}
               hasFeedback={feedback.length > 0}
             />
           </div>
