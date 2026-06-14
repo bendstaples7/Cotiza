@@ -691,7 +691,7 @@ export default function QuoteDraftPage() {
       {/* Review status badge and actions */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.75rem', paddingLeft: 12 }}>
         <ReviewBadge status={draft.reviewStatus as any} />
-        {(!draft.reviewStatus || draft.reviewStatus === 'none' || draft.reviewStatus === 'changes_requested') && (
+        {(!draft.reviewStatus || draft.reviewStatus === 'changes_requested') && (
           draft.reviewStatus === 'changes_requested' ? (
             <button
               onClick={handleReSubmitForReview}
@@ -1297,7 +1297,7 @@ export default function QuoteDraftPage() {
                               )}
                             </div>
                           ) : item.description ? (
-                            {isReadOnly ? (
+                            isReadOnly ? (
                               <div style={{ ...lineItemDescStyle, display: 'inline-block' }}>
                                 {item.description}
                               </div>
@@ -1312,7 +1312,7 @@ export default function QuoteDraftPage() {
                             >
                               {item.description}
                             </div>
-                            )}
+                            )
                           ) : isReadOnly ? null : (
                             <div
                               onClick={() => startEditing(item.id, 'description', '')}
@@ -2047,16 +2047,16 @@ export default function QuoteDraftPage() {
             )}
             <button
               onClick={handlePushToJobber}
-              disabled={pushing || !draft.jobberRequestId}
+              disabled={pushing || !draft.jobberRequestId || isReadOnly}
               style={{
                 padding: '0.6rem 1.5rem',
-                background: pushing || !draft.jobberRequestId ? '#ccc' : '#00a89d',
+                background: pushing || !draft.jobberRequestId || isReadOnly ? '#ccc' : '#00a89d',
                 color: '#fff',
                 border: 'none',
                 borderRadius: 6,
                 fontSize: '0.95rem',
                 fontWeight: 600,
-                cursor: pushing || !draft.jobberRequestId ? 'not-allowed' : 'pointer',
+                cursor: pushing || !draft.jobberRequestId || isReadOnly ? 'not-allowed' : 'pointer',
               }}
             >
               {pushing ? (
