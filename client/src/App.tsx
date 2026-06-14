@@ -18,6 +18,8 @@ import RulesPage from './pages/RulesPage';
 import RequestQueuePage from './pages/RequestQueuePage';
 import DeathclockDashboardPage from './pages/DeathclockDashboardPage';
 import PlaceholderPage from './pages/PlaceholderPage';
+import ReviewQueuePage from './pages/ReviewQueuePage';
+import ReviewQuotePage from './pages/ReviewQuotePage';
 
 function LegacyPostRedirect() {
   const { id } = useParams();
@@ -46,7 +48,8 @@ export default function App() {
 
                 {/* Quotes section */}
                 <Route path="/quotes/queue" element={<RequestQueuePage />} />
-                <Route path="/quotes/reviews" element={<PlaceholderPage />} />
+                <Route path="/quotes/reviews" element={<ReviewQueuePage />} />
+                <Route path="/quotes/reviews/:reviewId" element={<ReviewQuotePage />} />
                 <Route path="/quotes" element={<QuoteInputPage />} />
                 <Route path="/quotes/drafts" element={<QuoteDraftsListPage />} />
                 <Route path="/quotes/drafts/:id" element={<QuoteDraftPage />} />
