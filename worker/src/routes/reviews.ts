@@ -143,6 +143,17 @@ app.get('/reviews/pending', async (c) => {
 });
 
 /**
+ * GET /api/reviews/pending/count
+ * Get pending review count for badge display.
+ */
+app.get('/reviews/pending/count', async (c) => {
+  const db = c.env.DB;
+  const reviewService = new ReviewService(db);
+  const count = await reviewService.getPendingReviewCount();
+  return c.json({ count });
+});
+
+/**
  * GET /api/reviews/:id
  * Get review detail with feedback and snapshots.
  */

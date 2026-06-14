@@ -31,6 +31,12 @@ export interface ReviewLineItemFeedback {
   createdAt: string;
 }
 
+/** Review notification operation types for the activity log system */
+export type ReviewNotificationOperation =
+  | 'review_submitted'
+  | 'changes_requested'
+  | 'pushed_to_jobber';
+
 /** A snapshot of quote data at review submission time for diff computation */
 export interface ReviewSnapshot {
   id: string;

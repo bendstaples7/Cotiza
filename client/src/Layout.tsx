@@ -1,10 +1,11 @@
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from './AuthContext';
 import { useEffect, useRef, useState } from 'react';
-import { API_BASE, triggerCookieRefresh } from './api';
+import { API_BASE, getPendingReviewCount, triggerCookieRefresh } from './api';
 
 const quotesNavItems = [
   { to: '/quotes/queue', label: 'Request Queue' },
+  { to: '/quotes/reviews', label: 'Pending Reviews' },
   { to: '/quotes', label: 'New Quote' },
   { to: '/quotes/drafts', label: 'Saved Drafts' },
   { to: '/quotes/rules', label: 'Rules & Product Ordering' },
@@ -222,6 +223,23 @@ export default function Layout() {
   const { user, logout, systemsStatus, recheckSystems, recheckSystemsSilent, skipInstagram, skipJobberSession } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+  const [pendingReviewCount, setPendingReviewCount] = useState(0);
+
+  // Fetch pending review count for nav badge
+  useEffect(() => {
+    const fetchCount = async () => {
+      try {
+        const count = await getPendingReviewCount();
+        setPendingReviewCount(count);
+      } catch {
+        // Non-critical — badge will show 0
+      }
+    };
+    fetchCount();
+    // Refresh count every 30 seconds
+    const interval = setInterval(fetchCount, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Systems check states — render before the normal shell
   if (systemsStatus.state === 'checking') {
@@ -351,9 +369,32 @@ export default function Layout() {
                     borderRadius: 4,
                     fontSize: '0.88rem',
                     background: isActive ? 'rgba(0,168,157,0.08)' : 'transparent',
+                    position: 'relative',
                   })}
                 >
                   {item.label}
+                  {item.to === '/quotes/reviews' && pendingReviewCount > 0 && (
+                    <span style={{
+                      position: 'absolute',
+                      right: 8,
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: '#e74c3c',
+                      color: '#fff',
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      minWidth: 18,
+                      height: 18,
+                      borderRadius: 9,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: '0 4px',
+                      lineHeight: 1,
+                    }}>
+                      {pendingReviewCount > 99 ? '99+' : pendingReviewCount}
+                    </span>
+                  )}
                 </NavLink>
               </li>
             ))}

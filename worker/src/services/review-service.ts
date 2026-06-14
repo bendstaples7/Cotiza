@@ -162,6 +162,10 @@ export class ReviewService {
       "UPDATE quote_drafts SET review_status = 'pending_review', updated_at = datetime('now') WHERE id = ?"
     ).bind(quoteDraftId).run();
 
+    // Fire notification for reviewer
+    const draftNumber = (draftRow.draft_number as number) ?? 0;
+    await this.notifyReviewSubmitted(reviewerId, draftNumber, quoteDraftId);
+
     return { reviewId, reviewCycle, status: 'pending_review' };
   }
 
@@ -525,6 +529,16 @@ export class ReviewService {
            WHERE id = ?`
         ).bind(quoteDraftId).run();
 
+        // Fire notification for the draft owner
+        const draftOwnerId = draftRow.user_id as string;
+        const draftNumber = (draftRow.draft_number as number) ?? 0;
+        await this.notifyPushedToJobber(
+          draftOwnerId,
+          draftNumber,
+          quoteDraftId,
+          pushResult.jobberQuoteNumber,
+        );
+
         return {
           status: 'push_to_jobber',
           jobberQuoteId: pushResult.jobberQuoteId,
@@ -558,6 +572,11 @@ export class ReviewService {
        WHERE id = ?`
     ).bind(quoteDraftId).run();
 
+    // Fire notification for the draft owner
+    const draftOwnerId = draftRow.user_id as string;
+    const draftNumber = (draftRow.draft_number as number) ?? 0;
+    await this.notifyPushedToJobber(draftOwnerId, draftNumber, quoteDraftId);
+
     return { status: 'push_to_jobber', reviewCompletedAt: completedAt };
   }
 
@@ -583,6 +602,22 @@ export class ReviewService {
        SET review_status = 'changes_requested', updated_at = datetime('now')
        WHERE id = ?`
     ).bind(quoteDraftId).run();
+
+    // Fire notification for the preparer (submitted_by)
+    const reviewRow = await this.db.prepare(
+      `SELECT qr.submitted_by_id, qd.draft_number
+       FROM quote_reviews qr
+       JOIN quote_drafts qd ON qd.id = qr.quote_draft_id
+       WHERE qr.id = ?`
+    ).bind(reviewId).first() as { submitted_by_id: string; draft_number: number } | null;
+
+    if (reviewRow) {
+      await this.notifyChangesRequested(
+        reviewRow.submitted_by_id,
+        reviewRow.draft_number,
+        quoteDraftId,
+      );
+    }
 
     return { status: 'changes_requested', reviewCompletedAt: completedAt };
   }
