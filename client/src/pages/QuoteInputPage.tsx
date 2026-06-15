@@ -4,6 +4,7 @@ import type { MediaItem, JobberCustomerRequest } from 'shared';
 import { uploadMedia, generateQuote, checkJobberStatus, fetchJobberRequestFormData } from '../api';
 import RequestSelector from './RequestSelector';
 import ManualRequestForm from './ManualRequestForm';
+import JobberQuoteImportSection from '../components/JobberQuoteImportSection';
 
 function extractErrorMessage(err: unknown, fallback: string): string {
   if (err && typeof err === 'object' && 'message' in err && typeof (err as any).message === 'string') {
@@ -346,6 +347,15 @@ export default function QuoteInputPage() {
           'Generate Quote'
         )}
       </button>
+
+      {/* Import from Jobber section */}
+      {jobberAvailable && (
+        <div style={{ marginTop: '1.5rem' }}>
+          <JobberQuoteImportSection
+            onImportSuccess={(draftId) => navigate('/quotes/drafts/' + draftId)}
+          />
+        </div>
+      )}
     </div>
   );
 }

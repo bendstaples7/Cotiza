@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'react';
 import { API_BASE, getPendingReviewCount, triggerCookieRefresh } from './api';
 
 const quotesNavItems = [
-  { to: '/quotes/queue', label: 'Request Queue' },
   { to: '/quotes/reviews', label: 'Pending Reviews' },
   { to: '/quotes', label: 'New Quote' },
   { to: '/quotes/drafts', label: 'Saved Drafts' },

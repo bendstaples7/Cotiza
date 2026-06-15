@@ -1,8 +1,21 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { JobberCustomerRequest } from 'shared';
 import { fetchJobberRequests } from '../api';
+import DeathclockBadge from '../components/DeathclockBadge';
 
 const POLL_INTERVAL_MS = 60_000; // Poll every 60 seconds
+
+/** Compute deathclock-like elapsed info from a createdAt string. */
+function computeAge(createdAt: string): { ageSeconds: number; color: 'green' | 'yellow' | 'orange' | 'red' } {
+  const elapsed = Date.now() - new Date(createdAt).getTime();
+  const ageSeconds = Math.max(0, Math.floor(elapsed / 1000));
+  const hours = ageSeconds / 3600;
+  let color: 'green' | 'yellow' | 'orange' | 'red' = 'green';
+  if (hours >= 72) color = 'red';
+  else if (hours >= 48) color = 'orange';
+  else if (hours >= 24) color = 'yellow';
+  return { ageSeconds, color };
+}
 
 interface RequestSelectorProps {
   onSelect: (request: JobberCustomerRequest) => void;
@@ -16,8 +29,15 @@ export default function RequestSelector({ onSelect, onClear, selectedRequestId, 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [tick, setTick] = useState(0);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fetchIdRef = useRef(0);
+
+  // 1-second tick — drives live deathclock age interpolation
+  useEffect(() => {
+    const interval = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const loadRequests = useCallback(async (opts?: { fresh?: boolean; silent?: boolean }) => {
     const currentFetchId = ++fetchIdRef.current;
@@ -116,6 +136,14 @@ export default function RequestSelector({ onSelect, onClear, selectedRequestId, 
           </div>
           <div style={{ fontSize: '0.85rem', color: '#555', marginBottom: '0.75rem' }}>
             {selectedRequest.clientName} · {formatDate(selectedRequest.createdAt)}
+            {' '}
+            <DeathclockBadge
+              ageSeconds={computeAge(selectedRequest.createdAt).ageSeconds}
+              color={computeAge(selectedRequest.createdAt).color}
+              isComplete={false}
+              frozen={false}
+              compact
+            />
           </div>
 
           {/* Description — only shown when there are no structured notes (avoids duplication
@@ -203,11 +231,20 @@ export default function RequestSelector({ onSelect, onClear, selectedRequestId, 
             style={itemStyle}
             type="button"
           >
-            <span style={{ fontWeight: 500, fontSize: '0.9rem' }}>{req.title}</span>
-            <span style={{ fontSize: '0.8rem', color: '#666' }}>
-              {req.clientName} · {formatDate(req.createdAt)}
-              {req.imageUrls.length > 0 && ` · 📷 ${req.imageUrls.length}`}
-            </span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', minWidth: 0, flex: 1 }}>
+              <span style={{ fontWeight: 500, fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{req.title}</span>
+              <span style={{ fontSize: '0.8rem', color: '#666' }}>
+                {req.clientName} · {formatDate(req.createdAt)}
+                {req.imageUrls.length > 0 && ` · 📷 ${req.imageUrls.length}`}
+              </span>
+            </div>
+            <DeathclockBadge
+              ageSeconds={computeAge(req.createdAt).ageSeconds}
+              color={computeAge(req.createdAt).color}
+              isComplete={false}
+              frozen={false}
+              compact
+            />
           </button>
         ))}
       </div>
@@ -236,8 +273,10 @@ const listStyle: React.CSSProperties = {
 
 const itemStyle: React.CSSProperties = {
   display: 'flex',
-  flexDirection: 'column',
-  gap: '0.15rem',
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  gap: '0.5rem',
   textAlign: 'left',
   padding: '0.5rem 0.75rem',
   border: '1px solid #e0e0e0',

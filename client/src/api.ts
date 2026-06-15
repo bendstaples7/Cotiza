@@ -1099,3 +1099,59 @@ export async function fetchTrends(): Promise<DeathclockTrends> {
   });
   return handleResponse(res);
 }
+
+// ── Jobber Quote Import ──
+
+export interface ImportableQuoteLineItem {
+  name: string;
+  description: string | null;
+  quantity: number;
+  unitPrice: { amount: number; currencyCode: string };
+}
+
+export interface ImportableQuote {
+  id: string;
+  quoteNumber: string;
+  title: string | null;
+  message: string | null;
+  quoteStatus: string;
+  jobberWebUri: string | null;
+  createdAt: string;
+  lineItems: ImportableQuoteLineItem[];
+  client: {
+    id: string;
+    firstName: string | null;
+    lastName: string | null;
+    companyName: string | null;
+  } | null;
+  property: {
+    address: {
+      fullAddress: string;
+      city: string;
+      state: string;
+      zipCode: string;
+    } | null;
+  } | null;
+}
+
+export interface ImportQuoteResult {
+  draft: QuoteDraft;
+  warnings: string[];
+}
+
+/** Fetch in-progress Jobber quotes that can be imported as Cotiza drafts. */
+export async function fetchImportableQuotes(): Promise<{ quotes: ImportableQuote[]; available: boolean }> {
+  const res = await fetch(API_BASE + '/api/quotes/jobber/quotes/in-progress', {
+    headers: { ...authHeaders() },
+  });
+  return handleResponse(res);
+}
+
+/** Import a Jobber quote as a Cotiza quote draft. Returns the draft + warnings. */
+export async function importJobberQuote(jobberQuoteId: string): Promise<ImportQuoteResult> {
+  const res = await fetch(API_BASE + '/api/quotes/jobber/quotes/' + jobberQuoteId + '/import', {
+    method: 'POST',
+    headers: { ...authHeaders() },
+  });
+  return handleResponseWithToast(res);
+}

@@ -21,7 +21,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 function run(cmd) {
-  return execSync(cmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+  return execSync(cmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 100 * 1024 * 1024 });
 }
 
 function queryRecords(flag, table, columns, orderClause = '') {
@@ -48,24 +48,32 @@ function esc(val) {
 function clearAndInsertLocal(table, columns, records, idColumn) {
   if (records.length === 0) return 0;
 
-  // Build a single batch INSERT statement
+  // Clear local table
+  try { run(`npx wrangler d1 execute DB --local --command "DELETE FROM ${table}"`); } catch { /* ignore */ }
+
   const colList = columns.join(', ');
-  const valueRows = records.map(r => {
-    const vals = columns.map(c => esc(r[c]));
-    return `(${vals.join(', ')})`;
-  });
+  let inserted = 0;
+  const BATCH_SIZE = 5;
 
-  const sql = `DELETE FROM ${table};\nINSERT INTO ${table} (${colList}) VALUES\n${valueRows.join(',\n')};`;
+  for (let i = 0; i < records.length; i += BATCH_SIZE) {
+    const batch = records.slice(i, i + BATCH_SIZE);
+    const valueRows = batch.map(r => {
+      const vals = columns.map(c => esc(r[c]));
+      return `(${vals.join(', ')})`;
+    });
 
-  const tmpFile = join(tmpdir(), `sync-${table}-${Date.now()}.sql`);
-  try {
-    writeFileSync(tmpFile, sql, 'utf8');
-    run(`npx wrangler d1 execute DB --local --file "${tmpFile}"`);
-  } finally {
-    try { unlinkSync(tmpFile); } catch { /* ignore */ }
+    const sql = `INSERT INTO ${table} (${colList}) VALUES\n${valueRows.join(',\n')};`;
+    const tmpFile = join(tmpdir(), `sync-${table}-${Date.now()}-${i}.sql`);
+    try {
+      writeFileSync(tmpFile, sql, 'utf8');
+      run(`npx wrangler d1 execute DB --local --file "${tmpFile}"`);
+      inserted += batch.length;
+    } finally {
+      try { unlinkSync(tmpFile); } catch { /* ignore */ }
+    }
   }
 
-  return records.length;
+  return inserted;
 }
 
 // ── Synced tables ──────────────────────────────────────────────

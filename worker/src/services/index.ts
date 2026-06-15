@@ -55,3 +55,5 @@ export { ReviewSnapshotService } from './review-snapshot-service.js';
 export type { SnapshotPayload } from './review-snapshot-service.js';
 export { ReviewService } from './review-service.js';
 export type { ReviewDiff, ReviewQueueItem, ReviewDetail } from './review-service.js';
+export { JobberQuoteImportService } from './jobber-quote-importer.js';
+export type { ImportableQuote, ImportableQuoteLineItem, ImportableQuoteClient, ImportableQuoteProperty, ImportQuoteResult } from './jobber-quote-importer.js';

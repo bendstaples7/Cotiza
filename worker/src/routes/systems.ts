@@ -21,6 +21,16 @@ app.get('/status', async (c) => {
   const db = c.env.DB;
   const userId = c.get('user').id;
 
+  // ── LOCAL-DEV: Skip all Jobber checks if ENABLE_LOCAL_SYNC is set ──
+  if (c.env.ENABLE_LOCAL_SYNC === 'true') {
+    const response: SystemsStatusResponse = {
+      jobber: { available: true },
+      jobberSession: { configured: true, expired: false },
+      instagram: { status: 'not_connected' },
+    };
+    return c.json(response);
+  }
+
   // ── Jobber OAuth token validity (fail-closed: unavailable on error) ──
   let jobberAvailable = false;
   try {

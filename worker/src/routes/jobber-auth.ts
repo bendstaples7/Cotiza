@@ -16,6 +16,23 @@ const JOBBER_AUTHORIZE_URL = 'https://api.getjobber.com/api/oauth/authorize';
 const JOBBER_TOKEN_URL = 'https://api.getjobber.com/api/oauth/token';
 
 /**
+ * Middleware: redirect to a simple message page if Jobber is not configured.
+ * This allows the dev server to start without JOBBER_CLIENT_ID in local dev.
+ */
+app.use('*', async (c, next) => {
+  if (!c.env.JOBBER_CLIENT_ID) {
+    return c.html(`
+      <html><body style="font-family:system-ui;max-width:600px;margin:40px auto;padding:20px;">
+        <h2>⚙️ Jobber Not Configured</h2>
+        <p>JOBBER_CLIENT_ID is not set. This is expected in local dev without Jobber.</p>
+        <p><a href="/">Return to app</a></p>
+      </body></html>
+    `);
+  }
+  await next();
+});
+
+/**
  * GET /authorize
  * Redirects the user to Jobber's OAuth authorization page.
  */

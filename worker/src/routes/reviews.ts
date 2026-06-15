@@ -117,7 +117,7 @@ app.get('/reviews/pending', async (c) => {
     `SELECT qr.id, qr.quote_draft_id, qd.draft_number, qd.customer_request_text,
             qr.status, qr.submitted_at, qr.review_cycle, qr.submitted_by_id,
             (SELECT SUM(li.quantity * li.unit_price) FROM quote_line_items li WHERE li.quote_draft_id = qd.id AND li.resolved = 1) as total_value,
-            u.display_name as submitted_by_name
+            u.name as submitted_by_name
      FROM quote_reviews qr
      JOIN quote_drafts qd ON qd.id = qr.quote_draft_id
      LEFT JOIN users u ON u.id = qr.submitted_by_id

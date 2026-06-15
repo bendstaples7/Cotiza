@@ -23,6 +23,8 @@ import {
 import { JobberWebhookService } from '../services/jobber-webhook-service.js';
 import { JobberTokenStore } from '../services/jobber-token-store.js';
 import { RulesSyncService } from '../services/rules-sync.js';
+import { JobberQuoteImportService } from '../services/jobber-quote-importer.js';
+import type { ImportableQuote } from '../services/jobber-quote-importer.js';
 import { invalidateDeathclockCache, invalidateTrendsCache } from './dashboard.js';
 import { computeDeathclock } from '../services/deathclock-service.js';
 
@@ -2304,6 +2306,63 @@ app.put('/productivity-rates/:id', async (c) => {
   const body = await c.req.json() as UpdateProductivityRatePayload;
   const rate = await service.updateRate(c.req.param('id'), body);
   return c.json(rate);
+});
+
+// ── Jobber Quote Import ─────────────────────────────────────────────
+
+/**
+ * GET /jobber/quotes/in-progress
+ * Fetch in-progress (draft + sent) quotes from Jobber that are importable as Cotiza drafts.
+ * Returns the list of quotes and whether the Jobber API is available.
+ */
+app.get('/jobber/quotes/in-progress', async (c) => {
+  const db = c.env.DB;
+  const { jobberIntegration } = await createJobberIntegration(db, c.env);
+
+  let quotes: ImportableQuote[] = [];
+  let available = false;
+
+  if (jobberIntegration.isAvailable()) {
+    const activityLog = new ActivityLogService(db);
+    const quoteDraftService = new QuoteDraftService(db);
+    const importer = new JobberQuoteImportService(db, quoteDraftService, jobberIntegration, activityLog);
+    quotes = await importer.fetchImportableQuotes();
+    available = true;
+  }
+
+  return c.json({ quotes, available });
+});
+
+/**
+ * POST /jobber/quotes/:jobberQuoteId/import
+ * Import a Jobber quote as a Cotiza quote draft.
+ *
+ * Returns 201 with the created draft and any warnings.
+ * Returns 409 if the quote has already been imported.
+ * Returns 404 if the quote doesn't exist in Jobber.
+ */
+app.post('/jobber/quotes/:jobberQuoteId/import', async (c) => {
+  const userId = c.get('user').id;
+  const db = c.env.DB;
+  const jobberQuoteId = c.req.param('jobberQuoteId');
+  const { jobberIntegration, activityLog } = await createJobberIntegration(db, c.env);
+
+  if (!jobberIntegration.isAvailable()) {
+    throw new PlatformError({
+      severity: 'error',
+      component: 'QuoteRoutes',
+      operation: 'importJobberQuote',
+      description: 'Jobber API is not available. Check credentials and connectivity.',
+      recommendedActions: ['Verify Jobber API credentials and try again.'],
+      statusCode: 503,
+    });
+  }
+
+  const quoteDraftService = new QuoteDraftService(db);
+  const importer = new JobberQuoteImportService(db, quoteDraftService, jobberIntegration, activityLog);
+  const result = await importer.importQuote(jobberQuoteId, userId);
+
+  return c.json(result, 201);
 });
 
 export default app;
