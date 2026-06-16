@@ -46,7 +46,8 @@ export default function App() {
                 <Route path="/social/activity-log" element={<ActivityLogPage />} />
 
                 {/* Quotes section */}
-                <Route path="/quotes/queue" element={<RequestQueuePage />} />
+                <Route path="/quotes/requests" element={<RequestQueuePage />} />
+                <Route path="/quotes/queue" element={<Navigate to="/quotes/requests" replace />} />
                 <Route path="/quotes/reviews" element={<ReviewQueuePage />} />
                 <Route path="/quotes" element={<QuoteInputPage />} />
                 <Route path="/quotes/drafts" element={<QuoteDraftsListPage />} />
