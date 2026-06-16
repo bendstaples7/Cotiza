@@ -239,6 +239,7 @@ export interface QuoteDraft {
   jobberRequestId: string | null;
   manualRequestId?: string | null;
   clientName?: string | null;
+  propertyAddress?: string | null;
   jobberQuoteId?: string | null;
   jobberQuoteNumber?: string | null;
   jobberQuoteWebUri?: string | null;

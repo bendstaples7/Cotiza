@@ -350,6 +350,7 @@ export class JobberQuoteImportService {
       jobberRequestId: null,
       manualRequestId: null,
       clientName,
+      propertyAddress,
       jobberQuoteId: quote.id,
       jobberQuoteNumber: quote.quoteNumber,
       jobberQuoteWebUri: quote.jobberWebUri || null,
