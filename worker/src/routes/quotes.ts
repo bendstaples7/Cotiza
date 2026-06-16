@@ -1121,6 +1121,71 @@ app.post('/drafts/:id/push', async (c) => {
 });
 
 /**
+ * POST /drafts/:id/push-update
+ * Push improvements to an existing Jobber quote (update, not create).
+ * Requires the draft to have a jobberQuoteId (from import or previous push).
+ */
+app.post('/drafts/:id/push-update', async (c) => {
+  const userId = c.get('user').id;
+  const db = c.env.DB;
+  const draftId = c.req.param('id');
+
+  const quoteDraftService = new QuoteDraftService(db);
+  const draft = await quoteDraftService.getById(draftId, userId);
+
+  // Require an existing Jobber quote to update
+  if (!draft.jobberQuoteId) {
+    throw new PlatformError({
+      severity: 'error',
+      component: 'QuoteRoutes',
+      operation: 'pushUpdateToJobber',
+      description: 'This draft has no linked Jobber quote to update. Use POST /drafts/:id/push to create a new quote instead.',
+      recommendedActions: ['Use push (not push-update) for drafts without a Jobber quote link'],
+      statusCode: 400,
+    });
+  }
+
+  // Block push-update while under review
+  if (draft.reviewStatus === 'pending_review') {
+    throw new PlatformError({
+      severity: 'error',
+      component: 'QuoteRoutes',
+      operation: 'pushUpdateToJobber',
+      description: 'Cannot push updates while quote is under review. Complete the review first.',
+      recommendedActions: ['Use the review flow to push this quote to Jobber'],
+      statusCode: 400,
+    });
+  }
+
+  const { jobberIntegration } = await createJobberIntegration(db, c.env);
+  const pushService = new JobberQuotePushService(db, jobberIntegration);
+  const result = await pushService.pushUpdateToJobber(draft);
+
+  // ── Deathclock: record send event ───────────────────────────────────────
+  await db.prepare(
+    `UPDATE quote_drafts
+        SET quote_sent_at = datetime('now'),
+            last_quote_sent_at = datetime('now')
+      WHERE id = ?`
+  ).bind(draftId).run();
+
+  if (draft.manualRequestId) {
+    const sendType = 'resend';
+    await db.prepare(
+      `INSERT INTO quote_send_events (quote_id, request_id, sent_at, elapsed_seconds_from_request, send_type)
+       VALUES (?, ?, datetime('now'),
+               CAST((unixepoch('now') - unixepoch((SELECT created_at FROM manual_requests WHERE id = ?))) AS INTEGER),
+               ?)`
+    ).bind(draftId, draft.manualRequestId, draft.manualRequestId, sendType).run();
+  }
+
+  invalidateDeathclockCache(userId);
+  invalidateTrendsCache(userId);
+
+  return c.json(result);
+});
+
+/**
  * POST /drafts/:id/revise
  * Submit feedback and get a revised draft.
  */
