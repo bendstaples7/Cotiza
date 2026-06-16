@@ -21,10 +21,31 @@ app.get('/status', async (c) => {
   const db = c.env.DB;
   const userId = c.get('user').id;
 
-  // ── LOCAL-DEV: Skip all Jobber checks if ENABLE_LOCAL_SYNC is set ──
+  // ── LOCAL-DEV: Skip session cookie check and Instagram check, ──
+  // but still validate the OAuth token from local D1.
   if (c.env.ENABLE_LOCAL_SYNC === 'true') {
+    let jobberAvailable = false;
+    try {
+      const tokenStore = new JobberTokenStore(db);
+      const tokens = await tokenStore.load();
+      if (tokens) {
+        const activityLog = new ActivityLogService(db);
+        const jobber = new JobberIntegration(activityLog, {
+          clientId: c.env.JOBBER_CLIENT_ID || '',
+          clientSecret: c.env.JOBBER_CLIENT_SECRET || '',
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          tokenStore,
+        });
+        await jobber.graphqlRequest('{ account { name } }', {});
+        jobberAvailable = jobber.isAvailable();
+      }
+    } catch {
+      jobberAvailable = false;
+    }
+
     const response: SystemsStatusResponse = {
-      jobber: { available: true },
+      jobber: { available: jobberAvailable },
       jobberSession: { configured: true, expired: false },
       instagram: { status: 'not_connected' },
     };
