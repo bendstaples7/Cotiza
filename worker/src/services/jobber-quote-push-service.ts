@@ -78,6 +78,40 @@ const QUOTE_CREATE_MUTATION = `
   }
 `;
 
+const QUOTE_EDIT_MUTATION = `
+  mutation EditQuote($quoteId: EncodedId!, $attributes: QuoteEditAttributes!) {
+    quoteEdit(quoteId: $quoteId, attributes: $attributes) {
+      quote {
+        id
+        quoteNumber
+        quoteStatus
+        jobberWebUri
+      }
+      userErrors {
+        message
+        path
+      }
+    }
+  }
+`;
+
+const QUOTE_EDIT_LINE_ITEMS_MUTATION = `
+  mutation EditQuoteLineItems($quoteId: EncodedId!, $lineItems: [QuoteEditLineItemAttributes!]!) {
+    quoteEditLineItems(quoteId: $quoteId, lineItems: $lineItems) {
+      quote {
+        id
+        quoteNumber
+        quoteStatus
+        jobberWebUri
+      }
+      userErrors {
+        message
+        path
+      }
+    }
+  }
+`;
+
 export class JobberQuotePushService {
   private readonly db: D1Database;
   private readonly jobberIntegration: JobberIntegration;
@@ -259,5 +293,129 @@ export class JobberQuotePushService {
     await this.db.prepare(
       `UPDATE quote_drafts SET jobber_quote_id = ?, jobber_quote_number = ?, jobber_quote_web_uri = ?, status = 'finalized', updated_at = datetime('now') WHERE id = ?`
     ).bind(jobberQuoteId, jobberQuoteNumber, jobberQuoteWebUri, draftId).run();
+  }
+
+  /**
+   * Update an existing Jobber quote (one that was already pushed or imported).
+   * Validates that the draft has a linked Jobber quote ID, then updates the
+   * quote header (title, message) and any line items that have a jobberLineItemId.
+   * Does NOT persist — the quote ID is already known.
+   */
+  async pushUpdateToJobber(draft: QuoteDraft): Promise<PushResult> {
+    if (!draft.jobberQuoteId) {
+      throw new PlatformError({
+        severity: 'error',
+        component: 'JobberQuotePushService',
+        operation: 'pushUpdateToJobber',
+        description:
+          'This draft has no linked Jobber quote to update. Use pushToJobber to create a new quote instead.',
+        recommendedActions: [
+          'Import a Jobber quote first, then use push-update to push improvements',
+        ],
+        statusCode: 400,
+      });
+    }
+
+    // Step 1: Build the quoteEdit mutation input
+    const paddedNumber = String(draft.draftNumber ?? 0).padStart(3, '0');
+    const title = `Draft D-${paddedNumber}`;
+    const message = buildJobberMessage(
+      draft.customerNote,
+      draft.depositSchedule,
+      draft.unresolvedItems ?? [],
+    );
+
+    const attributes: Record<string, unknown> = {
+      title,
+    };
+    if (message) {
+      attributes.message = message;
+    }
+
+    // Step 2: Execute the quoteEdit mutation
+    const editResponse = await this.jobberIntegration.graphqlRequest<{
+      quoteEdit: {
+        quote: {
+          id: string;
+          quoteNumber: string;
+          quoteStatus: string;
+          jobberWebUri: string;
+        } | null;
+        userErrors: Array<{ message: string; path: string[] }>;
+      };
+    }>(QUOTE_EDIT_MUTATION, {
+      quoteId: draft.jobberQuoteId,
+      attributes,
+    });
+
+    if (
+      editResponse.quoteEdit.userErrors &&
+      editResponse.quoteEdit.userErrors.length > 0
+    ) {
+      throw new PlatformError({
+        severity: 'error',
+        component: 'JobberQuotePushService',
+        operation: 'pushUpdateToJobber',
+        description: `Jobber rejected the quote update: ${editResponse.quoteEdit.userErrors[0].message}`,
+        recommendedActions: [
+          'Review the error details and adjust the quote draft',
+        ],
+        statusCode: 422,
+      });
+    }
+
+    const quote = editResponse.quoteEdit.quote;
+    if (!quote) {
+      throw new PlatformError({
+        severity: 'error',
+        component: 'JobberQuotePushService',
+        operation: 'pushUpdateToJobber',
+        description: 'Jobber returned no quote in the response.',
+        recommendedActions: ['Try again'],
+        statusCode: 502,
+      });
+    }
+
+    // Step 3: Update line items that have jobberLineItemId
+    const lineItemsWithIds = draft.lineItems.filter(
+      (item) => item.jobberLineItemId,
+    );
+    if (lineItemsWithIds.length > 0) {
+      const lineItemInputs = lineItemsWithIds.map((item) => ({
+        id: item.jobberLineItemId,
+        name: item.productName,
+        quantity: item.quantity,
+        unitPrice: { amount: item.unitPrice },
+        ...(item.description ? { description: item.description } : {}),
+      }));
+
+      const lineItemResponse = await this.jobberIntegration.graphqlRequest<{
+        quoteEditLineItems: {
+          quote: {
+            id: string;
+            quoteNumber: string;
+            quoteStatus: string;
+            jobberWebUri: string;
+          } | null;
+          userErrors: Array<{ message: string; path: string[] }>;
+        };
+      }>(QUOTE_EDIT_LINE_ITEMS_MUTATION, {
+        quoteId: draft.jobberQuoteId,
+        lineItems: lineItemInputs,
+      });
+
+      if (lineItemResponse.quoteEditLineItems.userErrors?.length > 0) {
+        // Log but don't block — header update succeeded
+        console.warn(
+          `Line item update had errors: ${lineItemResponse.quoteEditLineItems.userErrors.map((e) => e.message).join(', ')}`,
+        );
+      }
+    }
+
+    return {
+      jobberQuoteId: quote.id,
+      jobberQuoteNumber: quote.quoteNumber,
+      jobberQuoteWebUri: quote.jobberWebUri,
+    };
   }
 }
