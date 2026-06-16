@@ -12,6 +12,7 @@ import SettingsPage from './pages/SettingsPage';
 import ActivityLogPage from './pages/ActivityLogPage';
 import QuoteInputPage from './pages/QuoteInputPage';
 import QuoteDraftPage from './pages/QuoteDraftPage';
+import QuotesHubPage from './pages/QuotesHubPage';
 import QuoteDraftsListPage from './pages/QuoteDraftsListPage';
 import ManualFallbackPage from './pages/ManualFallbackPage';
 import RulesPage from './pages/RulesPage';
@@ -49,7 +50,8 @@ export default function App() {
                 <Route path="/quotes/requests" element={<RequestQueuePage />} />
                 <Route path="/quotes/queue" element={<Navigate to="/quotes/requests" replace />} />
                 <Route path="/quotes/reviews" element={<ReviewQueuePage />} />
-                <Route path="/quotes" element={<QuoteInputPage />} />
+                <Route path="/quotes" element={<QuotesHubPage />} />
+                <Route path="/quotes/new" element={<QuoteInputPage />} />
                 <Route path="/quotes/drafts" element={<QuoteDraftsListPage />} />
                 <Route path="/quotes/drafts/:id" element={<QuoteDraftPage />} />
                 <Route path="/quotes/rules" element={<RulesPage />} />
