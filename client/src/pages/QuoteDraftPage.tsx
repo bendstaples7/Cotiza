@@ -1,11 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import type { QuoteDraft, QuoteLineItem, LineItemRationale, GenerationTrace, ErrorResponse, RuleGroupWithRules, Rule, ProductCatalogEntry, ActionItem, QuantityPredictionMeta, QuantitySource, ResolutionConfidence, ResolutionTier, DeathclockState } from 'shared';
-import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber, fetchDeathclock, markRequestSent, submitForReview, reSubmitForReview, getPendingReviews } from '../api';
-import type { JobberRequestDetail } from '../api';
+import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber, fetchDeathclock, markRequestSent, submitForReview, reSubmitForReview, getPendingReviews, getReview, completeReview } from '../api';
+import type { JobberRequestDetail, ReviewDetailData } from '../api';
 import SimilarQuotesPanel from './SimilarQuotesPanel';
 import DeathclockBadge, { getLabel } from '../components/DeathclockBadge';
 import ReviewBadge from '../components/review/ReviewBadge';
+import LineItemsTable from '../components/LineItemsTable';
+import ReviewLineItemFeedbackPanel from '../components/review/ReviewLineItemFeedbackPanel';
+import PushToJobberButton from '../components/review/PushToJobberButton';
 
 const MANUALLY_ADDED_SENTINEL = 'Manually added';
 
@@ -17,7 +20,10 @@ const DEATHCLOCK_COLOR_MAP: Record<string, string> = {
 };
 
 export default function QuoteDraftPage() {
-  const { id } = useParams<{ id: string }>();
+  const { id, reviewId: routeReviewId } = useParams<{ id: string; reviewId: string }>();
+  const isReviewMode = !!routeReviewId;
+  const reviewId = routeReviewId;
+
   const navigate = useNavigate();
 
   const [draft, setDraft] = useState<QuoteDraft | null>(null);
@@ -49,6 +55,13 @@ export default function QuoteDraftPage() {
   const [submittingReview, setSubmittingReview] = useState(false);
   const [submitReviewError, setSubmitReviewError] = useState<string | null>(null);
   const [currentReviewId, setCurrentReviewId] = useState<string | null>(null);
+
+  // Review mode state
+  const [reviewData, setReviewData] = useState<ReviewDetailData | null>(null);
+  const [reviewModeLoading, setReviewModeLoading] = useState(false);
+  const [reviewModeError, setReviewModeError] = useState<string | null>(null);
+  const [requestChangesNotes, setRequestChangesNotes] = useState('');
+  const [showRequestChangesForm, setShowRequestChangesForm] = useState(false);
 
   // Inline editing state
   const [editingCell, setEditingCell] = useState<{ itemId: string; field: 'quantity' | 'unitPrice' | 'productName' | 'description' } | null>(null);
@@ -157,6 +170,28 @@ export default function QuoteDraftPage() {
     }
   }, [id, draft?.reviewStatus, currentReviewId]);
 
+  // Load review data when in review mode
+  useEffect(() => {
+    if (!reviewId) return;
+    setReviewModeLoading(true);
+    setReviewModeError(null);
+    getReview(reviewId)
+      .then((data) => {
+        setReviewData(data);
+        // Create a pseudo-draft from the review quote data
+        if (data.quote) {
+          setDraft(data.quote as unknown as QuoteDraft);
+        }
+      })
+      .catch((err) => {
+        setReviewModeError((err as any).message ?? 'Failed to load review.');
+      })
+      .finally(() => {
+        setReviewModeLoading(false);
+        setLoading(false);
+      });
+  }, [reviewId]);
+
   const handleSubmitFeedback = async () => {
     if (!id || !feedbackText.trim()) {
       setFeedbackValidation('Please enter feedback before submitting.');
@@ -183,6 +218,33 @@ export default function QuoteDraftPage() {
       setRevisionError((err as ErrorResponse).message ?? 'Revision failed. Please try again.');
     } finally {
       setRevising(false);
+    }
+  };
+
+  // ── Review mode handlers ──
+
+  const handleReviewPushToJobber = async () => {
+    if (!reviewId) return;
+    try {
+      await completeReview(reviewId, 'push_to_jobber');
+      // Refresh review data
+      const data = await getReview(reviewId);
+      setReviewData(data);
+    } catch (err) {
+      throw err;
+    }
+  };
+
+  const handleReviewRequestChanges = async () => {
+    if (!reviewId) return;
+    try {
+      await completeReview(reviewId, 'changes_requested', requestChangesNotes || undefined);
+      setShowRequestChangesForm(false);
+      setRequestChangesNotes('');
+      const data = await getReview(reviewId);
+      setReviewData(data);
+    } catch (err) {
+      throw err;
     }
   };
 
@@ -627,7 +689,7 @@ export default function QuoteDraftPage() {
       <div style={containerStyle}>
         <div style={loadingContainerStyle}>
           <span style={spinnerStyle} />
-          <p style={{ margin: '0.75rem 0 0', color: '#555' }}>Loading quote draft…</p>
+          <p style={{ margin: '0.75rem 0 0', color: '#555' }}>{isReviewMode ? 'Loading review detail…' : 'Loading quote draft…'}</p>
         </div>
       </div>
     );
@@ -636,8 +698,8 @@ export default function QuoteDraftPage() {
   if (error || !draft) {
     return (
       <div style={containerStyle}>
-        <button onClick={() => navigate('/quotes')} style={backBtnStyle}>← Back to New Quote</button>
-        <div role="alert" style={alertStyle}>{error ?? 'Quote draft not found.'}</div>
+        <button onClick={() => navigate(isReviewMode ? '/quotes/reviews' : '/quotes')} style={backBtnStyle}>{isReviewMode ? '← Back to Review Queue' : '← Back to New Quote'}</button>
+        <div role="alert" style={alertStyle}>{error ?? (isReviewMode ? 'Review not found.' : 'Quote draft not found.')}</div>
       </div>
     );
   }
@@ -650,8 +712,62 @@ export default function QuoteDraftPage() {
     <div style={{ display: 'flex', gap: '1.5rem', maxWidth: showSidePanel ? 1200 : 800, margin: '0 auto' }}>
       {/* Main content */}
       <div style={{ flex: 1, minWidth: 0 }}>
-      <button onClick={() => navigate('/quotes')} style={backBtnStyle}>← Back to New Quote</button>
+      <button onClick={() => navigate(isReviewMode ? '/quotes/reviews' : '/quotes')} style={backBtnStyle}>{isReviewMode ? '← Back to Review Queue' : '← Back to New Quote'}</button>
 
+      {/* Review mode header */}
+      {isReviewMode && reviewData && (() => {
+        const review = reviewData.review;
+        const isCompleted = review.status === 'push_to_jobber' || review.status === 'changes_requested';
+        const lineItems = (draft as any).lineItems ?? [];
+        return (
+          <>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap',
+            marginBottom: '0.5rem',
+          }}>
+            <h1 style={{ ...titleStyle, margin: 0 }}>
+              {draft.clientName ? `${draft.clientName} — ` : ''}
+              {(draft as any).jobberQuoteNumber ? `J-${(draft as any).jobberQuoteNumber}` : `D-${String((draft as any).draftNumber ?? '').padStart(3, '0')}`}
+            </h1>
+            <ReviewBadge status={review.status as any} />
+          </div>
+          <p style={{ margin: '0.25rem 0 1rem', color: '#666', fontSize: '0.9rem' }}>
+            Submitted {new Date(review.submittedAt).toLocaleString()} · Cycle {(review as any).reviewCycle ?? 1}
+          </p>
+          {/* Action buttons for review mode */}
+          {!isCompleted && (
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start', marginBottom: '1rem' }}>
+              <PushToJobberButton
+                onPush={handleReviewPushToJobber}
+                onRequestChanges={async () => setShowRequestChangesForm(true)}
+                hasFeedback={reviewData.feedback.length > 0}
+              />
+            </div>
+          )}
+          {/* Completed state banner */}
+          {isCompleted && (
+            <div style={{
+              background: review.status === 'push_to_jobber' ? '#f0fdf4' : '#fff7ed',
+              border: `1px solid ${review.status === 'push_to_jobber' ? '#bbf7d0' : '#fdba74'}`,
+              color: review.status === 'push_to_jobber' ? '#16a34a' : '#ea580c',
+              padding: '0.75rem 1rem',
+              borderRadius: 6,
+              marginBottom: '1rem',
+              fontSize: '0.9rem',
+              fontWeight: 600,
+            }}>
+              {review.status === 'push_to_jobber'
+                ? '✅ Quote has been pushed to Jobber.'
+                : 'Changes have been requested.'}
+              {review.notes && <span style={{ fontWeight: 400, display: 'block', marginTop: '0.25rem' }}>{review.notes}</span>}
+            </div>
+          )}
+          </>
+        );
+      })()}
+
+      {!isReviewMode && (
+      <>
       <div style={{
         display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap',
         marginBottom: '0.5rem',
@@ -1167,418 +1283,20 @@ export default function QuoteDraftPage() {
       <div style={sectionStyle}>
         <h2 style={sectionTitleStyle}>Matched Line Items</h2>
 
-        {/* Undo delete toast */}
-        {pendingDelete && (
-          <div style={undoToastStyle} role="status" aria-live="polite">
-            <span>
-              <strong>{pendingDelete.item.productName}</strong> removed.
-            </span>
-            <button onClick={handleUndoDelete} style={undoBtnStyle}>
-              Undo
-            </button>
-          </div>
-        )}
-        {draft.lineItems.length === 0 ? (
-          <p style={{ color: '#888', margin: '0.5rem 0' }}>No matched line items.</p>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={tableStyle}>
-              <thead>
-                <tr>
-                  <th style={{ ...thStyle, width: 24, padding: '0.5rem 0.25rem' }}></th>
-                  <th style={thStyle}>Product Name</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>Quantity</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>Unit Price</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>Total</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>Confidence</th>
-                  <th style={{ ...thStyle, textAlign: 'center', width: 40 }}>Rules</th>
-                  <th style={{ ...thStyle, textAlign: 'center', width: 36 }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {draft.lineItems.map((item: QuoteLineItem, idx: number) => {
-                  const isExpanded = expandedRuleRows.has(item.id);
-                  const appliedGrouped = getAppliedRulesGrouped(item);
-                  const hasRules = appliedGrouped.size > 0;
-                  const isEditingQty = editingCell?.itemId === item.id && editingCell.field === 'quantity';
-                  const isEditingPrice = editingCell?.itemId === item.id && editingCell.field === 'unitPrice';
-                  const isEditingName = editingCell?.itemId === item.id && editingCell.field === 'productName';
-                  const isEditingDesc = editingCell?.itemId === item.id && editingCell.field === 'description';
-                  return (
-                    <React.Fragment key={item.id}>
-                      <tr
-                        draggable={!isReadOnly}
-                        onDragStart={isReadOnly ? undefined : (e) => { setDragIndex(idx); e.dataTransfer.effectAllowed = 'move'; }}
-                        onDragOver={isReadOnly ? undefined : (e) => { e.preventDefault(); setDragOverIndex(idx); }}
-                        onDragLeave={isReadOnly ? undefined : () => setDragOverIndex(null)}
-                        onDrop={isReadOnly ? undefined : (e) => { e.preventDefault(); handleReorder(dragIndex!, idx); setDragIndex(null); setDragOverIndex(null); }}
-                        onDragEnd={isReadOnly ? undefined : () => { setDragIndex(null); setDragOverIndex(null); }}
-                        style={{
-                          verticalAlign: 'top',
-                          cursor: isReadOnly ? 'default' : 'grab',
-                          opacity: dragIndex === idx ? 0.4 : 1,
-                          borderTop: dragOverIndex === idx ? '2px solid #00a89d' : undefined,
-                        }}
-                      >
-                        {!isReadOnly && (
-                        <td style={{ ...tdStyle, padding: '0.5rem 0.25rem', textAlign: 'center' }}>
-                          <span style={dragHandleStyle}>⠿</span>
-                        </td>
-                        )}
-                        <td style={tdStyle}>
-                          {isEditingName ? (
-                            <div>
-                              <input
-                                ref={editInputRef}
-                                type="text"
-                                value={editValue}
-                                onChange={(e) => setEditValue(e.target.value)}
-                                onBlur={() => setTimeout(saveEdit, 150)}
-                                onKeyDown={handleEditKeyDown}
-                                style={inlineEditTextInputStyle}
-                                autoFocus
-                                aria-label={`Edit product name for ${item.productName}`}
-                              />
-                              {item.productCatalogEntryId && (
-                                <label style={updateCatalogLabelStyle}>
-                                  <input
-                                    type="checkbox"
-                                    checked={updateCatalogChecked}
-                                    onChange={(e) => setUpdateCatalogChecked(e.target.checked)}
-                                    style={{ marginRight: '0.3rem' }}
-                                  />
-                                  Update in catalog
-                                </label>
-                              )}
-                            </div>
-                          ) : (
-                            <div>
-                              {isReadOnly ? (
-                                <span style={{ textAlign: 'left', display: 'inline-block', minWidth: 80, color: '#333' }}>
-                                  {item.productName}
-                                </span>
-                              ) : (
-                              <span
-                                onClick={() => startEditing(item.id, 'productName', item.productName)}
-                                style={{ ...editableCellStyle, textAlign: 'left', display: 'inline-block', minWidth: 80 }}
-                                role="button"
-                                tabIndex={0}
-                                onKeyDown={(e) => { if (e.key === 'Enter') startEditing(item.id, 'productName', item.productName); }}
-                                aria-label={`Product name: ${item.productName}. Click to edit.`}
-                              >
-                                {item.productName}
-                              </span>
-                              )}
-                            </div>
-                          )}
-                          {isEditingDesc ? (
-                            <div>
-                              <input
-                                ref={editInputRef}
-                                type="text"
-                                value={editValue}
-                                onChange={(e) => setEditValue(e.target.value)}
-                                onBlur={() => setTimeout(saveEdit, 150)}
-                                onKeyDown={handleEditKeyDown}
-                                style={{ ...inlineEditTextInputStyle, fontSize: '0.75rem', marginTop: '0.15rem' }}
-                                autoFocus
-                                aria-label={`Edit description for ${item.productName}`}
-                              />
-                              {item.productCatalogEntryId && (
-                                <label style={updateCatalogLabelStyle}>
-                                  <input
-                                    type="checkbox"
-                                    checked={updateCatalogChecked}
-                                    onChange={(e) => setUpdateCatalogChecked(e.target.checked)}
-                                    style={{ marginRight: '0.3rem' }}
-                                  />
-                                  Update in catalog
-                                </label>
-                              )}
-                            </div>
-                          ) : item.description ? (
-                            isReadOnly ? (
-                              <div style={{ ...lineItemDescStyle, display: 'inline-block' }}>
-                                {item.description}
-                              </div>
-                            ) : (
-                            <div
-                              onClick={() => startEditing(item.id, 'description', item.description)}
-                              style={{ ...lineItemDescStyle, cursor: 'pointer', borderBottom: '1px dashed #ccc', display: 'inline-block' }}
-                              role="button"
-                              tabIndex={0}
-                              onKeyDown={(e) => { if (e.key === 'Enter') startEditing(item.id, 'description', item.description); }}
-                              aria-label={`Description: ${item.description}. Click to edit.`}
-                            >
-                              {item.description}
-                            </div>
-                            )
-                          ) : isReadOnly ? null : (
-                            <div
-                              onClick={() => startEditing(item.id, 'description', '')}
-                              style={{ fontSize: '0.75rem', color: '#bbb', cursor: 'pointer', marginTop: '0.15rem' }}
-                              role="button"
-                              tabIndex={0}
-                              onKeyDown={(e) => { if (e.key === 'Enter') startEditing(item.id, 'description', ''); }}
-                              aria-label={`Add description for ${item.productName}`}
-                            >
-                              + Add description
-                            </div>
-                          )}
-                        </td>
-                        <td style={{ ...tdStyle, textAlign: 'right', padding: isEditingQty ? '0.3rem 0.5rem' : undefined }}>
-                          {isEditingQty ? (
-                            <input
-                              ref={editInputRef}
-                              type="number"
-                              min={1}
-                              step={1}
-                              value={editValue}
-                              onChange={(e) => setEditValue(e.target.value)}
-                              onBlur={saveEdit}
-                              onKeyDown={handleEditKeyDown}
-                              style={inlineEditInputStyle}
-                              autoFocus
-                              aria-label={`Edit quantity for ${item.productName}`}
-                            />
-                          ) : isReadOnly ? (
-                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.2rem' }}>
-                              <span style={{ color: '#333' }}>
-                                {item.quantity}
-                              </span>
-                              {item.quantityPrediction && (
-                                <span
-                                  style={quantitySourceBadgeStyle(item.quantityPrediction.quantitySource)}
-                                  title={getQuantitySourceTooltip(item.quantityPrediction)}
-                                  aria-label={getQuantitySourceTooltip(item.quantityPrediction)}
-                                >
-                                  {getQuantitySourceLabel(item.quantityPrediction.quantitySource)}
-                                </span>
-                              )}
-                            </div>
-                          ) : (
-                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.2rem' }}>
-                              <span
-                                onClick={() => startEditing(item.id, 'quantity', item.quantity)}
-                                style={editableCellStyle}
-                                role="button"
-                                tabIndex={0}
-                                onKeyDown={(e) => { if (e.key === 'Enter') startEditing(item.id, 'quantity', item.quantity); }}
-                                aria-label={`Quantity: ${item.quantity}. Click to edit.`}
-                              >
-                                {item.quantity}
-                              </span>
-                              {item.quantityPrediction && (
-                                <span
-                                  style={quantitySourceBadgeStyle(item.quantityPrediction.quantitySource)}
-                                  title={getQuantitySourceTooltip(item.quantityPrediction)}
-                                  aria-label={getQuantitySourceTooltip(item.quantityPrediction)}
-                                >
-                                  {getQuantitySourceLabel(item.quantityPrediction.quantitySource)}
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </td>
-                        <td style={{ ...tdStyle, textAlign: 'right', padding: isEditingPrice ? '0.3rem 0.5rem' : undefined }}>
-                          {isEditingPrice ? (
-                            <input
-                              ref={editInputRef}
-                              type="number"
-                              min={0}
-                              step={0.01}
-                              value={editValue}
-                              onChange={(e) => setEditValue(e.target.value)}
-                              onBlur={saveEdit}
-                              onKeyDown={handleEditKeyDown}
-                              style={inlineEditInputStyle}
-                              autoFocus
-                              aria-label={`Edit unit price for ${item.productName}`}
-                            />
-                          ) : (
-                            <span
-                              onClick={() => startEditing(item.id, 'unitPrice', item.unitPrice)}
-                              style={editableCellStyle}
-                              role="button"
-                              tabIndex={0}
-                              onKeyDown={(e) => { if (e.key === 'Enter') startEditing(item.id, 'unitPrice', item.unitPrice); }}
-                              aria-label={`Unit price: $${item.unitPrice.toFixed(2)}. Click to edit.`}
-                            >
-                              ${item.unitPrice.toFixed(2)}
-                            </span>
-                          )}
-                        </td>
-                        <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 600 }}>
-                          ${(item.quantity * item.unitPrice).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </td>
-                        <td style={{ ...tdStyle, textAlign: 'right' }}>
-                          <span style={confidenceBadgeStyle(item.confidenceScore)}>
-                            {item.confidenceScore}%
-                          </span>
-                        </td>
-                        <td style={{ ...tdStyle, textAlign: 'center' }}>
-                          <button
-                            onClick={() => toggleRuleRow(item.id)}
-                            style={infoIconBtnStyle}
-                            aria-label={isExpanded ? 'Hide applied rules' : 'Show applied rules'}
-                            aria-expanded={isExpanded}
-                            title="View applied rules"
-                          >
-                            ℹ
-                          </button>
-                        </td>
-                        <td style={{ ...tdStyle, textAlign: 'center', padding: '0.5rem 0.25rem' }}>
-                          <button
-                            onClick={() => deleteLineItem(item.id)}
-                            style={deleteItemBtnStyle}
-                            aria-label={`Delete ${item.productName}`}
-                            title="Remove line item"
-                          >
-                            ✕
-                          </button>
-                        </td>
-                      </tr>
-                      {isExpanded && (
-                        <tr>
-                          <td
-                            colSpan={8}
-                            style={{ padding: 0, border: 'none' }}
-                          >
-                            <div
-                              onClick={() => toggleRuleRow(item.id)}
-                              style={ruleTraceabilityPanelStyle}
-                              role="button"
-                              tabIndex={0}
-                              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleRuleRow(item.id); } }}
-                              aria-label="Click to close rules panel"
-                            >
-                              <LineItemRationalePanel item={item} appliedGrouped={appliedGrouped} />
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
-                  );
-                })}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td colSpan={4} style={{ padding: '0.6rem 0.75rem', borderTop: '2px solid #e0e0e0', fontWeight: 700, fontSize: '0.9rem', textAlign: 'right', color: '#333' }}>
-                    Quote Total
-                  </td>
-                  <td style={{ padding: '0.6rem 0.75rem', borderTop: '2px solid #e0e0e0', fontWeight: 700, fontSize: '0.95rem', textAlign: 'right', color: '#00a89d' }}>
-                    ${draft.lineItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </td>
-                  <td colSpan={3} style={{ borderTop: '2px solid #e0e0e0' }} />
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        )}
-
-        {/* Saving indicator */}
-        {saving && (
-          <div style={savingIndicatorStyle} role="status" aria-live="polite">
-            <span style={smallSpinnerStyle} /> Saving…
-          </div>
-        )}
-
-        {/* Add line item button and form */}
-        {!showAddRow ? (
-          <button
-            onClick={() => { setShowAddRow(true); loadCatalog(); }}
-            style={addItemBtnStyle}
-            aria-label="Add line item"
-          >
-            + Add Item
-          </button>
-        ) : (
-          <div style={addRowContainerStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-              <span style={{ fontWeight: 600, fontSize: '0.85rem', color: '#555' }}>Add Line Item</span>
-              <button onClick={() => { setShowAddRow(false); setCatalogSearch(''); setCatalogResults([]); setShowCustomForm(false); }} style={addRowCloseBtnStyle} aria-label="Cancel adding item">✕</button>
-            </div>
-            <div style={{ position: 'relative' }}>
-              <input
-                type="text"
-                value={catalogSearch}
-                onChange={(e) => handleCatalogSearch(e.target.value)}
-                placeholder="Search product catalog…"
-                style={catalogSearchInputStyle}
-                aria-label="Search product catalog"
-                autoFocus
-              />
-              {catalogLoading && <span style={{ fontSize: '0.75rem', color: '#888', marginLeft: '0.5rem' }}>Loading catalog…</span>}
-              {catalogSearch.trim() && catalogResults.length > 0 && (
-                <div style={catalogDropdownStyle}>
-                  {catalogResults.slice(0, 8).map((entry) => (
-                    <button
-                      key={entry.id}
-                      onClick={() => addCatalogItem(entry)}
-                      style={catalogDropdownItemStyle}
-                    >
-                      <span style={{ fontWeight: 500 }}>{entry.name}</span>
-                      <span style={{ color: '#888', fontSize: '0.8rem' }}>${entry.unitPrice.toFixed(2)}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-              {catalogSearch.trim() && !catalogLoading && catalogResults.length === 0 && allCatalog !== null && (
-                <div style={catalogDropdownStyle}>
-                  <div style={{ padding: '0.5rem 0.75rem', fontSize: '0.85rem', color: '#888' }}>
-                    No catalog matches.{' '}
-                    <button onClick={() => { setShowCustomForm(true); setCatalogResults([]); }} style={customItemLinkStyle}>
-                      Add custom item
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-            {showCustomForm && (
-              <div style={customFormStyle}>
-                <input
-                  type="text"
-                  value={customName}
-                  onChange={(e) => setCustomName(e.target.value)}
-                  placeholder="Item name"
-                  style={customFormInputStyle}
-                  aria-label="Custom item name"
-                />
-                <input
-                  type="number"
-                  value={customQty}
-                  onChange={(e) => setCustomQty(e.target.value)}
-                  placeholder="Qty"
-                  min={1}
-                  step={1}
-                  style={{ ...customFormInputStyle, width: 70 }}
-                  aria-label="Custom item quantity"
-                />
-                <input
-                  type="number"
-                  value={customPrice}
-                  onChange={(e) => setCustomPrice(e.target.value)}
-                  placeholder="Unit price"
-                  min={0}
-                  step={0.01}
-                  style={{ ...customFormInputStyle, width: 100 }}
-                  aria-label="Custom item unit price"
-                />
-                <button
-                  onClick={addCustomItem}
-                  disabled={!customName.trim() || !customPrice || saving}
-                  style={{
-                    ...addCustomBtnStyle,
-                    opacity: customName.trim() && customPrice && !saving ? 1 : 0.5,
-                    cursor: customName.trim() && customPrice && !saving ? 'pointer' : 'not-allowed',
-                  }}
-                >
-                  Add
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+        <LineItemsTable
+          lineItems={draft.lineItems}
+          unresolvedItems={draft.unresolvedItems}
+          isReadOnly={isReadOnly}
+          id={id!}
+          onLineItemsSaved={(updated) => {
+            setDraft({ ...draft, lineItems: updated });
+          }}
+          onLoadDraft={loadDraft}
+          reviewMode={isReviewMode}
+          itemFeedback={reviewData?.feedback ?? []}
+          ruleById={ruleById}
+          groupNameByRuleId={groupNameByRuleId}
+        />
       </div>
 
       {/* Unresolved items section — hidden when zero */}
@@ -2075,11 +1793,21 @@ export default function QuoteDraftPage() {
           </div>
         )}
       </div>
+      </>)}
       </div>{/* end main content column */}
 
-      {/* Request details side panel */}
+      {/* Request details side panel / Review feedback panel */}
       {showSidePanel && (
         <aside style={sidePanelStyle}>
+          {isReviewMode && reviewData ? (
+            <ReviewLineItemFeedbackPanel
+              lineItems={(draft as any).lineItems ?? []}
+              feedback={reviewData.feedback}
+              reviewId={reviewData.review.id}
+              readOnly={reviewData.review.status === 'push_to_jobber' || reviewData.review.status === 'changes_requested'}
+            />
+          ) : (
+          <>
           <h2 style={{ margin: '0 0 0.75rem', fontSize: '1.1rem', fontWeight: 600 }}>Request Details</h2>
 
           {requestDetail?.title && (
@@ -2150,6 +1878,8 @@ export default function QuoteDraftPage() {
                 ))}
               </div>
             </div>
+          )}
+        </>
           )}
         </aside>
       )}

@@ -155,6 +155,31 @@ export class QuoteDraftService {
   }
 
   /**
+   * Get a quote draft by ID without user-ownership filter — for review workflows
+   * where the reviewer may not be the draft owner.
+   * Throws if the draft doesn't exist.
+   */
+  async getByIdForReview(draftId: string): Promise<QuoteDraft> {
+    const row = await this.db.prepare(
+      'SELECT id, user_id, customer_request_text, selected_template_id, selected_template_name, status, review_status, jobber_request_id, customer_note, manual_request_id, draft_number, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri, sqft_resolution_json, deposit_schedule, space_context_json, generation_trace_json, created_at, updated_at FROM quote_drafts WHERE id = ?'
+    ).bind(draftId).first() as any;
+
+    if (!row) {
+      throw new PlatformError({
+        severity: 'error',
+        component: 'QuoteDraftService',
+        operation: 'getByIdForReview',
+        description: 'The quote draft was not found.',
+        recommendedActions: ['Verify the draft exists'],
+      });
+    }
+
+    const { lineItems, unresolvedItems } = await this.fetchLineItems(draftId);
+    const actionItems = await this.fetchActionItems(draftId);
+    return this.mapDraftRow(row, lineItems, unresolvedItems, actionItems);
+  }
+
+  /**
    * List all quote drafts for a user, sorted by creation date descending (newest first).
    */
   async list(userId: string): Promise<QuoteDraft[]> {

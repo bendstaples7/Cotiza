@@ -49,7 +49,7 @@ export default function App() {
                 {/* Quotes section */}
                 <Route path="/quotes/queue" element={<RequestQueuePage />} />
                 <Route path="/quotes/reviews" element={<ReviewQueuePage />} />
-                <Route path="/quotes/reviews/:reviewId" element={<ReviewQuotePage />} />
+                <Route path="/quotes/reviews/:reviewId" element={<QuoteDraftPage />} />
                 <Route path="/quotes" element={<QuoteInputPage />} />
                 <Route path="/quotes/drafts" element={<QuoteDraftsListPage />} />
                 <Route path="/quotes/drafts/:id" element={<QuoteDraftPage />} />

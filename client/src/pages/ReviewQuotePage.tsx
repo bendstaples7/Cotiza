@@ -99,7 +99,7 @@ export default function ReviewQuotePage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.25rem' }}>
             <h1 style={{ margin: 0, fontSize: '1.3rem' }}>
               {quote.clientName ? `${quote.clientName} — ` : ''}
-              D-{String((quote as any).draftNumber ?? '').padStart(3, '0')}
+              {(quote as any).jobberQuoteNumber ? `J-${(quote as any).jobberQuoteNumber}` : `D-${String((quote as any).draftNumber ?? '').padStart(3, '0')}`}
             </h1>
             <ReviewBadge status={review.status as any} />
           </div>

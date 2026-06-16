@@ -115,6 +115,7 @@ app.get('/reviews/pending', async (c) => {
   // Get all pending reviews with draft info
   const result = await db.prepare(
     `SELECT qr.id, qr.quote_draft_id, qd.draft_number, qd.customer_request_text,
+            qd.jobber_quote_number,
             qr.status, qr.submitted_at, qr.review_cycle, qr.submitted_by_id,
             (SELECT SUM(li.quantity * li.unit_price) FROM quote_line_items li WHERE li.quote_draft_id = qd.id AND li.resolved = 1) as total_value,
             u.name as submitted_by_name
@@ -129,6 +130,7 @@ app.get('/reviews/pending', async (c) => {
     id: row.id as string,
     quoteDraftId: row.quote_draft_id as string,
     draftNumber: (row.draft_number as number) ?? 0,
+    jobberQuoteNumber: (row.jobber_quote_number as string) ?? null,
     totalValue: Number(row.total_value ?? 0),
     status: row.status as string,
     submittedAt: row.submitted_at as string,
@@ -179,7 +181,7 @@ app.get('/reviews/:id', async (c) => {
   const quoteDraftService = new QuoteDraftService(db);
   try {
     // Try to get the draft — may fail if user doesn't own it, but we still want to return the review detail
-    reviewDetail.quote = await quoteDraftService.getById(reviewDetail.review.quoteDraftId, c.get('user').id);
+    reviewDetail.quote = await quoteDraftService.getByIdForReview(reviewDetail.review.quoteDraftId);
   } catch {
     // Draft access may fail — return partial data
   }

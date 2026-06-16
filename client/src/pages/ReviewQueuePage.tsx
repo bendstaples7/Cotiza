@@ -30,7 +30,7 @@ export default function ReviewQueuePage() {
       <div style={containerStyle}>
         <div style={loadingContainerStyle}>
           <span style={spinnerStyle} />
-          <p style={{ margin: '0.75rem 0 0', color: '#555' }}>Loading pending reviews…</p>
+          <p style={{ margin: '0.75rem 0 0', color: '#555' }}>Loading Jobber quotes…</p>
         </div>
       </div>
     );
@@ -38,7 +38,7 @@ export default function ReviewQueuePage() {
 
   return (
     <div style={containerStyle}>
-      <h1 style={titleStyle}>Pending Reviews</h1>
+      <h1 style={titleStyle}>Jobber Quotes</h1>
 
       {error && (
         <div role="alert" style={alertStyle}>{error}</div>
@@ -46,7 +46,7 @@ export default function ReviewQueuePage() {
 
       {reviews.length === 0 ? (
         <div style={emptyStyle}>
-          <p style={{ margin: 0, color: '#888', fontSize: '1rem' }}>No quotes pending review.</p>
+          <p style={{ margin: 0, color: '#888', fontSize: '1rem' }}>No Jobber quotes yet.</p>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
@@ -63,7 +63,7 @@ export default function ReviewQueuePage() {
               <div style={{ flex: 1, minWidth: 0, padding: '0.75rem 1rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
                   <span style={{ fontWeight: 600, fontSize: '0.95rem', color: '#061216' }}>
-                    D-{String(review.draftNumber).padStart(3, '0')}
+                    {review.jobberQuoteNumber ? `J-${review.jobberQuoteNumber}` : `D-${String(review.draftNumber).padStart(3, '0')}`}
                   </span>
                   <ReviewBadge status={review.status as any} />
                 </div>

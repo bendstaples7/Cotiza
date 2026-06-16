@@ -901,6 +901,7 @@ export interface PendingReviewItem {
   id: string;
   quoteDraftId: string;
   draftNumber: number;
+  jobberQuoteNumber: string | null;
   totalValue: number;
   status: string;
   submittedAt: string;
