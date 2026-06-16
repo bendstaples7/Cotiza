@@ -24,7 +24,7 @@ function formatCurrency(amount: number): string {
 }
 
 function getQuoteTotal(quote: ImportableQuote): number {
-  return (quote.lineItems || []).reduce((sum, item) => sum + item.quantity * item.unitPrice.amount, 0);
+  return (quote.lineItems || []).reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
 }
 
 function getClientName(quote: ImportableQuote): string {

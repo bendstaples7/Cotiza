@@ -13,7 +13,7 @@ function getClientName(quote: ImportableQuote): string {
 }
 
 function getQuoteTotal(quote: ImportableQuote): number {
-  return (quote.lineItems || []).reduce((sum, item) => sum + item.quantity * item.unitPrice.amount, 0);
+  return (quote.lineItems || []).reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
 }
 
 function formatCurrency(amount: number): string {

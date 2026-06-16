@@ -11,10 +11,7 @@ export interface ImportableQuoteLineItem {
   name: string;
   description: string | null;
   quantity: number;
-  unitPrice: {
-    amount: number;
-    currencyCode: string;
-  };
+  unitPrice: number;
 }
 
 export interface ImportableQuoteClient {
@@ -73,10 +70,7 @@ const IMPORTABLE_QUOTES_QUERY = `
               name
               description
               quantity
-              unitPrice {
-                amount
-                currencyCode
-              }
+              unitPrice
             }
           }
           client {
@@ -125,10 +119,7 @@ const FETCH_QUOTE_BY_ID_QUERY = `
           name
           description
           quantity
-          unitPrice {
-            amount
-            currencyCode
-          }
+          unitPrice
         }
       }
       client {
@@ -312,7 +303,7 @@ export class JobberQuoteImportService {
       productName: item.name,
       description: item.description || '',
       quantity: item.quantity,
-      unitPrice: item.unitPrice.amount,
+      unitPrice: item.unitPrice,
       confidenceScore: 1.0, // These are exact from Jobber
       originalText: item.name,
       resolved: true,

@@ -1116,7 +1116,7 @@ export interface ImportableQuoteLineItem {
   name: string;
   description: string | null;
   quantity: number;
-  unitPrice: { amount: number; currencyCode: string };
+  unitPrice: number;
 }
 
 export interface ImportableQuote {
