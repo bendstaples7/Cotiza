@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import type { QuoteDraft, QuoteLineItem, LineItemRationale, GenerationTrace, ErrorResponse, RuleGroupWithRules, Rule, ProductCatalogEntry, ActionItem, QuantityPredictionMeta, QuantitySource, ResolutionConfidence, ResolutionTier, DeathclockState } from 'shared';
-import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber, fetchDeathclock, markRequestSent, submitForReview, reSubmitForReview, getPendingReviews } from '../api';
+import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber, pushDraftUpdateToJobber, fetchDeathclock, markRequestSent, submitForReview, reSubmitForReview, getPendingReviews } from '../api';
 import type { JobberRequestDetail } from '../api';
 import SimilarQuotesPanel from './SimilarQuotesPanel';
 import DeathclockBadge, { getLabel } from '../components/DeathclockBadge';
@@ -343,6 +343,27 @@ export default function QuoteDraftPage() {
       });
     } catch (err) {
       setPushError((err as any).message ?? 'Failed to push to Jobber.');
+    } finally {
+      setPushing(false);
+    }
+  };
+
+  // ── Push Update handler ──
+  const handlePushUpdate = async () => {
+    if (pushing || !draft || !id) return;
+    setPushing(true);
+    setPushError(null);
+    try {
+      const result = await pushDraftUpdateToJobber(id);
+      setDraft({
+        ...draft,
+        jobberQuoteId: result.jobberQuoteId,
+        jobberQuoteNumber: result.jobberQuoteNumber,
+        jobberQuoteWebUri: result.jobberQuoteWebUri,
+        status: 'finalized',
+      });
+    } catch (err) {
+      setPushError((err as any).message ?? 'Failed to push updates to Jobber.');
     } finally {
       setPushing(false);
     }
@@ -1609,20 +1630,46 @@ export default function QuoteDraftPage() {
 
       {/* Push to Jobber section */}
       <div style={{ ...sectionStyle, marginTop: '1rem' }}>
-        <h2 style={sectionTitleStyle}>Push to Jobber</h2>
+        <h2 style={sectionTitleStyle}>
+          {draft.jobberQuoteId ? 'Update Jobber Quote' : 'Push to Jobber'}
+        </h2>
         {draft.jobberQuoteId && draft.jobberQuoteNumber ? (
           <div>
             <p style={{ margin: '0 0 0.5rem', fontSize: '0.9rem', color: '#333' }}>
-              ✅ Pushed as Jobber Quote <strong>{draft.jobberQuoteNumber}</strong>
+              🔄 Imported from Jobber Quote <strong>{draft.jobberQuoteNumber}</strong>
             </p>
             <a
               href={draft.jobberQuoteWebUri || `https://secure.getjobber.com/quotes/${draft.jobberQuoteNumber}`}
               target="_blank"
               rel="noopener noreferrer"
-              style={{ color: '#00a89d', fontSize: '0.9rem', fontWeight: 600 }}
+              style={{ color: '#00a89d', fontSize: '0.9rem', fontWeight: 600, display: 'inline-block', marginBottom: '0.75rem' }}
             >
               View in Jobber →
             </a>
+            <div>
+              <button
+                onClick={handlePushUpdate}
+                disabled={pushing || isReadOnly}
+                style={{
+                  padding: '0.6rem 1.5rem',
+                  background: pushing || isReadOnly ? '#ccc' : '#00a89d',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 6,
+                  fontSize: '0.95rem',
+                  fontWeight: 600,
+                  cursor: pushing || isReadOnly ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {pushing ? (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span style={smallSpinnerStyle} /> Pushing Updates…
+                  </span>
+                ) : (
+                  '🚀 Push Updates to Jobber'
+                )}
+              </button>
+            </div>
           </div>
         ) : (
           <div>
@@ -1653,11 +1700,11 @@ export default function QuoteDraftPage() {
                 '🚀 Push to Jobber'
               )}
             </button>
-            {pushError && (
-              <div role="alert" style={{ ...revisionErrorStyle, marginTop: '0.5rem' }}>
-                {pushError}
-              </div>
-            )}
+          </div>
+        )}
+        {pushError && (
+          <div role="alert" style={{ ...revisionErrorStyle, marginTop: '0.5rem' }}>
+            {pushError}
           </div>
         )}
       </div>

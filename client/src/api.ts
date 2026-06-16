@@ -855,6 +855,14 @@ export async function pushDraftToJobber(draftId: string): Promise<{ jobberQuoteI
   return handleResponseWithToast(res);
 }
 
+export async function pushDraftUpdateToJobber(draftId: string): Promise<{ jobberQuoteId: string; jobberQuoteNumber: string; jobberQuoteWebUri: string }> {
+  const res = await fetch(API_BASE + '/api/quotes/drafts/' + draftId + '/push-update', {
+    method: 'POST',
+    headers: { ...authHeaders() },
+  });
+  return handleResponseWithToast(res);
+}
+
 // ── Extraction Presets ──
 
 export interface ExtractionPreset {
