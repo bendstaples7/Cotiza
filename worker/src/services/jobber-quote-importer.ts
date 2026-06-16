@@ -7,6 +7,7 @@ import { ActivityLogService } from './activity-log-service.js';
 // ── Exported types ──────────────────────────────────────────────────────
 
 export interface ImportableQuoteLineItem {
+  id: string;
   name: string;
   description: string | null;
   quantity: number;
@@ -68,6 +69,7 @@ const IMPORTABLE_QUOTES_QUERY = `
           createdAt
           lineItems {
             nodes {
+              id
               name
               description
               quantity
@@ -119,6 +121,7 @@ const FETCH_QUOTE_BY_ID_QUERY = `
       createdAt
       lineItems {
         nodes {
+          id
           name
           description
           quantity
@@ -304,6 +307,7 @@ export class JobberQuoteImportService {
     // 6. Build line items from Jobber line items
     const lineItems: QuoteLineItem[] = (quote.lineItems || []).map((item, index) => ({
       id: crypto.randomUUID(),
+      jobberLineItemId: item.id || null,
       productCatalogEntryId: null,
       productName: item.name,
       description: item.description || '',
