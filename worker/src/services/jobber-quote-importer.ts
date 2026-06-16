@@ -24,12 +24,7 @@ export interface ImportableQuoteClient {
 }
 
 export interface ImportableQuoteProperty {
-  address?: {
-    fullAddress: string;
-    city: string;
-    state: string;
-    zipCode: string;
-  } | null;
+  address?: string;
 }
 
 export interface ImportableQuote {
@@ -78,20 +73,6 @@ const IMPORTABLE_QUOTES_QUERY = `
             firstName
             lastName
             companyName
-            primaryPhone {
-              number
-            }
-            primaryEmail {
-              address
-            }
-          }
-          property {
-            address {
-              fullAddress
-              city
-              state
-              zipCode
-            }
           }
         }
       }
