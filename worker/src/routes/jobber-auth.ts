@@ -49,6 +49,7 @@ app.get('/authorize', (c) => {
   authUrl.searchParams.set('client_id', clientId);
   authUrl.searchParams.set('redirect_uri', redirectUri);
   authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('scope', 'read:account read:clients read:quotes');
 
   return c.redirect(authUrl.toString());
 });

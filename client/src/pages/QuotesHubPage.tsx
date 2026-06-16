@@ -32,7 +32,7 @@ export default function QuotesHubPage() {
   const [createError, setCreateError] = useState<string | null>(null);
 
   // ── Accordion state ──
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['create']));
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['create', 'drafts', 'importable', 'finalized']));
 
   const toggleSection = (name: string) => {
     setExpandedSections(prev => {
