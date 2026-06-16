@@ -474,8 +474,9 @@ export async function fetchDrafts(): Promise<QuoteDraft[]> {
   return data.drafts;
 }
 
-export async function fetchDraft(id: string): Promise<QuoteDraft> {
-  const res = await fetch(API_BASE + '/api/quotes/drafts/' + id, {
+export async function fetchDraft(id: string, params?: Record<string, string>): Promise<QuoteDraft> {
+  const query = params ? '?' + new URLSearchParams(params).toString() : '';
+  const res = await fetch(API_BASE + '/api/quotes/drafts/' + id + query, {
     headers: { ...authHeaders() },
   });
   return handleResponse(res);

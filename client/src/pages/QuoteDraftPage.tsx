@@ -108,7 +108,8 @@ export default function QuoteDraftPage() {
     try {
       setLoading(true);
       setError(null);
-      const d = await fetchDraft(id);
+      const params = cameFromReview ? { reviewAccess: 'true' } : undefined;
+      const d = await fetchDraft(id, params);
       setDraft(d);
       // After setting draft, fetch deathclock if manualRequestId exists
       if (d.manualRequestId) {
@@ -120,7 +121,7 @@ export default function QuoteDraftPage() {
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, cameFromReview]);
 
   useEffect(() => { loadDraft(); }, [loadDraft]);
 
