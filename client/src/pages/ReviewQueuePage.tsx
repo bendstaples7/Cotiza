@@ -54,10 +54,10 @@ export default function ReviewQueuePage() {
             <div
               key={review.id}
               style={cardStyle}
-              onClick={() => navigate('/quotes/drafts/' + review.quoteDraftId + '?from=reviews')}
+              onClick={() => navigate('/quotes/drafts/' + review.quoteDraftId + '?from=reviews&reviewAccess=true')}
               role="button"
               tabIndex={0}
-              onKeyDown={(e) => { if (e.key === 'Enter') navigate('/quotes/drafts/' + review.quoteDraftId + '?from=reviews'); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') navigate('/quotes/drafts/' + review.quoteDraftId + '?from=reviews&reviewAccess=true'); }}
               aria-label={`Review ${review.draftNumber} from ${review.submittedBy.name}`}
             >
               <div style={{ flex: 1, minWidth: 0, padding: '0.75rem 1rem' }}>

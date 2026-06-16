@@ -851,10 +851,15 @@ app.get('/drafts', async (c) => {
 /**
  * GET /drafts/:id
  * Get a single quote draft by ID.
+ * Supports ?reviewAccess=true for review workflows (bypasses user-ownership check).
  */
 app.get('/drafts/:id', async (c) => {
   const quoteDraftService = new QuoteDraftService(c.env.DB);
-  const draft = await quoteDraftService.getById(c.req.param('id'), c.get('user').id);
+  const id = c.req.param('id');
+  const reviewAccess = c.req.query('reviewAccess') === 'true';
+  const draft = reviewAccess
+    ? await quoteDraftService.getByIdForReview(id)
+    : await quoteDraftService.getById(id, c.get('user').id);
   return c.json(draft);
 });
 
