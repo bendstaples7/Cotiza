@@ -669,7 +669,7 @@ export default function QuoteDraftPage() {
   }
 
   const hasUnresolved = draft.unresolvedItems.length > 0;
-  const showSidePanel = !!(draft.customerRequestText || requestDetail);
+  const showSidePanel = !!(draft.customerRequestText || requestDetail || draft.jobberQuoteId);
   const isReadOnly = draft.reviewStatus === 'pending_review';
 
   return (
@@ -1782,6 +1782,27 @@ export default function QuoteDraftPage() {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {!requestDetail && draft.clientName && (
+            <div style={{ marginBottom: '0.75rem' }}>
+              <h3 style={sidePanelLabelStyle}>Client</h3>
+              <p style={sidePanelTextStyle}>{draft.clientName}</p>
+            </div>
+          )}
+
+          {!requestDetail && draft.propertyAddress && (
+            <div style={{ marginBottom: '0.75rem' }}>
+              <h3 style={sidePanelLabelStyle}>Property Address</h3>
+              <p style={{ ...sidePanelTextStyle, fontWeight: 500 }}>📍 {draft.propertyAddress}</p>
+            </div>
+          )}
+
+          {!requestDetail && draft.customerRequestText && (
+            <div style={{ marginBottom: '0.75rem' }}>
+              <h3 style={sidePanelLabelStyle}>Customer Request</h3>
+              <p style={{ ...sidePanelTextStyle, whiteSpace: 'pre-wrap' }}>{draft.customerRequestText}</p>
             </div>
           )}
         </aside>

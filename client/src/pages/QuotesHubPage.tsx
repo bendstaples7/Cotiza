@@ -20,8 +20,6 @@ function formatCurrency(amount: number): string {
   return '$' + amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-type TabKey = 'active-drafts' | 'importable' | 'finalized';
-
 export default function QuotesHubPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -33,8 +31,19 @@ export default function QuotesHubPage() {
   const [generating, setGenerating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
+  // ── Accordion state ──
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['create']));
+
+  const toggleSection = (name: string) => {
+    setExpandedSections(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
   // ── Your Work section ──
-  const [activeTab, setActiveTab] = useState<TabKey>('active-drafts');
   const [allDrafts, setAllDrafts] = useState<QuoteDraft[]>([]);
   const [draftsLoading, setDraftsLoading] = useState(true);
   const [draftsError, setDraftsError] = useState<string | null>(null);
@@ -68,20 +77,18 @@ export default function QuotesHubPage() {
       const data = await fetchImportableQuotes();
       setImportableQuotes(data.quotes);
       if (!data.available) {
-        setImportableError('Jobber API is not available. Check credentials and connectivity.');
+        setImportableError('Could not connect to Jobber. <a href="/api/jobber-auth/authorize" style={{color:"#00a89d"}}>Reconnect Jobber</a> to refresh your connection.');
       }
     } catch {
-      setImportableError('Could not load importable Jobber quotes.');
+      setImportableError('Could not connect to Jobber. <a href="/api/jobber-auth/authorize" style={{color:"#00a89d"}}>Reconnect Jobber</a> to refresh your connection.');
     } finally {
       setImportableLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (activeTab === 'importable') {
-      loadImportable();
-    }
-  }, [activeTab, loadImportable]);
+    loadImportable();
+  }, [loadImportable]);
 
   // ── Handle generate from request ──
   const handleGenerateFromRequest = useCallback(async () => {
@@ -199,194 +206,175 @@ export default function QuotesHubPage() {
         </div>
       )}
 
-      {/* ── Section 2: Your Work ── */}
+      {/* ── Section 2: Your Work (accordion sections) ── */}
       <div style={{ marginTop: '2rem' }}>
         <h2 style={sectionTitleStyle}>Your Work</h2>
 
-        {/* Tabs */}
-        <div style={tabRowStyle}>
-          <button
-            onClick={() => setActiveTab('active-drafts')}
-            style={tabStyle(activeTab === 'active-drafts')}
-            type="button"
-          >
-            Active Drafts
+        {/* Active Drafts accordion */}
+        <div style={accordionWrapperStyle}>
+          <button onClick={() => toggleSection('drafts')} style={sectionToggleStyle}>
+            <span style={{ marginRight: '0.5rem' }}>{expandedSections.has('drafts') ? '▼' : '▶'}</span>
+            <span style={{ fontWeight: 600 }}>Active Drafts</span>
             {activeDrafts.length > 0 && (
-              <span style={countBadgeStyle}>{activeDrafts.length}</span>
+              <span style={badgeStyle}>{activeDrafts.length}</span>
             )}
           </button>
-          <button
-            onClick={() => setActiveTab('importable')}
-            style={tabStyle(activeTab === 'importable')}
-            type="button"
-          >
-            Importable Jobber Quotes
-          </button>
-          <button
-            onClick={() => setActiveTab('finalized')}
-            style={tabStyle(activeTab === 'finalized')}
-            type="button"
-          >
-            Finalized
-            {finalizedDrafts.length > 0 && (
-              <span style={countBadgeStyle}>{finalizedDrafts.length}</span>
-            )}
-          </button>
+          {expandedSections.has('drafts') && (
+            <div style={sectionContentStyle}>
+              {draftsLoading ? (
+                <div style={loadingRowStyle}>
+                  <span style={spinnerStyle} />
+                  <span style={{ color: '#555', fontSize: '0.9rem' }}>Loading drafts…</span>
+                </div>
+              ) : draftsError ? (
+                <div role="alert" style={errorStyle}>{draftsError}</div>
+              ) : activeDrafts.length === 0 ? (
+                <div style={emptyStyle}>No active drafts. Create a new quote to get started.</div>
+              ) : (
+                <div style={listStyle}>
+                  {activeDrafts.map(draft => (
+                    <div
+                      key={draft.id}
+                      style={draftCardStyle}
+                      onClick={() => navigate('/quotes/drafts/' + draft.id)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => { if (e.key === 'Enter') navigate('/quotes/drafts/' + draft.id); }}
+                    >
+                      <div style={draftCardHeaderStyle}>
+                        <span style={draftNumberStyle}>D-{String(draft.draftNumber).padStart(3, '0')}</span>
+                        {draft.clientName && (
+                          <span style={clientNameLabelStyle}>{draft.clientName}</span>
+                        )}
+                        <span style={statusBadgeStyle(draft.status)}>{draft.status}</span>
+                      </div>
+                      <div style={metaTextStyle}>
+                        {new Date(draft.createdAt).toLocaleDateString()}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* Tab Content */}
-        <div style={tabContentStyle}>
-          {activeTab === 'active-drafts' && renderActiveDrafts()}
-          {activeTab === 'importable' && renderImportable()}
-          {activeTab === 'finalized' && renderFinalized()}
+        {/* Importable Jobber Quotes accordion */}
+        <div style={accordionWrapperStyle}>
+          <button onClick={() => toggleSection('importable')} style={sectionToggleStyle}>
+            <span style={{ marginRight: '0.5rem' }}>{expandedSections.has('importable') ? '▼' : '▶'}</span>
+            <span style={{ fontWeight: 600 }}>Importable Jobber Quotes</span>
+            {importableQuotes.length > 0 && (
+              <span style={badgeStyle}>{importableQuotes.length}</span>
+            )}
+          </button>
+          {expandedSections.has('importable') && (
+            <div style={sectionContentStyle}>
+              {importableLoading ? (
+                <div style={loadingRowStyle}>
+                  <span style={spinnerStyle} />
+                  <span style={{ color: '#555', fontSize: '0.9rem' }}>Loading Jobber quotes…</span>
+                </div>
+              ) : importableError ? (
+                <div role="alert" style={errorStyle} dangerouslySetInnerHTML={{ __html: importableError }} />
+              ) : importableQuotes.length === 0 ? (
+                <div style={emptyStyle}>No importable quotes found in Jobber.</div>
+              ) : (
+                <div style={listStyle}>
+                  {importableQuotes.map(quote => {
+                    const total = getQuoteTotal(quote);
+                    const isImporting = importingIds.has(quote.id);
+                    return (
+                      <div key={quote.id} style={importableCardStyle}>
+                        <div style={importableCardHeaderStyle}>
+                          <div>
+                            <div style={importableTitleRow}>
+                              <span style={quoteNumberStyle}>#{quote.quoteNumber}</span>
+                              <span style={clientNameLabelStyle}>{getClientName(quote)}</span>
+                            </div>
+                            <div style={metaTextStyle}>
+                              {formatCurrency(total)} · {quote.quoteStatus}
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleImport(quote.id); }}
+                          disabled={isImporting}
+                          style={{
+                            ...importBtnStyle,
+                            opacity: isImporting ? 0.6 : 1,
+                          }}
+                          type="button"
+                        >
+                          {isImporting ? (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                              <span style={smallSpinnerStyle} />
+                              Importing…
+                            </span>
+                          ) : (
+                            'Import as Draft'
+                          )}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Finalized accordion */}
+        <div style={accordionWrapperStyle}>
+          <button onClick={() => toggleSection('finalized')} style={sectionToggleStyle}>
+            <span style={{ marginRight: '0.5rem' }}>{expandedSections.has('finalized') ? '▼' : '▶'}</span>
+            <span style={{ fontWeight: 600 }}>Finalized</span>
+            {finalizedDrafts.length > 0 && (
+              <span style={badgeStyle}>{finalizedDrafts.length}</span>
+            )}
+          </button>
+          {expandedSections.has('finalized') && (
+            <div style={sectionContentStyle}>
+              {draftsLoading ? (
+                <div style={loadingRowStyle}>
+                  <span style={spinnerStyle} />
+                  <span style={{ color: '#555', fontSize: '0.9rem' }}>Loading finalized quotes…</span>
+                </div>
+              ) : draftsError ? (
+                <div role="alert" style={errorStyle}>{draftsError}</div>
+              ) : finalizedDrafts.length === 0 ? (
+                <div style={emptyStyle}>No finalized quotes yet.</div>
+              ) : (
+                <div style={listStyle}>
+                  {finalizedDrafts.map(draft => (
+                    <div
+                      key={draft.id}
+                      style={draftCardStyle}
+                      onClick={() => navigate('/quotes/drafts/' + draft.id)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => { if (e.key === 'Enter') navigate('/quotes/drafts/' + draft.id); }}
+                    >
+                      <div style={draftCardHeaderStyle}>
+                        <span style={draftNumberStyle}>D-{String(draft.draftNumber).padStart(3, '0')}</span>
+                        {draft.clientName && (
+                          <span style={clientNameLabelStyle}>{draft.clientName}</span>
+                        )}
+                        <span style={statusBadgeStyle(draft.status)}>{draft.status}</span>
+                      </div>
+                      <div style={metaTextStyle}>
+                        {new Date(draft.createdAt).toLocaleDateString()}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
-
-  // ── Tab renderers ──
-
-  function renderActiveDrafts() {
-    if (draftsLoading) {
-      return (
-        <div style={loadingRowStyle}>
-          <span style={spinnerStyle} />
-          <span style={{ color: '#555', fontSize: '0.9rem' }}>Loading drafts…</span>
-        </div>
-      );
-    }
-    if (draftsError) {
-      return <div role="alert" style={errorStyle}>{draftsError}</div>;
-    }
-    if (activeDrafts.length === 0) {
-      return <div style={emptyStyle}>No active drafts. Create a new quote to get started.</div>;
-    }
-    return (
-      <div style={listStyle}>
-        {activeDrafts.map(draft => (
-          <div
-            key={draft.id}
-            style={draftCardStyle}
-            onClick={() => navigate('/quotes/drafts/' + draft.id)}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => { if (e.key === 'Enter') navigate('/quotes/drafts/' + draft.id); }}
-          >
-            <div style={draftCardHeaderStyle}>
-              <span style={draftNumberStyle}>D-{String(draft.draftNumber).padStart(3, '0')}</span>
-              {draft.clientName && (
-                <span style={clientNameLabelStyle}>{draft.clientName}</span>
-              )}
-              <span style={statusBadgeStyle(draft.status)}>{draft.status}</span>
-            </div>
-            <div style={metaTextStyle}>
-              {new Date(draft.createdAt).toLocaleDateString()}
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  function renderImportable() {
-    if (importableLoading) {
-      return (
-        <div style={loadingRowStyle}>
-          <span style={spinnerStyle} />
-          <span style={{ color: '#555', fontSize: '0.9rem' }}>Loading Jobber quotes…</span>
-        </div>
-      );
-    }
-    if (importableError) {
-      return <div role="alert" style={errorStyle}>{importableError}</div>;
-    }
-    if (importableQuotes.length === 0) {
-      return <div style={emptyStyle}>No importable quotes found in Jobber.</div>;
-    }
-    return (
-      <div style={listStyle}>
-        {importableQuotes.map(quote => {
-          const total = getQuoteTotal(quote);
-          const isImporting = importingIds.has(quote.id);
-          return (
-            <div key={quote.id} style={importableCardStyle}>
-              <div style={importableCardHeaderStyle}>
-                <div>
-                  <div style={importableTitleRow}>
-                    <span style={quoteNumberStyle}>#{quote.quoteNumber}</span>
-                    <span style={clientNameLabelStyle}>{getClientName(quote)}</span>
-                  </div>
-                  <div style={metaTextStyle}>
-                    {formatCurrency(total)} · {quote.quoteStatus}
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={(e) => { e.stopPropagation(); handleImport(quote.id); }}
-                disabled={isImporting}
-                style={{
-                  ...importBtnStyle,
-                  opacity: isImporting ? 0.6 : 1,
-                }}
-                type="button"
-              >
-                {isImporting ? (
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
-                    <span style={smallSpinnerStyle} />
-                    Importing…
-                  </span>
-                ) : (
-                  'Import as Draft'
-                )}
-              </button>
-            </div>
-          );
-        })}
-      </div>
-    );
-  }
-
-  function renderFinalized() {
-    if (draftsLoading) {
-      return (
-        <div style={loadingRowStyle}>
-          <span style={spinnerStyle} />
-          <span style={{ color: '#555', fontSize: '0.9rem' }}>Loading finalized quotes…</span>
-        </div>
-      );
-    }
-    if (draftsError) {
-      return <div role="alert" style={errorStyle}>{draftsError}</div>;
-    }
-    if (finalizedDrafts.length === 0) {
-      return <div style={emptyStyle}>No finalized quotes yet.</div>;
-    }
-    return (
-      <div style={listStyle}>
-        {finalizedDrafts.map(draft => (
-          <div
-            key={draft.id}
-            style={draftCardStyle}
-            onClick={() => navigate('/quotes/drafts/' + draft.id)}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => { if (e.key === 'Enter') navigate('/quotes/drafts/' + draft.id); }}
-          >
-            <div style={draftCardHeaderStyle}>
-              <span style={draftNumberStyle}>D-{String(draft.draftNumber).padStart(3, '0')}</span>
-              {draft.clientName && (
-                <span style={clientNameLabelStyle}>{draft.clientName}</span>
-              )}
-              <span style={statusBadgeStyle(draft.status)}>{draft.status}</span>
-            </div>
-            <div style={metaTextStyle}>
-              {new Date(draft.createdAt).toLocaleDateString()}
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  }
 }
 
 // ── Styles ──
@@ -434,32 +422,34 @@ const btnPrimaryStyle: React.CSSProperties = {
   fontWeight: 500,
 };
 
-const tabRowStyle: React.CSSProperties = {
-  display: 'flex',
-  gap: 0,
-  borderBottom: '1px solid #e0e0e0',
+const accordionWrapperStyle: React.CSSProperties = {
+  marginBottom: '0.5rem',
+  border: '1px solid #e0e0e0',
+  borderRadius: 8,
+  background: '#fff',
+  overflow: 'hidden',
 };
 
-const tabStyle = (active: boolean): React.CSSProperties => ({
-  padding: '0.6rem 1.25rem',
-  border: '1px solid #e0e0e0',
-  borderBottom: active ? '1px solid #fff' : '1px solid #e0e0e0',
-  background: active ? '#00a89d' : '#fff',
-  color: active ? '#fff' : '#555',
-  borderRadius: '6px 6px 0 0',
-  cursor: 'pointer',
-  fontSize: '0.85rem',
-  fontWeight: active ? 600 : 400,
-  fontFamily: 'inherit',
-  position: 'relative',
-  top: 1,
-  marginBottom: -1,
-  display: 'inline-flex',
+const sectionToggleStyle: React.CSSProperties = {
+  display: 'flex',
   alignItems: 'center',
-  gap: '0.4rem',
-});
+  width: '100%',
+  padding: '0.75rem 1rem',
+  border: 'none',
+  background: '#fafafa',
+  cursor: 'pointer',
+  fontSize: '0.9rem',
+  fontFamily: 'inherit',
+  color: '#061216',
+  textAlign: 'left',
+};
 
-const countBadgeStyle: React.CSSProperties = {
+const sectionContentStyle: React.CSSProperties = {
+  padding: '0.75rem 1rem',
+  borderTop: '1px solid #e0e0e0',
+};
+
+const badgeStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -471,14 +461,7 @@ const countBadgeStyle: React.CSSProperties = {
   color: '#fff',
   fontSize: '0.7rem',
   fontWeight: 600,
-};
-
-const tabContentStyle: React.CSSProperties = {
-  background: '#fff',
-  border: '1px solid #e0e0e0',
-  borderTop: 'none',
-  borderRadius: '0 0 8px 8px',
-  padding: '1rem',
+  marginLeft: '0.5rem',
 };
 
 const loadingRowStyle: React.CSSProperties = {
