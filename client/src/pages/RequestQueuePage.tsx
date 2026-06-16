@@ -189,10 +189,10 @@ export default function RequestQueuePage() {
                   borderLeft: `4px solid ${colorHex}`,
                   ...(shouldPulse ? { '--dc-card-rgb': hexToRgb(colorHex), animation: 'dc-card-glow 2s ease-in-out infinite' } as React.CSSProperties : {}),
                 }}
-                onClick={() => navigate('/quotes')}
+                onClick={() => navigate('/quotes?createFromRequestId=' + encodeURIComponent(req.id))}
                 role="button"
                 tabIndex={0}
-                onKeyDown={(e) => { if (e.key === 'Enter') navigate('/quotes'); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') navigate('/quotes?createFromRequestId=' + encodeURIComponent(req.id)); }}
                 aria-label={`Request from ${req.customerName}`}
               >
                 <div style={cardInnerStyle}>
