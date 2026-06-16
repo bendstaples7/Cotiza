@@ -77,10 +77,10 @@ export default function QuotesHubPage() {
       const data = await fetchImportableQuotes();
       setImportableQuotes(data.quotes);
       if (!data.available) {
-        setImportableError('Could not connect to Jobber. <a href="/api/jobber-auth/authorize" style={{color:"#00a89d"}}>Reconnect Jobber</a> to refresh your connection.');
+        setImportableError('not_connected');
       }
     } catch {
-      setImportableError('Could not connect to Jobber. <a href="/api/jobber-auth/authorize" style={{color:"#00a89d"}}>Reconnect Jobber</a> to refresh your connection.');
+      setImportableError('not_connected');
     } finally {
       setImportableLoading(false);
     }
@@ -264,6 +264,7 @@ export default function QuotesHubPage() {
           <button onClick={() => toggleSection('importable')} style={sectionToggleStyle}>
             <span style={{ marginRight: '0.5rem' }}>{expandedSections.has('importable') ? '▼' : '▶'}</span>
             <span style={{ fontWeight: 600 }}>Importable Jobber Quotes</span>
+            {importableError && <span style={{ marginLeft: '0.5rem', color: '#f97316', fontSize: '0.85rem' }}>⚠️</span>}
             {importableQuotes.length > 0 && (
               <span style={badgeStyle}>{importableQuotes.length}</span>
             )}
@@ -276,7 +277,34 @@ export default function QuotesHubPage() {
                   <span style={{ color: '#555', fontSize: '0.9rem' }}>Loading Jobber quotes…</span>
                 </div>
               ) : importableError ? (
-                <div role="alert" style={errorStyle} dangerouslySetInnerHTML={{ __html: importableError }} />
+                <div style={{
+                  background: '#fff',
+                  border: '1px solid #e0e0e0',
+                  borderRadius: 8,
+                  padding: '1.5rem',
+                  textAlign: 'center',
+                }}>
+                  <p style={{ margin: '0 0 0.75rem', fontSize: '0.95rem', color: '#555' }}>
+                    Connect your Jobber account to import existing quotes.
+                  </p>
+                  <a
+                    href="/api/jobber-auth/authorize"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      display: 'inline-block',
+                      background: '#00a89d',
+                      color: '#fff',
+                      padding: '0.6rem 1.5rem',
+                      borderRadius: 6,
+                      textDecoration: 'none',
+                      fontWeight: 600,
+                      fontSize: '0.95rem',
+                    }}
+                  >
+                    Connect Jobber
+                  </a>
+                </div>
               ) : importableQuotes.length === 0 ? (
                 <div style={emptyStyle}>No importable quotes found in Jobber.</div>
               ) : (
