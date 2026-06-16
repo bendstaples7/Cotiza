@@ -6,14 +6,6 @@ const MANUALLY_ADDED_SENTINEL = 'Manually added';
 
 // ── Types ──
 
-interface FeedbackItem {
-  id: string;
-  lineItemId: string;
-  fieldName: string;
-  comment: string;
-  createdAt: string;
-}
-
 interface LineItemsTableProps {
   lineItems: QuoteLineItem[];
   unresolvedItems: QuoteLineItem[];
@@ -21,8 +13,6 @@ interface LineItemsTableProps {
   id: string;
   onLineItemsSaved: (updatedLineItems: QuoteLineItem[]) => void;
   onLoadDraft: () => Promise<void>;
-  reviewMode?: boolean;
-  itemFeedback?: FeedbackItem[];
   ruleById: Map<string, Rule>;
   groupNameByRuleId: Map<string, string>;
 }
@@ -532,8 +522,6 @@ export default function LineItemsTable({
   id,
   onLineItemsSaved,
   onLoadDraft,
-  reviewMode,
-  itemFeedback,
   ruleById,
   groupNameByRuleId,
 }: LineItemsTableProps) {
@@ -567,17 +555,7 @@ export default function LineItemsTable({
   const editInputRef = useRef<HTMLInputElement | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const effectiveReadOnly = isReadOnly || reviewMode === true || false;
-
-  // Build feedback lookup
-  const feedbackByLineItem = new Map<string, FeedbackItem[]>();
-  if (itemFeedback) {
-    for (const fb of itemFeedback) {
-      const list = feedbackByLineItem.get(fb.lineItemId) ?? [];
-      list.push(fb);
-      feedbackByLineItem.set(fb.lineItemId, list);
-    }
-  }
+  const effectiveReadOnly = isReadOnly;
 
   // Build applied rules lookup
   const getAppliedRulesGrouped = (item: QuoteLineItem): Map<string, Rule[]> => {
@@ -598,7 +576,6 @@ export default function LineItemsTable({
 
   const startEditing = (itemId: string, field: 'quantity' | 'unitPrice' | 'productName' | 'description', currentValue: number | string) => {
     if (effectiveReadOnly) return;
-    if (reviewMode && itemFeedback && feedbackByLineItem.has(itemId)) return;
     setEditingCell({ itemId, field });
     setEditValue(String(currentValue));
     setUpdateCatalogChecked(false);
@@ -822,8 +799,7 @@ export default function LineItemsTable({
   };
 
   const isItemLocked = (itemId: string): boolean => {
-    if (!reviewMode || itemFeedback === undefined) return false;
-    return feedbackByLineItem.has(itemId);
+    return false;
   };
 
   return (
@@ -1141,8 +1117,8 @@ export default function LineItemsTable({
         </div>
       )}
 
-      {/* Add line item button and form - hidden in reviewMode */}
-      {!effectiveReadOnly && !reviewMode && (
+      {/* Add line item button and form */}
+      {!effectiveReadOnly && (
         <>
           {!showAddRow ? (
             <button

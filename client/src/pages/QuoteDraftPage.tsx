@@ -1,14 +1,12 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import type { QuoteDraft, QuoteLineItem, LineItemRationale, GenerationTrace, ErrorResponse, RuleGroupWithRules, Rule, ProductCatalogEntry, ActionItem, QuantityPredictionMeta, QuantitySource, ResolutionConfidence, ResolutionTier, DeathclockState } from 'shared';
-import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber, fetchDeathclock, markRequestSent, submitForReview, reSubmitForReview, getPendingReviews, getReview, completeReview } from '../api';
-import type { JobberRequestDetail, ReviewDetailData } from '../api';
+import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber, fetchDeathclock, markRequestSent, submitForReview, reSubmitForReview, getPendingReviews } from '../api';
+import type { JobberRequestDetail } from '../api';
 import SimilarQuotesPanel from './SimilarQuotesPanel';
 import DeathclockBadge, { getLabel } from '../components/DeathclockBadge';
 import ReviewBadge from '../components/review/ReviewBadge';
 import LineItemsTable from '../components/LineItemsTable';
-import ReviewLineItemFeedbackPanel from '../components/review/ReviewLineItemFeedbackPanel';
-import PushToJobberButton from '../components/review/PushToJobberButton';
 
 const MANUALLY_ADDED_SENTINEL = 'Manually added';
 
@@ -20,9 +18,9 @@ const DEATHCLOCK_COLOR_MAP: Record<string, string> = {
 };
 
 export default function QuoteDraftPage() {
-  const { id, reviewId: routeReviewId } = useParams<{ id: string; reviewId: string }>();
-  const isReviewMode = !!routeReviewId;
-  const reviewId = routeReviewId;
+  const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const cameFromReview = searchParams.get('from') === 'reviews';
 
   const navigate = useNavigate();
 
@@ -55,13 +53,6 @@ export default function QuoteDraftPage() {
   const [submittingReview, setSubmittingReview] = useState(false);
   const [submitReviewError, setSubmitReviewError] = useState<string | null>(null);
   const [currentReviewId, setCurrentReviewId] = useState<string | null>(null);
-
-  // Review mode state
-  const [reviewData, setReviewData] = useState<ReviewDetailData | null>(null);
-  const [reviewModeLoading, setReviewModeLoading] = useState(false);
-  const [reviewModeError, setReviewModeError] = useState<string | null>(null);
-  const [requestChangesNotes, setRequestChangesNotes] = useState('');
-  const [showRequestChangesForm, setShowRequestChangesForm] = useState(false);
 
   // Inline editing state
   const [editingCell, setEditingCell] = useState<{ itemId: string; field: 'quantity' | 'unitPrice' | 'productName' | 'description' } | null>(null);
@@ -170,28 +161,6 @@ export default function QuoteDraftPage() {
     }
   }, [id, draft?.reviewStatus, currentReviewId]);
 
-  // Load review data when in review mode
-  useEffect(() => {
-    if (!reviewId) return;
-    setReviewModeLoading(true);
-    setReviewModeError(null);
-    getReview(reviewId)
-      .then((data) => {
-        setReviewData(data);
-        // Create a pseudo-draft from the review quote data
-        if (data.quote) {
-          setDraft(data.quote as unknown as QuoteDraft);
-        }
-      })
-      .catch((err) => {
-        setReviewModeError((err as any).message ?? 'Failed to load review.');
-      })
-      .finally(() => {
-        setReviewModeLoading(false);
-        setLoading(false);
-      });
-  }, [reviewId]);
-
   const handleSubmitFeedback = async () => {
     if (!id || !feedbackText.trim()) {
       setFeedbackValidation('Please enter feedback before submitting.');
@@ -218,33 +187,6 @@ export default function QuoteDraftPage() {
       setRevisionError((err as ErrorResponse).message ?? 'Revision failed. Please try again.');
     } finally {
       setRevising(false);
-    }
-  };
-
-  // ── Review mode handlers ──
-
-  const handleReviewPushToJobber = async () => {
-    if (!reviewId) return;
-    try {
-      await completeReview(reviewId, 'push_to_jobber');
-      // Refresh review data
-      const data = await getReview(reviewId);
-      setReviewData(data);
-    } catch (err) {
-      throw err;
-    }
-  };
-
-  const handleReviewRequestChanges = async () => {
-    if (!reviewId) return;
-    try {
-      await completeReview(reviewId, 'changes_requested', requestChangesNotes || undefined);
-      setShowRequestChangesForm(false);
-      setRequestChangesNotes('');
-      const data = await getReview(reviewId);
-      setReviewData(data);
-    } catch (err) {
-      throw err;
     }
   };
 
@@ -689,7 +631,7 @@ export default function QuoteDraftPage() {
       <div style={containerStyle}>
         <div style={loadingContainerStyle}>
           <span style={spinnerStyle} />
-          <p style={{ margin: '0.75rem 0 0', color: '#555' }}>{isReviewMode ? 'Loading review detail…' : 'Loading quote draft…'}</p>
+          <p style={{ margin: '0.75rem 0 0', color: '#555' }}>Loading quote draft…</p>
         </div>
       </div>
     );
@@ -698,8 +640,8 @@ export default function QuoteDraftPage() {
   if (error || !draft) {
     return (
       <div style={containerStyle}>
-        <button onClick={() => navigate(isReviewMode ? '/quotes/reviews' : '/quotes')} style={backBtnStyle}>{isReviewMode ? '← Back to Review Queue' : '← Back to New Quote'}</button>
-        <div role="alert" style={alertStyle}>{error ?? (isReviewMode ? 'Review not found.' : 'Quote draft not found.')}</div>
+        <button onClick={() => navigate(cameFromReview ? '/quotes/reviews' : '/quotes')} style={backBtnStyle}>{cameFromReview ? '← Back to Review Queue' : '← Back to New Quote'}</button>
+        <div role="alert" style={alertStyle}>{error ?? 'Quote draft not found.'}</div>
       </div>
     );
   }
@@ -712,62 +654,8 @@ export default function QuoteDraftPage() {
     <div style={{ display: 'flex', gap: '1.5rem', maxWidth: showSidePanel ? 1200 : 800, margin: '0 auto' }}>
       {/* Main content */}
       <div style={{ flex: 1, minWidth: 0 }}>
-      <button onClick={() => navigate(isReviewMode ? '/quotes/reviews' : '/quotes')} style={backBtnStyle}>{isReviewMode ? '← Back to Review Queue' : '← Back to New Quote'}</button>
+      <button onClick={() => navigate(cameFromReview ? '/quotes/reviews' : '/quotes')} style={backBtnStyle}>{cameFromReview ? '← Back to Review Queue' : '← Back to New Quote'}</button>
 
-      {/* Review mode header */}
-      {isReviewMode && reviewData && (() => {
-        const review = reviewData.review;
-        const isCompleted = review.status === 'push_to_jobber' || review.status === 'changes_requested';
-        const lineItems = (draft as any).lineItems ?? [];
-        return (
-          <>
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap',
-            marginBottom: '0.5rem',
-          }}>
-            <h1 style={{ ...titleStyle, margin: 0 }}>
-              {draft.clientName ? `${draft.clientName} — ` : ''}
-              {(draft as any).jobberQuoteNumber ? `J-${(draft as any).jobberQuoteNumber}` : `D-${String((draft as any).draftNumber ?? '').padStart(3, '0')}`}
-            </h1>
-            <ReviewBadge status={review.status as any} />
-          </div>
-          <p style={{ margin: '0.25rem 0 1rem', color: '#666', fontSize: '0.9rem' }}>
-            Submitted {new Date(review.submittedAt).toLocaleString()} · Cycle {(review as any).reviewCycle ?? 1}
-          </p>
-          {/* Action buttons for review mode */}
-          {!isCompleted && (
-            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start', marginBottom: '1rem' }}>
-              <PushToJobberButton
-                onPush={handleReviewPushToJobber}
-                onRequestChanges={async () => setShowRequestChangesForm(true)}
-                hasFeedback={reviewData.feedback.length > 0}
-              />
-            </div>
-          )}
-          {/* Completed state banner */}
-          {isCompleted && (
-            <div style={{
-              background: review.status === 'push_to_jobber' ? '#f0fdf4' : '#fff7ed',
-              border: `1px solid ${review.status === 'push_to_jobber' ? '#bbf7d0' : '#fdba74'}`,
-              color: review.status === 'push_to_jobber' ? '#16a34a' : '#ea580c',
-              padding: '0.75rem 1rem',
-              borderRadius: 6,
-              marginBottom: '1rem',
-              fontSize: '0.9rem',
-              fontWeight: 600,
-            }}>
-              {review.status === 'push_to_jobber'
-                ? '✅ Quote has been pushed to Jobber.'
-                : 'Changes have been requested.'}
-              {review.notes && <span style={{ fontWeight: 400, display: 'block', marginTop: '0.25rem' }}>{review.notes}</span>}
-            </div>
-          )}
-          </>
-        );
-      })()}
-
-      {!isReviewMode && (
-      <>
       <div style={{
         display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap',
         marginBottom: '0.5rem',
@@ -840,19 +728,6 @@ export default function QuoteDraftPage() {
             </button>
           )
         )}
-        {draft.reviewStatus === 'pending_review' && currentReviewId && (
-          <button
-            onClick={() => navigate(`/quotes/reviews/${currentReviewId}`)}
-            style={{
-              padding: '0.4rem 1rem', borderRadius: 6, border: '1px solid #c4b5fd',
-              background: '#ede9fe', color: '#7c3aed', fontWeight: 600, fontSize: '0.85rem',
-              cursor: 'pointer',
-            }}
-            aria-label="View current review"
-          >
-            View Review
-          </button>
-        )}
       </div>
 
       {/* Changes requested banner */}
@@ -864,13 +739,7 @@ export default function QuoteDraftPage() {
         }}>
           <span>⚠️ Changes requested — </span>
           {currentReviewId ? (
-            <a
-              href={`/quotes/reviews/${currentReviewId}`}
-              style={{ color: '#ea580c', fontWeight: 600, textDecoration: 'underline' }}
-              onClick={(e) => { e.preventDefault(); navigate(`/quotes/reviews/${currentReviewId}`); }}
-            >
-              view feedback
-            </a>
+            <span style={{ color: '#9a3412' }}>review feedback provided</span>
           ) : (
             <span style={{ color: '#9a3412' }}>review feedback provided</span>
           )}
@@ -1292,8 +1161,6 @@ export default function QuoteDraftPage() {
             setDraft({ ...draft, lineItems: updated });
           }}
           onLoadDraft={loadDraft}
-          reviewMode={isReviewMode}
-          itemFeedback={reviewData?.feedback ?? []}
           ruleById={ruleById}
           groupNameByRuleId={groupNameByRuleId}
         />
@@ -1793,21 +1660,11 @@ export default function QuoteDraftPage() {
           </div>
         )}
       </div>
-      </>)}
       </div>{/* end main content column */}
 
-      {/* Request details side panel / Review feedback panel */}
+      {/* Request details side panel */}
       {showSidePanel && (
         <aside style={sidePanelStyle}>
-          {isReviewMode && reviewData ? (
-            <ReviewLineItemFeedbackPanel
-              lineItems={(draft as any).lineItems ?? []}
-              feedback={reviewData.feedback}
-              reviewId={reviewData.review.id}
-              readOnly={reviewData.review.status === 'push_to_jobber' || reviewData.review.status === 'changes_requested'}
-            />
-          ) : (
-          <>
           <h2 style={{ margin: '0 0 0.75rem', fontSize: '1.1rem', fontWeight: 600 }}>Request Details</h2>
 
           {requestDetail?.title && (
@@ -1878,8 +1735,6 @@ export default function QuoteDraftPage() {
                 ))}
               </div>
             </div>
-          )}
-        </>
           )}
         </aside>
       )}
@@ -2177,8 +2032,8 @@ function LineItemRationalePanel({
 // ---------------------------------------------------------------------------
 
 function GenerationTracePanel({ trace }: { trace: GenerationTrace }) {
-  const [showAllCatalogFiltered, setShowAllCatalogFiltered] = React.useState(false);
-  const [showAllRules, setShowAllRules] = React.useState(false);
+  const [showAllCatalogFiltered, setShowAllCatalogFiltered] = useState(false);
+  const [showAllRules, setShowAllRules] = useState(false);
 
   const CATALOG_COLLAPSE_THRESHOLD = 3;
   const RULES_COLLAPSE_THRESHOLD = 5;
