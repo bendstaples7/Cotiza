@@ -194,7 +194,8 @@ export interface GenerationTrace {
 /** A matched line item in a quote draft */
 export interface QuoteLineItem {
   id: string;
-  jobberLineItemId: string | null;
+  /** The Jobber line item ID for updating via quoteEditLineItems */
+  jobberLineItemId?: string | null;
   productCatalogEntryId: string | null;
   productName: string;
   description: string;
