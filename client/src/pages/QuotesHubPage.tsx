@@ -50,7 +50,6 @@ export default function QuotesHubPage() {
 
   const [importableQuotes, setImportableQuotes] = useState<ImportableQuote[]>([]);
   const [importableLoading, setImportableLoading] = useState(false);
-  const [importableError, setImportableError] = useState<string | null>(null);
   const [importingIds, setImportingIds] = useState<Set<string>>(new Set());
 
   // ── Load drafts (used by both active and finalized tabs) ──
@@ -73,14 +72,10 @@ export default function QuotesHubPage() {
   const loadImportable = useCallback(async () => {
     try {
       setImportableLoading(true);
-      setImportableError(null);
       const data = await fetchImportableQuotes();
-      setImportableQuotes(data.quotes);
-      if (!data.available) {
-        setImportableError('not_connected');
-      }
+      setImportableQuotes(data.available ? data.quotes : []);
     } catch {
-      setImportableError('not_connected');
+      setImportableQuotes([]);
     } finally {
       setImportableLoading(false);
     }
@@ -264,7 +259,6 @@ export default function QuotesHubPage() {
           <button onClick={() => toggleSection('importable')} style={sectionToggleStyle}>
             <span style={{ marginRight: '0.5rem' }}>{expandedSections.has('importable') ? '▼' : '▶'}</span>
             <span style={{ fontWeight: 600 }}>Importable Jobber Quotes</span>
-            {importableError && <span style={{ marginLeft: '0.5rem', color: '#f97316', fontSize: '0.85rem' }}>⚠️</span>}
             {importableQuotes.length > 0 && (
               <span style={badgeStyle}>{importableQuotes.length}</span>
             )}
@@ -276,37 +270,8 @@ export default function QuotesHubPage() {
                   <span style={spinnerStyle} />
                   <span style={{ color: '#555', fontSize: '0.9rem' }}>Loading Jobber quotes…</span>
                 </div>
-              ) : importableError ? (
-                <div style={{
-                  background: '#fff',
-                  border: '1px solid #e0e0e0',
-                  borderRadius: 8,
-                  padding: '1.5rem',
-                  textAlign: 'center',
-                }}>
-                  <p style={{ margin: '0 0 0.75rem', fontSize: '0.95rem', color: '#555' }}>
-                    Connect your Jobber account to import existing quotes.
-                  </p>
-                  <a
-                    href="/api/jobber-auth/authorize"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{
-                      display: 'inline-block',
-                      background: '#00a89d',
-                      color: '#fff',
-                      padding: '0.6rem 1.5rem',
-                      borderRadius: 6,
-                      textDecoration: 'none',
-                      fontWeight: 600,
-                      fontSize: '0.95rem',
-                    }}
-                  >
-                    Connect Jobber
-                  </a>
-                </div>
               ) : importableQuotes.length === 0 ? (
-                <div style={emptyStyle}>No importable quotes found in Jobber.</div>
+                <div style={emptyStyle}>No importable quotes available.</div>
               ) : (
                 <div style={listStyle}>
                   {importableQuotes.map(quote => {
