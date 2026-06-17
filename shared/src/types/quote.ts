@@ -8,7 +8,7 @@ export interface ManualRequest {
   customerAddress: string | null;
   serviceDescription: string;
   mediaItemIds: string[];
-  requestSource: 'manual';
+  requestSource: 'manual' | 'jobber';
   createdAt: Date;
   /** Deathclock: ISO 8601 timestamp when the request was backfilled (pre-deathclock). */
   backfilledAt?: string | null;

@@ -154,34 +154,6 @@ export default function DeathclockDashboardPage() {
     navigate('/quotes/queue?sort=age_asc');
   };
 
-  // ── Loading state ──
-  if (loading) {
-    return (
-      <div style={containerStyle}>
-        <div style={loadingContainerStyle}>
-          <span style={spinnerStyle} />
-          <p style={{ margin: '0.75rem 0 0', color: '#555' }}>Loading stats…</p>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Error state ──
-  if (error) {
-    return (
-      <div style={containerStyle}>
-        <div role="alert" style={alertStyle}>{error}</div>
-        <button
-          type="button"
-          onClick={loadStats}
-          style={retryButtonStyle}
-        >
-          Retry
-        </button>
-      </div>
-    );
-  }
-
   // ── Empty state — only for deathclock section, not the whole page ──
   const deathclockIsEmpty = !stats || stats.totalActive === 0;
   const total = stats?.totalActive ?? 0;
@@ -191,7 +163,23 @@ export default function DeathclockDashboardPage() {
       <h1 style={titleStyle}>Dashboard</h1>
 
       {/* ── Deathclock Section ── */}
-      {deathclockIsEmpty ? (
+      {loading ? (
+        <div style={loadingContainerStyle}>
+          <span style={spinnerStyle} />
+          <p style={{ margin: '0.75rem 0 0', color: '#555' }}>Loading stats…</p>
+        </div>
+      ) : error ? (
+        <>
+          <div role="alert" style={alertStyle}>{error}</div>
+          <button
+            type="button"
+            onClick={loadStats}
+            style={retryButtonStyle}
+          >
+            Retry
+          </button>
+        </>
+      ) : deathclockIsEmpty ? (
         <div style={emptyStyle}>
           <p style={{ margin: 0, color: '#888' }}>No active requests.</p>
         </div>

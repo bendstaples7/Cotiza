@@ -1673,11 +1673,15 @@ export default function QuoteDraftPage() {
           </div>
         ) : (
           <div>
-            {!draft.jobberRequestId && !draft.jobberQuoteId && (
+            {draft.jobberRequestId && !draft.jobberQuoteId ? (
+              <p style={{ margin: '0 0 0.5rem', fontSize: '0.85rem', color: '#888' }}>
+                Generated from Jobber request. Push to create a linked quote in Jobber.
+              </p>
+            ) : !draft.jobberRequestId && !draft.jobberQuoteId ? (
               <p style={{ margin: '0 0 0.5rem', fontSize: '0.85rem', color: '#888' }}>
                 This draft was created manually. Pushing will create a new quote in Jobber.
               </p>
-            )}
+            ) : null}
             <button
               onClick={handlePushToJobber}
               disabled={pushing || isReadOnly}

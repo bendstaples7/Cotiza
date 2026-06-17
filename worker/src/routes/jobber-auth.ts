@@ -70,19 +70,19 @@ app.get('/callback', async (c) => {
   const jobberError = c.req.query('error');
   if (jobberError) {
     const desc = c.req.query('error_description') || jobberError;
-    return c.redirect(frontendUrl + '/dashboard?oauth_error=' + encodeURIComponent(desc));
+    return c.redirect(frontendUrl + '/social/dashboard?oauth_error=' + encodeURIComponent(desc));
   }
 
   const code = c.req.query('code');
   if (!code) {
-    return c.redirect(frontendUrl + '/dashboard?oauth_error=' + encodeURIComponent('Missing authorization code'));
+    return c.redirect(frontendUrl + '/social/dashboard?oauth_error=' + encodeURIComponent('Missing authorization code'));
   }
 
   const clientId = c.env.JOBBER_CLIENT_ID;
   const clientSecret = c.env.JOBBER_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
-    return c.redirect(frontendUrl + '/dashboard?oauth_error=' + encodeURIComponent('Server configuration error'));
+    return c.redirect(frontendUrl + '/social/dashboard?oauth_error=' + encodeURIComponent('Server configuration error'));
   }
 
   const redirectUri = new URL('/api/jobber-auth/callback', c.req.url).toString();
@@ -104,7 +104,7 @@ app.get('/callback', async (c) => {
 
   if (!response.ok) {
     const errorMsg = `Token exchange failed (${response.status})`;
-    return c.redirect(frontendUrl + '/dashboard?oauth_error=' + encodeURIComponent(errorMsg));
+    return c.redirect(frontendUrl + '/social/dashboard?oauth_error=' + encodeURIComponent(errorMsg));
   }
 
   const data = (await response.json()) as {
@@ -115,7 +115,7 @@ app.get('/callback', async (c) => {
   };
 
   if (!data.access_token || !data.refresh_token) {
-    return c.redirect(frontendUrl + '/dashboard?oauth_error=' + encodeURIComponent('Token response missing required fields'));
+    return c.redirect(frontendUrl + '/social/dashboard?oauth_error=' + encodeURIComponent('Token response missing required fields'));
   }
 
   // Persist to D1 so the worker picks them up on next request
@@ -124,10 +124,10 @@ app.get('/callback', async (c) => {
     await tokenStore.save(data.access_token, data.refresh_token);
   } catch (saveErr) {
     const msg = saveErr instanceof Error ? saveErr.message : 'Unknown error saving tokens';
-    return c.redirect(frontendUrl + '/dashboard?oauth_error=' + encodeURIComponent('Failed to save tokens: ' + msg));
+    return c.redirect(frontendUrl + '/social/dashboard?oauth_error=' + encodeURIComponent('Failed to save tokens: ' + msg));
   }
 
-  return c.redirect(frontendUrl + '/dashboard');
+  return c.redirect(frontendUrl + '/social/dashboard');
 });
 
 /**

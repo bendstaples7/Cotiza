@@ -55,14 +55,51 @@ export function getUrgencyText(color: string, isComplete: boolean, frozen: boole
 // ---------------------------------------------------------------------------
 
 /**
- * Format elapsed seconds into a human-readable "since request received" label.
+ * Format elapsed seconds into a short human-readable label for display.
  *
- *   < 60 min   →  "X.X minutes since request received"  (e.g. "12.4 minutes...")
- *   < 24 hours →  "X.X hours since request received"    (e.g. "5.3 hours...")
- *   >= 24 hours→  "X.X days since request received"     (e.g. "2.0 days...")
- *   >= 90 days →  "99+ days since request received"
+ *   < 60 min   →  "Xm"      (e.g. "45m")
+ *   < 24 hours →  "Xh"      (e.g. "8h")
+ *   < 7 days   →  "X.Xd"    (e.g. "2.5d")
+ *   < 90 days  →  "Xd Xh"   (e.g. "5d 12h")
+ *   >= 90 days →  "99+ days"
  */
 export function getLabel(ageSeconds: number): string {
+  if (ageSeconds >= SECONDS_IN_90_DAYS) {
+    return '99+ days';
+  }
+
+  const totalMinutes = ageSeconds / SECONDS_IN_MINUTE;
+  const totalHours = ageSeconds / SECONDS_IN_HOUR;
+  const totalDays = totalHours / 24;
+
+  if (totalMinutes < 60) {
+    const mins = Math.ceil(totalMinutes);
+    return `${Math.max(1, mins)}m`;
+  }
+
+  if (totalHours < 24) {
+    return `${Math.round(totalHours)}h`;
+  }
+
+  if (totalDays < 7) {
+    return `${(Math.floor(totalDays * 10) / 10).toFixed(1)}d`;
+  }
+
+  const wholeHours = Math.floor(totalHours);
+  const wholeDays = Math.floor(wholeHours / 24);
+  const remainingHours = wholeHours % 24;
+  return `${wholeDays}d ${remainingHours}h`;
+}
+
+/**
+ * Format elapsed seconds into a long accessibility label for aria-label/title.
+ *
+ *   < 60 min   →  "X.X minutes since request received"
+ *   < 24 hours →  "X.X hours since request received"
+ *   >= 24 hours→  "X.X days since request received"
+ *   >= 90 days →  "99+ days since request received"
+ */
+export function getLongLabel(ageSeconds: number): string {
   if (ageSeconds >= SECONDS_IN_90_DAYS) {
     return '99+ days since request received';
   }
@@ -163,11 +200,12 @@ export default function DeathclockBadge({
   // Use server-provided ageLabel if passed via ageSeconds in a real flow;
   // for this component, we compute it client-side
   const label = getLabel(ageSeconds);
+  const longLabel = getLongLabel(ageSeconds);
   const urgency = getUrgencyText(color, isComplete, frozen);
-  const ariaLabel = `Request age: ${label} — ${urgency}`;
+  const ariaLabel = `Request age: ${longLabel} — ${urgency}`;
   const titleText = isComplete || frozen
-    ? `Request age: ${label} (frozen)`
-    : `Request age: ${label} — ${urgency}`;
+    ? `Request age: ${longLabel} (frozen)`
+    : `Request age: ${longLabel} — ${urgency}`;
 
   return (
     <>

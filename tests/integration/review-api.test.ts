@@ -9,7 +9,46 @@ import { Hono } from 'hono';
 import type { User } from 'shared';
 import { createMockD1, configurePrepareResults } from '../unit/helpers/mock-d1.js';
 import type { MockD1Database } from '../unit/helpers/mock-d1.js';
+import { errorHandler } from '../../worker/src/middleware/error-handler.js';
 import reviewsApp from '../../worker/src/routes/reviews.js';
+
+// Mock AuthService so sessionMiddleware passes without a real DB session lookup.
+// verifySession returns TEST_USER for any non-empty token.
+vi.mock('../../worker/src/services/auth-service.js', () => ({
+  AuthService: vi.fn().mockImplementation(() => ({
+    verifySession: vi.fn().mockResolvedValue({
+      id: 'user-test-001',
+      email: 'test@chicago-reno.com',
+      name: 'Test User',
+      createdAt: new Date('2025-01-01T00:00:00Z'),
+      lastActiveAt: new Date('2025-01-01T00:00:00Z'),
+    }),
+  })),
+}));
+
+// Mock JobberIntegration and JobberTokenStore so the /push route works in tests
+// without real Jobber credentials.
+vi.mock('../../worker/src/services/jobber-integration.js', () => ({
+  JobberIntegration: vi.fn().mockImplementation(() => ({
+    loadPersistedTokens: vi.fn().mockResolvedValue(undefined),
+  })),
+}));
+
+vi.mock('../../worker/src/services/jobber-token-store.js', () => ({
+  JobberTokenStore: vi.fn().mockImplementation(() => ({})),
+}));
+
+// Mock JobberQuotePushService so the /push route returns stub Jobber IDs
+// without making real API calls.
+vi.mock('../../worker/src/services/jobber-quote-push-service.js', () => ({
+  JobberQuotePushService: vi.fn().mockImplementation(() => ({
+    pushToJobber: vi.fn().mockResolvedValue({
+      jobberQuoteId: 'jobber-quote-id-stub',
+      jobberQuoteNumber: 'Q-9999',
+      jobberQuoteWebUri: 'https://app.getjobber.com/quotes/stub',
+    }),
+  })),
+}));
 
 const TEST_USER: User = {
   id: 'user-test-001',
@@ -21,42 +60,21 @@ const TEST_USER: User = {
 
 describe('Review API Routes', () => {
   let db: MockD1Database;
-  let app: Hono;
 
   beforeEach(() => {
     vi.clearAllMocks();
     db = createMockD1();
-
-    // Build a test app that mounts the reviews routes with mocked bindings
-    app = new Hono();
-
-    // Override session middleware to inject test user
-    app.use('*', async (c, next) => {
-      c.set('user', TEST_USER);
-      await next();
-    });
-
-    // Mount the reviews sub-app under /api
-    app.route('/api', reviewsApp);
-
-    // Bind the env.DB to our mock
-    app.use('*', async (c, next) => {
-      c.env = { DB: db as unknown as D1Database } as any;
-      await next();
-    });
   });
 
   // Helper to re-create app with the middleware order correct
   function createTestApp(): Hono {
     const testApp = new Hono();
 
-    // Session middleware sets user
-    testApp.use('*', async (c, next) => {
-      c.set('user', TEST_USER);
-      await next();
-    });
+    // Register error handler so PlatformError instances return their correct statusCode
+    // instead of a generic 500.
+    testApp.onError(errorHandler);
 
-    // Bind DB
+    // Bind DB first — sessionMiddleware inside reviewsApp needs c.env.DB
     testApp.use('*', async (c, next) => {
       c.env = { DB: db as unknown as D1Database } as any;
       await next();
@@ -66,40 +84,59 @@ describe('Review API Routes', () => {
     return testApp;
   }
 
+  /**
+   * All requests must include this header. sessionMiddleware checks for a Bearer
+   * token before calling verifySession — without it the middleware throws 401
+   * before the route handler even runs. The AuthService mock above ensures
+   * verifySession accepts any non-empty token and returns TEST_USER.
+   */
+  const AUTH_HEADERS = { Authorization: 'Bearer test-token' };
+
   describe('POST /api/quotes/:id/submit-review', () => {
     it('submits a quote for review', async () => {
       vi.stubGlobal('crypto', { randomUUID: () => 'review-uuid-999' });
 
       configurePrepareResults(db, [
-        // submitForReview: get draft (1st prepare)
-        { first: { id: 'draft-1', status: 'draft', review_status: null, jobber_quote_id: null, draft_number: 42 } },
-        // getById from QuoteDraftService: gets full draft
+        // Route: QuoteDraftService.getById — draft row (scoped to userId)
         { first: {
           id: 'draft-1', user_id: TEST_USER.id, customer_request_text: 'test',
           selected_template_id: null, selected_template_name: null,
-          status: 'draft', jobber_request_id: null, customer_note: null,
+          status: 'draft', review_status: null, jobber_request_id: null, customer_note: null,
           manual_request_id: null, draft_number: 42,
           jobber_quote_id: null, jobber_quote_number: null, jobber_quote_web_uri: null,
           sqft_resolution_json: null, deposit_schedule: null,
           space_context_json: null, generation_trace_json: null,
           created_at: '2026-06-14T12:00:00Z', updated_at: '2026-06-14T12:00:00Z',
         } },
-        // submitForReview: get cycle (2nd prepare)
+        // Route: QuoteDraftService.getById — line items (resolved=1 so submitForReview passes the
+        // "must have at least one line item" validation check)
+        { all: { results: [
+          { id: 'li-1', product_catalog_entry_id: null, product_name: 'Drywall', description: '',
+            quantity: 1, unit_price: 100, confidence_score: 100, original_text: 'drywall',
+            resolved: 1, unmatched_reason: null, display_order: 0, rationale_json: null },
+        ] } },
+        // Route: QuoteDraftService.getById — action items
+        { all: { results: [] } },
+        // submitForReview: check draft exists (status/review_status guards)
+        { first: { id: 'draft-1', status: 'draft', review_status: null, jobber_quote_id: null, draft_number: 42 } },
+        // submitForReview: get review cycle
         { first: { next_cycle: 1 } },
-        // submitForReview: insert review (3rd prepare - run)
+        // submitForReview: insert review record
         { run: { success: true, meta: { changes: 1 } } },
-        // submitForReview: insert snapshot (4th prepare - run)
+        // submitForReview: insert snapshot
         { run: { success: true, meta: { changes: 1 } } },
-        // submitForReview: update draft (5th prepare - run)
+        // submitForReview: update draft review_status = 'pending_review'
         { run: { success: true, meta: { changes: 1 } } },
-        // submitForReview: notifyReviewSubmitted → ActivityLog (6th prepare - run)
+        // submitForReview: notifyReviewSubmitted → ActivityLog
+        { run: { success: true, meta: { changes: 1 } } },
+        // Route: post-submit activity log
         { run: { success: true, meta: { changes: 1 } } },
       ]);
 
       const testApp = createTestApp();
       const res = await testApp.request('/api/quotes/draft-1/submit-review', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...AUTH_HEADERS, 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
 
@@ -135,7 +172,9 @@ describe('Review API Routes', () => {
       ]);
 
       const testApp = createTestApp();
-      const res = await testApp.request('/api/reviews/pending');
+      const res = await testApp.request('/api/reviews/pending', {
+        headers: AUTH_HEADERS,
+      });
 
       expect(res.status).toBe(200);
       const body = await res.json();
@@ -161,19 +200,15 @@ describe('Review API Routes', () => {
           },
         },
         // getReview: get feedback
-        {
-          all: { results: [] },
-        },
+        { all: { results: [] } },
         // getReview: get snapshots
-        {
-          all: { results: [] },
-        },
-        // getReview: get full draft via QuoteDraftService.getById
+        { all: { results: [] } },
+        // QuoteDraftService.getByIdForReview: draft row (no user filter)
         {
           first: {
             id: 'draft-1', user_id: TEST_USER.id, customer_request_text: 'Kitchen renovation',
             selected_template_id: null, selected_template_name: null,
-            status: 'draft', jobber_request_id: null, customer_note: null,
+            status: 'draft', review_status: null, jobber_request_id: null, customer_note: null,
             manual_request_id: null, draft_number: 42,
             jobber_quote_id: null, jobber_quote_number: null, jobber_quote_web_uri: null,
             sqft_resolution_json: null, deposit_schedule: null,
@@ -181,14 +216,16 @@ describe('Review API Routes', () => {
             created_at: now, updated_at: now,
           },
         },
-        // QuoteDraftService.getById calls second query for line items
+        // QuoteDraftService.getByIdForReview: line items
         { all: { results: [] } },
-        // QuoteDraftService.getById calls third query for unresolved items
+        // QuoteDraftService.getByIdForReview: action items
         { all: { results: [] } },
       ]);
 
       const testApp = createTestApp();
-      const res = await testApp.request('/api/reviews/review-1');
+      const res = await testApp.request('/api/reviews/review-1', {
+        headers: AUTH_HEADERS,
+      });
 
       expect(res.status).toBe(200);
       const body = await res.json();
@@ -204,7 +241,9 @@ describe('Review API Routes', () => {
       ]);
 
       const testApp = createTestApp();
-      const res = await testApp.request('/api/reviews/review-missing');
+      const res = await testApp.request('/api/reviews/review-missing', {
+        headers: AUTH_HEADERS,
+      });
 
       expect(res.status).toBe(404);
     });
@@ -222,7 +261,7 @@ describe('Review API Routes', () => {
       const testApp = createTestApp();
       const res = await testApp.request('/api/reviews/review-1/feedback', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...AUTH_HEADERS, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           type: 'line_item',
           lineItemId: 'li-1',
@@ -240,7 +279,7 @@ describe('Review API Routes', () => {
       const testApp = createTestApp();
       const res = await testApp.request('/api/reviews/review-1/feedback', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...AUTH_HEADERS, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           type: 'line_item',
           lineItemId: 'li-1',
@@ -260,13 +299,13 @@ describe('Review API Routes', () => {
       configurePrepareResults(db, [
         // completeReview: get review
         { first: { id: 'review-1', quote_draft_id: 'draft-1', status: 'pending_review', review_cycle: 1 } },
-        // completeWithChangesRequested: update review
+        // completeWithChangesRequested: update review status
         { run: { success: true, meta: { changes: 1 } } },
-        // completeWithChangesRequested: update draft
+        // completeWithChangesRequested: update draft review_status = 'changes_requested'
         { run: { success: true, meta: { changes: 1 } } },
-        // completeWithChangesRequested: get review for notify
+        // completeWithChangesRequested: get review for notify (JOIN query)
         { first: { submitted_by_id: TEST_USER.id, draft_number: 42 } },
-        // completeWithChangesRequested: notifyChangesRequested → activity log
+        // completeWithChangesRequested: notifyChangesRequested → ActivityLog
         { run: { success: true, meta: { changes: 1 } } },
         // Complete endpoint: get draft info for activity logging
         { first: { draft_number: 42, quote_draft_id: 'draft-1' } },
@@ -277,7 +316,7 @@ describe('Review API Routes', () => {
       const testApp = createTestApp();
       const res = await testApp.request('/api/reviews/review-1/complete', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...AUTH_HEADERS, 'Content-Type': 'application/json' },
         body: JSON.stringify({ outcome: 'changes_requested' }),
       });
 
@@ -290,7 +329,7 @@ describe('Review API Routes', () => {
       const testApp = createTestApp();
       const res = await testApp.request('/api/reviews/review-1/complete', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...AUTH_HEADERS, 'Content-Type': 'application/json' },
         body: JSON.stringify({ outcome: 'invalid_outcome' }),
       });
 
@@ -303,24 +342,32 @@ describe('Review API Routes', () => {
       vi.stubGlobal('crypto', { randomUUID: () => 'push-uuid' });
 
       configurePrepareResults(db, [
-        // pushToJobber: get review
+        // pushToJobber: first GET review (existence/status check in pushToJobber)
         { first: { id: 'review-1', quote_draft_id: 'draft-1', status: 'pending_review' } },
-        // completeReview → completeWithPush: get draft row
-        { first: { id: 'draft-1', status: 'draft', review_status: 'pending_review', jobber_quote_id: null, draft_number: 42, user_id: TEST_USER.id, customer_request_text: 'test', customer_note: null, deposit_schedule: null } },
-        // completeWithPush without integration: update review
+        // completeReview: second GET review (status guard before dispatching outcome)
+        { first: { id: 'review-1', quote_draft_id: 'draft-1', status: 'pending_review', review_cycle: 1 } },
+        // completeWithPush: get draft row
+        { first: { id: 'draft-1', status: 'draft', review_status: 'pending_review', jobber_quote_id: null,
+                   draft_number: 42, user_id: TEST_USER.id, customer_request_text: 'test',
+                   customer_note: null, deposit_schedule: null } },
+        // completeWithPush: get resolved line items (for push payload)
+        { all: { results: [] } },
+        // completeWithPush: get unresolved line items (for push payload)
+        { all: { results: [] } },
+        // completeWithPush: update review status = 'push_to_jobber'
         { run: { success: true, meta: { changes: 1 } } },
-        // completeWithPush: update draft
+        // completeWithPush: update draft review_status = 'none'
         { run: { success: true, meta: { changes: 1 } } },
-        // notifyPushedToJobber
+        // completeWithPush: notifyPushedToJobber → ActivityLog
         { run: { success: true, meta: { changes: 1 } } },
-        // Activity log for push
+        // Route: activity log for push
         { run: { success: true, meta: { changes: 1 } } },
       ]);
 
       const testApp = createTestApp();
       const res = await testApp.request('/api/reviews/review-1/push', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...AUTH_HEADERS, 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
 
@@ -353,7 +400,7 @@ describe('Review API Routes', () => {
         { first: { quote_draft_id: 'draft-1' } },
         // getDiff: get latest snapshot
         { first: snapRow },
-        // getDiff: get current line items
+        // getDiff: get current resolved line items
         {
           all: {
             results: [
@@ -365,7 +412,9 @@ describe('Review API Routes', () => {
       ]);
 
       const testApp = createTestApp();
-      const res = await testApp.request('/api/reviews/review-1/diff');
+      const res = await testApp.request('/api/reviews/review-1/diff', {
+        headers: AUTH_HEADERS,
+      });
 
       expect(res.status).toBe(200);
       const body = await res.json();
@@ -391,7 +440,9 @@ describe('Review API Routes', () => {
       ]);
 
       const testApp = createTestApp();
-      const res = await testApp.request('/api/reviews/review-missing/diff');
+      const res = await testApp.request('/api/reviews/review-missing/diff', {
+        headers: AUTH_HEADERS,
+      });
 
       expect(res.status).toBe(404);
     });

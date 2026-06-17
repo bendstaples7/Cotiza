@@ -106,7 +106,8 @@ export class ManualRequestService {
                mr.service_description,
                mr.media_item_ids_json,
                mr.created_at,
-               CAST((unixepoch('now') - unixepoch(mr.created_at)) AS INTEGER) AS age_seconds
+               CAST((unixepoch('now') - unixepoch(mr.created_at)) AS INTEGER) AS age_seconds,
+               'manual' AS request_source
                ${deathclockManualCols}
         FROM manual_requests mr
         WHERE mr.user_id = ?
@@ -122,7 +123,8 @@ export class ManualRequestService {
                COALESCE(jwr.description, jwr.title, '') AS service_description,
                '[]' AS media_item_ids_json,
                jwr.received_at AS created_at,
-               CAST((unixepoch('now') - unixepoch(jwr.received_at)) AS INTEGER) AS age_seconds
+               CAST((unixepoch('now') - unixepoch(jwr.received_at)) AS INTEGER) AS age_seconds,
+               'jobber' AS request_source
                ${deathclockJobberCols}
         FROM jobber_webhook_requests jwr
       )
@@ -529,7 +531,7 @@ export class ManualRequestService {
       customerAddress: (row.customer_address as string) || null,
       serviceDescription: row.service_description as string,
       mediaItemIds,
-      requestSource: 'manual',
+      requestSource: (row.request_source as 'manual' | 'jobber') ?? 'manual',
       createdAt: new Date(row.created_at as string),
     };
   }
