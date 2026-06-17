@@ -191,7 +191,7 @@ export default function PushToJobberButton({ onPush, onRequestChanges, pushDisab
                 onClick={handlePush}
                 style={{ padding: '0.5rem 1rem', borderRadius: 5, border: 'none', background: '#00a89d', color: '#fff', fontWeight: 600, cursor: 'pointer', fontSize: '0.9rem' }}
               >
-                Push to Jobber
+                Confirm Push
               </button>
             </div>
           </div>

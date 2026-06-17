@@ -200,12 +200,11 @@ export default function DeathclockBadge({
   // Use server-provided ageLabel if passed via ageSeconds in a real flow;
   // for this component, we compute it client-side
   const label = getLabel(ageSeconds);
-  const longLabel = getLongLabel(ageSeconds);
   const urgency = getUrgencyText(color, isComplete, frozen);
-  const ariaLabel = `Request age: ${longLabel} — ${urgency}`;
+  const ariaLabel = `Request age: ${label} — ${urgency}`;
   const titleText = isComplete || frozen
-    ? `Request age: ${longLabel} (frozen)`
-    : `Request age: ${longLabel} — ${urgency}`;
+    ? `Request age: ${label} (frozen)`
+    : `Request age: ${label} — ${urgency}`;
 
   return (
     <>

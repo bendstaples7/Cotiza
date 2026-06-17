@@ -58,25 +58,28 @@ describe('ReviewBadge', () => {
     render(<ReviewBadge status="pending_review" />);
     const badge = screen.getByText('Pending Review');
     expect(badge).toBeInTheDocument();
-    // purple-ish background
-    expect(badge.getAttribute('style')).toContain('ede9fe');
-    expect(badge.getAttribute('style')).toContain('7c3aed');
+    // purple-ish background — browser converts hex to rgb()
+    const style = badge.getAttribute('style') ?? '';
+    expect(style).toMatch(/ede9fe|rgb\(237,\s*233,\s*254\)/);
+    expect(style).toMatch(/7c3aed|rgb\(124,\s*58,\s*237\)/);
   });
 
   it('renders "Changes Requested" with orange styling', () => {
     render(<ReviewBadge status="changes_requested" />);
     const badge = screen.getByText('Changes Requested');
     expect(badge).toBeInTheDocument();
-    expect(badge.getAttribute('style')).toContain('fff7ed');
-    expect(badge.getAttribute('style')).toContain('ea580c');
+    const style = badge.getAttribute('style') ?? '';
+    expect(style).toMatch(/fff7ed|rgb\(255,\s*247,\s*237\)/);
+    expect(style).toMatch(/ea580c|rgb\(234,\s*88,\s*12\)/);
   });
 
   it('renders "Pushed to Jobber" with green styling', () => {
     render(<ReviewBadge status="push_to_jobber" />);
     const badge = screen.getByText('Pushed to Jobber');
     expect(badge).toBeInTheDocument();
-    expect(badge.getAttribute('style')).toContain('f0fdf4');
-    expect(badge.getAttribute('style')).toContain('16a34a');
+    const style = badge.getAttribute('style') ?? '';
+    expect(style).toMatch(/f0fdf4|rgb\(240,\s*253,\s*244\)/);
+    expect(style).toMatch(/16a34a|rgb\(22,\s*163,\s*74\)/);
   });
 
   it('has inline-flex display and pill shape', () => {
@@ -128,7 +131,7 @@ describe('PushToJobberButton', () => {
     await userEvent.click(pushButton);
 
     // Confirmation dialog appears
-    const confirmButton = screen.getByText('Push to Jobber');
+    const confirmButton = screen.getByText('Confirm Push');
     await userEvent.click(confirmButton);
 
     // Should show loading state
@@ -148,7 +151,7 @@ describe('PushToJobberButton', () => {
     const pushButton = screen.getByText('🚀 Push to Jobber');
     await userEvent.click(pushButton);
 
-    const confirmButton = screen.getByText('Push to Jobber');
+    const confirmButton = screen.getByText('Confirm Push');
     await userEvent.click(confirmButton);
 
     await waitFor(() => {
@@ -169,7 +172,7 @@ describe('PushToJobberButton', () => {
     const pushButton = screen.getByText('🚀 Push to Jobber');
     await userEvent.click(pushButton);
 
-    const confirmButton = screen.getByText('Push to Jobber');
+    const confirmButton = screen.getByText('Confirm Push');
     await userEvent.click(confirmButton);
 
     await waitFor(() => {
