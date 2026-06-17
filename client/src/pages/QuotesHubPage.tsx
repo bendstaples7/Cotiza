@@ -373,7 +373,7 @@ export default function QuotesHubPage() {
 // ── Styles ──
 
 const pageStyle: React.CSSProperties = {
-  padding: '1.5rem',
+  padding: 'clamp(0.75rem, 4vw, 1.5rem)',
   background: '#f5f5f5',
   minHeight: '100%',
 };
@@ -435,6 +435,7 @@ const sectionToggleStyle: React.CSSProperties = {
   fontFamily: 'inherit',
   color: '#061216',
   textAlign: 'left',
+  boxSizing: 'border-box',
 };
 
 const sectionContentStyle: React.CSSProperties = {
@@ -517,6 +518,7 @@ const draftCardStyle: React.CSSProperties = {
 
 const draftCardHeaderStyle: React.CSSProperties = {
   display: 'flex',
+  flexWrap: 'wrap',
   alignItems: 'center',
   gap: '0.5rem',
   marginBottom: '0.25rem',

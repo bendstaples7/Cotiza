@@ -171,7 +171,11 @@ export class JobberQuoteImportService {
       const connection = raw;
 
       for (const edge of connection.edges) {
-        const node = edge.node;
+        const rawNode = edge.node as any;
+        const node: ImportableQuote = {
+          ...rawNode,
+          lineItems: rawNode.lineItems?.nodes ?? [],
+        };
         if (node.quoteStatus === 'draft' || node.quoteStatus === 'sent') {
           allQuotes.push(node);
         }
@@ -224,7 +228,11 @@ export class JobberQuoteImportService {
       quote: ImportableQuote | null;
     }>(FETCH_QUOTE_BY_ID_QUERY, { id: jobberQuoteId });
 
-    const quote = data?.quote;
+    const rawQuote = (data?.quote as any);
+    const quote = rawQuote ? {
+      ...rawQuote,
+      lineItems: (rawQuote.lineItems?.nodes ?? []) as ImportableQuoteLineItem[],
+    } as ImportableQuote : null;
     if (!quote) {
       throw new PlatformError({
         severity: 'error',
@@ -297,12 +305,11 @@ export class JobberQuoteImportService {
 
     // 7. Build property address
     let propertyAddress: string | null = null;
-    if (quote.property?.address) {
-      const addr = quote.property.address;
-      const parts = [addr.fullAddress, addr.city, addr.state, addr.zipCode].filter(Boolean);
-      if (parts.length > 0) {
-        propertyAddress = parts.join(', ');
-      }
+    const rawAddr = (quote.property as any)?.address;
+    if (rawAddr) {
+      propertyAddress = rawAddr.fullAddress
+        ?? [rawAddr.city, rawAddr.state, rawAddr.zipCode].filter(Boolean).join(', ')
+        ?? null;
     }
 
     // 8. Create the draft
