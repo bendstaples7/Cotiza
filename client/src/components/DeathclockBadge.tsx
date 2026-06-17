@@ -74,7 +74,7 @@ export function getLabel(ageSeconds: number): string {
 
   if (totalMinutes < 60) {
     const mins = Math.ceil(totalMinutes);
-    return `${Math.max(1, mins)}m`;
+    return `${mins}m`;
   }
 
   if (totalHours < 24) {

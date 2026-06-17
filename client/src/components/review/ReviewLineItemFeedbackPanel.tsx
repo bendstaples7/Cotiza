@@ -13,9 +13,10 @@ interface Props {
   feedback: ReviewFeedbackItem[];
   reviewId: string;
   readOnly?: boolean;
+  onAddFeedback?: (lineItemId: string) => void;
 }
 
-export default function ReviewLineItemFeedbackPanel({ lineItems, feedback, readOnly }: Props) {
+export default function ReviewLineItemFeedbackPanel({ lineItems, feedback, readOnly, onAddFeedback }: Props) {
   if (lineItems.length === 0) {
     return (
       <div style={{ padding: '1rem', color: '#888', fontSize: '0.9rem' }}>
@@ -73,6 +74,7 @@ export default function ReviewLineItemFeedbackPanel({ lineItems, feedback, readO
 
               {!readOnly && (
                 <button
+                  onClick={() => onAddFeedback?.(item.id)}
                   style={{
                     marginTop: '0.5rem',
                     background: 'none',

@@ -200,7 +200,7 @@ export default function DeathclockDashboardPage() {
                   role="button"
                   tabIndex={0}
                   onClick={handleBarClick}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleBarClick(); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleBarClick(); } }}
                   aria-label={`${label}: ${count} requests, ${Math.round(pct)}%`}
                   style={barRowStyle}
                 >
