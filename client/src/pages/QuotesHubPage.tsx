@@ -32,7 +32,7 @@ export default function QuotesHubPage() {
   const [createError, setCreateError] = useState<string | null>(null);
 
   // ── Accordion state ──
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['create', 'drafts', 'importable', 'finalized']));
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['create', 'drafts', 'finalized']));
 
   const toggleSection = (name: string) => {
     setExpandedSections(prev => {
@@ -49,8 +49,8 @@ export default function QuotesHubPage() {
   const [draftsError, setDraftsError] = useState<string | null>(null);
 
   const [importableQuotes, setImportableQuotes] = useState<ImportableQuote[]>([]);
-  const [importableLoading, setImportableLoading] = useState(false);
-  const [importableScopeError, setImportableScopeError] = useState(false);
+  const [importableLoading, setImportableLoading] = useState(true);
+  const [importableScopeError, setImportableScopeError] = useState<boolean | null>(null);
   const [importingIds, setImportingIds] = useState<Set<string>>(new Set());
 
   // ── Load drafts (used by both active and finalized tabs) ──
@@ -73,12 +73,21 @@ export default function QuotesHubPage() {
   const loadImportable = useCallback(async () => {
     try {
       setImportableLoading(true);
-      setImportableScopeError(false);
+      setImportableScopeError(null);
       const data = await fetchImportableQuotes();
-      setImportableQuotes(data.available ? data.quotes : []);
-      if (data.scopeError) setImportableScopeError(true);
+      if (data.scopeError || !data.available) {
+        // Scope error or Jobber not available — hide the section entirely
+        setImportableScopeError(true);
+        setImportableQuotes([]);
+      } else {
+        setImportableScopeError(false);
+        setImportableQuotes(data.quotes);
+        // Auto-expand now that we know Jobber quotes are accessible
+        setExpandedSections(prev => new Set([...prev, 'importable']));
+      }
     } catch {
       setImportableQuotes([]);
+      setImportableScopeError(true);
     } finally {
       setImportableLoading(false);
     }
@@ -244,6 +253,11 @@ export default function QuotesHubPage() {
                         {draft.clientName && (
                           <span style={clientNameLabelStyle}>{draft.clientName}</span>
                         )}
+                        {draft.jobberQuoteNumber && (
+                          <span style={{ fontSize: '0.75rem', color: '#00a89d', fontWeight: 600 }}>
+                            Jobber #{draft.jobberQuoteNumber}
+                          </span>
+                        )}
                         <span style={statusBadgeStyle(draft.status)}>{draft.status}</span>
                       </div>
                       <div style={metaTextStyle}>
@@ -257,7 +271,8 @@ export default function QuotesHubPage() {
           )}
         </div>
 
-        {/* Importable Jobber Quotes accordion */}
+        {/* Importable Jobber Quotes accordion — hidden only once we confirm scope not granted */}
+        {importableScopeError !== true && (
         <div style={accordionWrapperStyle}>
           <button onClick={() => toggleSection('importable')} style={sectionToggleStyle}>
             <span style={{ marginRight: '0.5rem' }}>{expandedSections.has('importable') ? '▼' : '▶'}</span>
@@ -272,19 +287,6 @@ export default function QuotesHubPage() {
                 <div style={loadingRowStyle}>
                   <span style={spinnerStyle} />
                   <span style={{ color: '#555', fontSize: '0.9rem' }}>Loading Jobber quotes…</span>
-                </div>
-              ) : importableScopeError ? (
-                <div style={scopeErrorStyle}>
-                  <div style={{ fontWeight: 600, marginBottom: '0.4rem' }}>⚠️ Reconnect Jobber</div>
-                  <div style={{ fontSize: '0.85rem', marginBottom: '0.75rem', color: '#555' }}>
-                    Your Jobber connection needs to be updated to grant access to quotes. Click below to reconnect — it only takes a few seconds.
-                  </div>
-                  <a
-                    href="/api/jobber-auth/authorize"
-                    style={reconnectBtnStyle}
-                  >
-                    Reconnect Jobber
-                  </a>
                 </div>
               ) : importableQuotes.length === 0 ? (
                 <div style={emptyStyle}>No importable quotes available.</div>
@@ -302,7 +304,7 @@ export default function QuotesHubPage() {
                               <span style={clientNameLabelStyle}>{getClientName(quote)}</span>
                             </div>
                             <div style={metaTextStyle}>
-                              {formatCurrency(total)} · {quote.quoteStatus}
+                              {quote.quoteStatus}
                             </div>
                           </div>
                         </div>
@@ -332,6 +334,7 @@ export default function QuotesHubPage() {
             </div>
           )}
         </div>
+        )}
 
         {/* Finalized accordion */}
         <div style={accordionWrapperStyle}>
@@ -368,6 +371,11 @@ export default function QuotesHubPage() {
                         <span style={draftNumberStyle}>D-{String(draft.draftNumber).padStart(3, '0')}</span>
                         {draft.clientName && (
                           <span style={clientNameLabelStyle}>{draft.clientName}</span>
+                        )}
+                        {draft.jobberQuoteNumber && (
+                          <span style={{ fontSize: '0.75rem', color: '#00a89d', fontWeight: 600 }}>
+                            Jobber #{draft.jobberQuoteNumber}
+                          </span>
                         )}
                         <span style={statusBadgeStyle(draft.status)}>{draft.status}</span>
                       </div>
@@ -572,6 +580,10 @@ const importableCardStyle: React.CSSProperties = {
   border: '1px solid #e0e0e0',
   borderRadius: 8,
   padding: '0.75rem 1rem',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: '1rem',
 };
 
 const importableCardHeaderStyle: React.CSSProperties = {
@@ -595,8 +607,7 @@ const quoteNumberStyle: React.CSSProperties = {
 };
 
 const importBtnStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '0.4rem 0',
+  padding: '0.4rem 1.1rem',
   border: '1px solid #00a89d',
   background: '#00a89d',
   color: '#fff',
@@ -605,23 +616,6 @@ const importBtnStyle: React.CSSProperties = {
   fontSize: '0.8rem',
   fontWeight: 500,
   fontFamily: 'inherit',
-};
-
-const scopeErrorStyle: React.CSSProperties = {
-  background: '#fff8e1',
-  border: '1px solid #ffe082',
-  borderRadius: 6,
-  padding: '1rem',
-  margin: '0.5rem 0',
-};
-
-const reconnectBtnStyle: React.CSSProperties = {
-  display: 'inline-block',
-  padding: '0.45rem 1rem',
-  background: '#00a89d',
-  color: '#fff',
-  borderRadius: 4,
-  textDecoration: 'none',
-  fontSize: '0.85rem',
-  fontWeight: 600,
+  alignSelf: 'flex-start',
+  whiteSpace: 'nowrap' as const,
 };

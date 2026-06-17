@@ -21,8 +21,8 @@ export class QuoteDraftService {
         // Atomically compute next draft_number inside the INSERT so the
         // read and write happen in the same statement, avoiding TOCTOU races.
         this.db.prepare(
-          `INSERT INTO quote_drafts (id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, sqft_resolution_json, deposit_schedule, space_context_json, generation_trace_json, draft_number, client_name, property_address)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(draft_number), 0) + 1 FROM quote_drafts WHERE user_id = ?), ?, ?)`
+          `INSERT INTO quote_drafts (id, user_id, customer_request_text, selected_template_id, selected_template_name, status, jobber_request_id, customer_note, manual_request_id, sqft_resolution_json, deposit_schedule, space_context_json, generation_trace_json, draft_number, client_name, property_address, jobber_quote_id, jobber_quote_number, jobber_quote_web_uri)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(draft_number), 0) + 1 FROM quote_drafts WHERE user_id = ?), ?, ?, ?, ?, ?)`
         ).bind(
           draft.id,
           draft.userId,
@@ -40,6 +40,9 @@ export class QuoteDraftService {
           draft.userId,
           draft.clientName ?? null,
           draft.propertyAddress ?? null,
+          draft.jobberQuoteId ?? null,
+          draft.jobberQuoteNumber ?? null,
+          draft.jobberQuoteWebUri ?? null,
         ),
       ];
 

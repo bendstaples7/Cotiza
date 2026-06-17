@@ -2393,7 +2393,9 @@ app.get('/jobber/quotes/in-progress', async (c) => {
   let available = false;
   let scopeError = false;
 
-  if (jobberIntegration.isAvailable()) {
+  // Gate on whether Jobber is configured (client ID present), not on isAvailable()
+  // isAvailable() only becomes true after syncProductCatalog() which isn't called here
+  if (c.env.JOBBER_CLIENT_ID) {
     const activityLog = new ActivityLogService(db);
     const quoteDraftService = new QuoteDraftService(db);
     const importer = new JobberQuoteImportService(db, quoteDraftService, jobberIntegration, activityLog);
@@ -2402,12 +2404,10 @@ app.get('/jobber/quotes/in-progress', async (c) => {
       available = true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      // Throttled = token lacks read:quotes scope — surface as a reconnect prompt
       if (/throttl/i.test(msg)) {
         scopeError = true;
-        console.warn('[quotes] Jobber throttled on quotes fetch — token likely missing read:quotes scope. Re-auth required.');
+        console.warn('[quotes] Jobber throttled on quotes fetch. Re-auth may be required.');
       } else {
-        // Other errors: log but return empty gracefully
         console.error('[quotes] fetchImportableQuotes error:', msg);
       }
     }

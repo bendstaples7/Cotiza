@@ -11,7 +11,7 @@ const quotesNavItems = [
 ];
 
 const socialNavItems = [
-  { to: '/social/dashboard', label: 'Dashboard' },
+  { to: '/social/dashboard', label: 'Social Media Dashboard' },
   { to: '/social/posts/quick', label: 'Quick Post' },
   { to: '/social/media', label: 'Media Library' },
   { to: '/social/settings', label: 'Settings' },

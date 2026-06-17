@@ -19,8 +19,6 @@ export interface ImportableQuoteClient {
   firstName: string | null;
   lastName: string | null;
   companyName: string | null;
-  primaryPhone?: { number: string } | null;
-  primaryEmail?: { address: string } | null;
 }
 
 export interface ImportableQuoteProperty {
@@ -59,15 +57,6 @@ const IMPORTABLE_QUOTES_QUERY = `
           quoteStatus
           jobberWebUri
           createdAt
-          lineItems {
-            nodes {
-              id
-              name
-              description
-              quantity
-              unitPrice
-            }
-          }
           client {
             id
             firstName
@@ -108,20 +97,19 @@ const FETCH_QUOTE_BY_ID_QUERY = `
         firstName
         lastName
         companyName
-        primaryPhone {
-          number
-        }
-        primaryEmail {
-          address
-        }
       }
       property {
         address {
-          fullAddress
+          street1
+          street2
           city
-          state
-          zipCode
+          province
+          postalCode
         }
+      }
+      amounts {
+        depositAmount
+        total
       }
     }
   }
@@ -154,7 +142,7 @@ export class JobberQuoteImportService {
   async fetchImportableQuotes(): Promise<ImportableQuote[]> {
     const allQuotes: ImportableQuote[] = [];
     let after: string | null = null;
-    const PAGE_SIZE = 25;
+    const PAGE_SIZE = 10;
     const MAX_QUOTES = 200;
 
     do {
@@ -307,12 +295,29 @@ export class JobberQuoteImportService {
     let propertyAddress: string | null = null;
     const rawAddr = (quote.property as any)?.address;
     if (rawAddr) {
-      propertyAddress = rawAddr.fullAddress
-        ?? [rawAddr.city, rawAddr.state, rawAddr.zipCode].filter(Boolean).join(', ')
-        ?? null;
+      const parts = [rawAddr.street1, rawAddr.street2, rawAddr.city, rawAddr.province, rawAddr.postalCode]
+        .filter((p): p is string => typeof p === 'string' && p.trim().length > 0);
+      if (parts.length > 0) {
+        propertyAddress = parts.join(', ');
+      }
     }
 
-    // 8. Create the draft
+    // 8. Build deposit schedule from Jobber deposit amount
+    let depositSchedule = null;
+    const rawAmounts = (rawQuote as any)?.amounts;
+    if (rawAmounts && rawAmounts.depositAmount > 0 && rawAmounts.total > 0) {
+      const depositPct = Math.round((rawAmounts.depositAmount / rawAmounts.total) * 100);
+      const remainingPct = 100 - depositPct;
+      depositSchedule = {
+        label: 'Jobber Deposit Schedule',
+        milestones: [
+          { description: 'Deposit due upon acceptance', percentage: depositPct },
+          ...(remainingPct > 0 ? [{ description: 'Balance due upon completion', percentage: remainingPct }] : []),
+        ],
+      };
+    }
+
+    // 9. Create the draft
     // Map the Jobber createdAt to first_draft_created_at for deathclock
     const jobberCreatedAt = quote.createdAt;
 
@@ -335,7 +340,7 @@ export class JobberQuoteImportService {
       jobberQuoteWebUri: quote.jobberWebUri || null,
       status: 'draft',
       actionItems: [],
-      depositSchedule: null,
+      depositSchedule: depositSchedule as any,
       sqftResolution: null,
       spaceContext: null,
       generationTrace: null,

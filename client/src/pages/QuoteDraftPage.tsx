@@ -1673,23 +1673,23 @@ export default function QuoteDraftPage() {
           </div>
         ) : (
           <div>
-            {!draft.jobberRequestId && (
+            {!draft.jobberRequestId && !draft.jobberQuoteId && (
               <p style={{ margin: '0 0 0.5rem', fontSize: '0.85rem', color: '#888' }}>
-                This draft was not generated from a Jobber request. A linked Jobber request is required to push.
+                This draft was created manually. Pushing will create a new quote in Jobber.
               </p>
             )}
             <button
               onClick={handlePushToJobber}
-              disabled={pushing || !draft.jobberRequestId || isReadOnly}
+              disabled={pushing || isReadOnly}
               style={{
                 padding: '0.6rem 1.5rem',
-                background: pushing || !draft.jobberRequestId || isReadOnly ? '#ccc' : '#00a89d',
+                background: pushing || isReadOnly ? '#ccc' : '#00a89d',
                 color: '#fff',
                 border: 'none',
                 borderRadius: 6,
                 fontSize: '0.95rem',
                 fontWeight: 600,
-                cursor: pushing || !draft.jobberRequestId || isReadOnly ? 'not-allowed' : 'pointer',
+                cursor: pushing || isReadOnly ? 'not-allowed' : 'pointer',
               }}
             >
               {pushing ? (
