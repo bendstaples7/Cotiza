@@ -2404,7 +2404,7 @@ app.get('/jobber/quotes/in-progress', async (c) => {
       available = true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (/throttl/i.test(msg)) {
+      if (/throttl|401|403|unauthorized|forbidden|scope/i.test(msg)) {
         scopeError = true;
         console.warn('[quotes] Jobber throttled on quotes fetch. Re-auth may be required.');
       } else {

@@ -87,7 +87,10 @@ export default function QuotesHubPage() {
       }
     } catch {
       setImportableQuotes([]);
-      setImportableScopeError(true);
+      // Only hide the section for scope/auth errors. Transient network errors
+      // should not permanently collapse the section — treat them as a load failure
+      // without setting scopeError so the section remains visible on retry.
+      setImportableScopeError(null);
     } finally {
       setImportableLoading(false);
     }

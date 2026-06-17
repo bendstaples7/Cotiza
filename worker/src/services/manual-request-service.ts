@@ -68,9 +68,12 @@ export class ManualRequestService {
 
     let orderClause = '';
     if (sortBy === 'age_asc') {
-      orderClause = `ORDER BY age_seconds ASC`;
-    } else if (sortBy === 'age_desc') {
+      // age_seconds = NOW - created_at, so larger value = older request.
+      // "Oldest first" (most urgent) requires DESC so highest age_seconds comes first.
       orderClause = `ORDER BY age_seconds DESC`;
+    } else if (sortBy === 'age_desc') {
+      // "Newest first" = smallest age_seconds first = ASC.
+      orderClause = `ORDER BY age_seconds ASC`;
     }
 
     const deathclockManualCols = includeDeathclock ? `
@@ -127,11 +130,17 @@ export class ManualRequestService {
                'jobber' AS request_source
                ${deathclockJobberCols}
         FROM jobber_webhook_requests jwr
+        -- Scope to user via quote_drafts: only surface webhook requests that
+        -- this user has already drafted (or is drafting). Without this JOIN,
+        -- ALL webhook requests across all users would be returned.
+        INNER JOIN quote_drafts qd_scope
+          ON qd_scope.jobber_request_id = jwr.jobber_request_id
+         AND qd_scope.user_id = ?
       )
       ${orderClause}
     `;
 
-    const rows = await this.db.prepare(sql).bind(userId, userId).all<Record<string, unknown>>();
+    const rows = await this.db.prepare(sql).bind(userId, userId, userId).all<Record<string, unknown>>();
 
     return (rows.results ?? []).map(row => this.mapListRow(row));
   }

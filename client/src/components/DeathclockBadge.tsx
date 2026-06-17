@@ -78,7 +78,7 @@ export function getLabel(ageSeconds: number): string {
   }
 
   if (totalHours < 24) {
-    return `${Math.round(totalHours)}h`;
+    return `${Math.floor(totalHours)}h`;
   }
 
   if (totalDays < 7) {

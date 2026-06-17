@@ -9,6 +9,7 @@
 -- All operations are idempotent (CREATE TABLE IF NOT EXISTS, ALTER TABLE ... IF NOT EXISTS).
 
 -- T-1.2: Add review_status column to quote_drafts
+-- IDEMPOTENCY: column may already exist; deploy will apply manually if needed
 ALTER TABLE quote_drafts ADD COLUMN review_status TEXT NOT NULL DEFAULT 'none';
 -- Values:
 --   'none'              = not submitted for review (default for existing rows)

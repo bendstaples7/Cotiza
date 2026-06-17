@@ -5,4 +5,5 @@
 -- This is a margin opportunity: calculated material prices include
 -- Chicago retail + IL/ Cook County sales tax + 20% margin.
 
+-- IDEMPOTENCY: column may already exist; deploy will apply manually if needed
 ALTER TABLE user_settings ADD COLUMN material_pricing_enabled INTEGER NOT NULL DEFAULT 1;

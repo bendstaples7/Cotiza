@@ -27,6 +27,9 @@ CREATE INDEX IF NOT EXISTS idx_deposit_payments_draft_id ON deposit_payments(quo
 CREATE INDEX IF NOT EXISTS idx_deposit_payments_status ON deposit_payments(status);
 
 -- Add deposit tracking metadata to quote_drafts
+-- IDEMPOTENCY: column may already exist; deploy will apply manually if needed
 ALTER TABLE quote_drafts ADD COLUMN deposit_total_cents INTEGER;
+-- IDEMPOTENCY: column may already exist; deploy will apply manually if needed
 ALTER TABLE quote_drafts ADD COLUMN deposit_paid_cents INTEGER NOT NULL DEFAULT 0;
+-- IDEMPOTENCY: column may already exist; deploy will apply manually if needed
 ALTER TABLE quote_drafts ADD COLUMN deposit_status TEXT DEFAULT 'not_applicable' CHECK(deposit_status IN ('not_applicable', 'pending', 'partial', 'paid', 'cancelled'));
