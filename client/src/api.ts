@@ -1150,7 +1150,7 @@ export interface ImportQuoteResult {
 }
 
 /** Fetch in-progress Jobber quotes that can be imported as Cotiza drafts. */
-export async function fetchImportableQuotes(): Promise<{ quotes: ImportableQuote[]; available: boolean }> {
+export async function fetchImportableQuotes(): Promise<{ quotes: ImportableQuote[]; available: boolean; scopeError?: boolean }> {
   const res = await fetch(API_BASE + '/api/quotes/jobber/quotes/in-progress', {
     headers: { ...authHeaders() },
   });

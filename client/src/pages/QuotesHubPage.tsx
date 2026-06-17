@@ -50,6 +50,7 @@ export default function QuotesHubPage() {
 
   const [importableQuotes, setImportableQuotes] = useState<ImportableQuote[]>([]);
   const [importableLoading, setImportableLoading] = useState(false);
+  const [importableScopeError, setImportableScopeError] = useState(false);
   const [importingIds, setImportingIds] = useState<Set<string>>(new Set());
 
   // ── Load drafts (used by both active and finalized tabs) ──
@@ -72,8 +73,10 @@ export default function QuotesHubPage() {
   const loadImportable = useCallback(async () => {
     try {
       setImportableLoading(true);
+      setImportableScopeError(false);
       const data = await fetchImportableQuotes();
       setImportableQuotes(data.available ? data.quotes : []);
+      if (data.scopeError) setImportableScopeError(true);
     } catch {
       setImportableQuotes([]);
     } finally {
@@ -269,6 +272,19 @@ export default function QuotesHubPage() {
                 <div style={loadingRowStyle}>
                   <span style={spinnerStyle} />
                   <span style={{ color: '#555', fontSize: '0.9rem' }}>Loading Jobber quotes…</span>
+                </div>
+              ) : importableScopeError ? (
+                <div style={scopeErrorStyle}>
+                  <div style={{ fontWeight: 600, marginBottom: '0.4rem' }}>⚠️ Reconnect Jobber</div>
+                  <div style={{ fontSize: '0.85rem', marginBottom: '0.75rem', color: '#555' }}>
+                    Your Jobber connection needs to be updated to grant access to quotes. Click below to reconnect — it only takes a few seconds.
+                  </div>
+                  <a
+                    href="/api/jobber-auth/authorize"
+                    style={reconnectBtnStyle}
+                  >
+                    Reconnect Jobber
+                  </a>
                 </div>
               ) : importableQuotes.length === 0 ? (
                 <div style={emptyStyle}>No importable quotes available.</div>
@@ -589,4 +605,23 @@ const importBtnStyle: React.CSSProperties = {
   fontSize: '0.8rem',
   fontWeight: 500,
   fontFamily: 'inherit',
+};
+
+const scopeErrorStyle: React.CSSProperties = {
+  background: '#fff8e1',
+  border: '1px solid #ffe082',
+  borderRadius: 6,
+  padding: '1rem',
+  margin: '0.5rem 0',
+};
+
+const reconnectBtnStyle: React.CSSProperties = {
+  display: 'inline-block',
+  padding: '0.45rem 1rem',
+  background: '#00a89d',
+  color: '#fff',
+  borderRadius: 4,
+  textDecoration: 'none',
+  fontSize: '0.85rem',
+  fontWeight: 600,
 };
