@@ -227,6 +227,29 @@ export interface DepositSchedule {
   milestones: PaymentMilestone[];
 }
 
+/** Payment status for a single deposit milestone record */
+export type DepositPaymentStatus = 'pending' | 'paid' | 'cancelled';
+
+/** Aggregate deposit status tracked on the quote draft */
+export type DraftDepositStatus = 'not_applicable' | 'pending' | 'partial' | 'paid' | 'cancelled';
+
+/** A single deposit payment record tied to a quote draft milestone */
+export interface DepositPayment {
+  id: string;
+  quoteDraftId: string;
+  milestoneIndex: number;
+  percentage: number;
+  amountCents: number;
+  description: string;
+  status: DepositPaymentStatus;
+  paidAt: string | null;
+  paymentMethod: string | null;
+  paidAmountCents: number | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** The full quote draft */
 export interface QuoteDraft {
   id: string;
