@@ -70,8 +70,8 @@ function renderQueue(initialEntries = ['/requests']) {
 
 describe('DeathclockBadge', () => {
   describe('label formatting (getLabel)', () => {
-    it('formats less than 1 minute as "1m"', () => {
-      expect(getLabel(0)).toBe('1m');
+    it('formats less than 1 minute as "1m" (or "0m" for exactly zero)', () => {
+      expect(getLabel(0)).toBe('0m');
       expect(getLabel(30)).toBe('1m');
       expect(getLabel(59)).toBe('1m');
     });

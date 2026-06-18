@@ -8,7 +8,7 @@ export interface ManualRequest {
   customerAddress: string | null;
   serviceDescription: string;
   mediaItemIds: string[];
-  requestSource: 'manual';
+  requestSource: 'manual' | 'jobber';
   createdAt: Date;
   /** Deathclock: ISO 8601 timestamp when the request was backfilled (pre-deathclock). */
   backfilledAt?: string | null;
@@ -194,6 +194,8 @@ export interface GenerationTrace {
 /** A matched line item in a quote draft */
 export interface QuoteLineItem {
   id: string;
+  /** The Jobber line item ID for updating via quoteEditLineItems */
+  jobberLineItemId?: string | null;
   productCatalogEntryId: string | null;
   productName: string;
   description: string;
@@ -225,6 +227,29 @@ export interface DepositSchedule {
   milestones: PaymentMilestone[];
 }
 
+/** Payment status for a single deposit milestone record */
+export type DepositPaymentStatus = 'pending' | 'paid' | 'cancelled';
+
+/** Aggregate deposit status tracked on the quote draft */
+export type DraftDepositStatus = 'not_applicable' | 'pending' | 'partial' | 'paid' | 'cancelled';
+
+/** A single deposit payment record tied to a quote draft milestone */
+export interface DepositPayment {
+  id: string;
+  quoteDraftId: string;
+  milestoneIndex: number;
+  percentage: number;
+  amountCents: number;
+  description: string;
+  status: DepositPaymentStatus;
+  paidAt: string | null;
+  paymentMethod: string | null;
+  paidAmountCents: number | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** The full quote draft */
 export interface QuoteDraft {
   id: string;
@@ -238,6 +263,7 @@ export interface QuoteDraft {
   jobberRequestId: string | null;
   manualRequestId?: string | null;
   clientName?: string | null;
+  propertyAddress?: string | null;
   jobberQuoteId?: string | null;
   jobberQuoteNumber?: string | null;
   jobberQuoteWebUri?: string | null;
@@ -264,6 +290,8 @@ export interface QuoteDraft {
   lastQuoteSentAt?: string | null;
   /** Deathclock: metric status for pre-deathclock backfill ('no_data' or 'backfilled'). */
   metricStatus?: 'no_data' | 'backfilled' | null;
+  /** Review status for the quote review workflow (null = no review started) */
+  reviewStatus?: 'pending_review' | 'changes_requested' | null;
   createdAt: Date;
   updatedAt: Date;
 }

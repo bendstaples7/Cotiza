@@ -64,19 +64,42 @@ export class ManualRequestService {
     const { userId, sortBy, includeDeathclock } = params;
 
     // Compute age_seconds in SQL: NOW() - created_at
-    const ageExpression = "CAST((unixepoch('now') - unixepoch(mr.created_at)) AS INTEGER)";
+    const ageExpr = "CAST((unixepoch('now') - unixepoch(created_at)) AS INTEGER)";
 
-    let sql: string;
     let orderClause = '';
-
     if (sortBy === 'age_asc') {
-      orderClause = `ORDER BY ${ageExpression} ASC`;
+      // age_seconds = NOW - created_at, so larger value = older request.
+      // "Oldest first" (most urgent) requires DESC so highest age_seconds comes first.
+      orderClause = `ORDER BY age_seconds DESC`;
     } else if (sortBy === 'age_desc') {
-      orderClause = `ORDER BY ${ageExpression} DESC`;
+      // "Newest first" = smallest age_seconds first = ASC.
+      orderClause = `ORDER BY age_seconds ASC`;
     }
 
-    if (includeDeathclock) {
-      sql = `
+    const deathclockManualCols = includeDeathclock ? `
+               ,(SELECT MIN(qd.quote_sent_at)
+                   FROM quote_drafts qd
+                  WHERE qd.manual_request_id = mr.id
+                    AND qd.quote_sent_at IS NOT NULL
+                ) AS quote_sent_at
+               ,(SELECT qd.jobber_request_id
+                   FROM quote_drafts qd
+                  WHERE qd.manual_request_id = mr.id
+                  LIMIT 1
+                ) AS jobber_request_id` : `, NULL AS quote_sent_at, NULL AS jobber_request_id`;
+
+    const deathclockJobberCols = includeDeathclock ? `
+               ,(SELECT MIN(qd.quote_sent_at)
+                   FROM quote_drafts qd
+                  WHERE qd.jobber_request_id = jwr.jobber_request_id
+                    AND qd.quote_sent_at IS NOT NULL
+                ) AS quote_sent_at
+               ,jwr.jobber_request_id AS jobber_request_id` : `, NULL AS quote_sent_at, jwr.jobber_request_id AS jobber_request_id`;
+
+    // UNION manual_requests + jobber_webhook_requests so the queue shows all sources.
+    // Wrapped in outer SELECT so ORDER BY can reference the computed age_seconds alias.
+    const sql = `
+      SELECT * FROM (
         SELECT mr.id,
                mr.user_id,
                mr.customer_name,
@@ -86,40 +109,38 @@ export class ManualRequestService {
                mr.service_description,
                mr.media_item_ids_json,
                mr.created_at,
-               ${ageExpression} AS age_seconds,
-               (SELECT MIN(qd.quote_sent_at)
-                  FROM quote_drafts qd
-                 WHERE qd.manual_request_id = mr.id
-                   AND qd.quote_sent_at IS NOT NULL
-               ) AS quote_sent_at,
-               (SELECT qd.jobber_request_id
-                  FROM quote_drafts qd
-                 WHERE qd.manual_request_id = mr.id
-                 LIMIT 1
-               ) AS jobber_request_id
+               CAST((unixepoch('now') - unixepoch(mr.created_at)) AS INTEGER) AS age_seconds,
+               'manual' AS request_source
+               ${deathclockManualCols}
         FROM manual_requests mr
         WHERE mr.user_id = ?
-        ${orderClause}
-      `;
-    } else {
-      sql = `
-        SELECT mr.id,
-               mr.user_id,
-               mr.customer_name,
-               mr.customer_phone,
-               mr.customer_email,
-               mr.customer_address,
-               mr.service_description,
-               mr.media_item_ids_json,
-               mr.created_at,
-               ${ageExpression} AS age_seconds
-        FROM manual_requests mr
-        WHERE mr.user_id = ?
-        ${orderClause}
-      `;
-    }
 
-    const rows = await this.db.prepare(sql).bind(userId).all<Record<string, unknown>>();
+        UNION ALL
+
+        SELECT jwr.id,
+               ? AS user_id,
+               COALESCE(jwr.client_name, jwr.title, 'Unknown') AS customer_name,
+               NULL AS customer_phone,
+               NULL AS customer_email,
+               NULL AS customer_address,
+               COALESCE(jwr.description, jwr.title, '') AS service_description,
+               '[]' AS media_item_ids_json,
+               jwr.received_at AS created_at,
+               CAST((unixepoch('now') - unixepoch(jwr.received_at)) AS INTEGER) AS age_seconds,
+               'jobber' AS request_source
+               ${deathclockJobberCols}
+        FROM jobber_webhook_requests jwr
+        -- Scope to user via quote_drafts: only surface webhook requests that
+        -- this user has already drafted (or is drafting). Without this JOIN,
+        -- ALL webhook requests across all users would be returned.
+        INNER JOIN quote_drafts qd_scope
+          ON qd_scope.jobber_request_id = jwr.jobber_request_id
+         AND qd_scope.user_id = ?
+      )
+      ${orderClause}
+    `;
+
+    const rows = await this.db.prepare(sql).bind(userId, userId, userId).all<Record<string, unknown>>();
 
     return (rows.results ?? []).map(row => this.mapListRow(row));
   }
@@ -135,22 +156,44 @@ export class ManualRequestService {
    *   red    →  age ≥ 72h
    */
   async getDeathclockStats(userId: string): Promise<DeathclockBucketCounts> {
-    const ageExp = "CAST((unixepoch('now') - unixepoch(mr.created_at)) AS INTEGER)";
-
+    // Unified request source: UNION of Jobber webhook requests and manual requests.
+    // Jobber webhook requests are the primary source of real customer requests.
+    // A request is "active" (still needs a quote sent) when no linked quote draft
+    // has been sent (quote_sent_at IS NOT NULL).
     const sql = `
-      SELECT
-        SUM(CASE WHEN ${ageExp} < 86400  THEN 1 ELSE 0 END) AS green,
-        SUM(CASE WHEN ${ageExp} >= 86400  AND ${ageExp} < 172800 THEN 1 ELSE 0 END) AS yellow,
-        SUM(CASE WHEN ${ageExp} >= 172800 AND ${ageExp} < 259200 THEN 1 ELSE 0 END) AS orange,
-        SUM(CASE WHEN ${ageExp} >= 259200 THEN 1 ELSE 0 END) AS red,
-        COUNT(*) AS total_active
-      FROM manual_requests mr
-      WHERE mr.user_id = ?
-        AND NOT EXISTS (
+      WITH all_requests AS (
+        -- Jobber webhook requests (primary source)
+        SELECT
+          jwr.jobber_request_id AS request_key,
+          'jobber' AS source,
+          jwr.received_at AS created_at
+        FROM jobber_webhook_requests jwr
+        WHERE NOT EXISTS (
           SELECT 1 FROM quote_drafts qd
-          WHERE qd.manual_request_id = mr.id
+          WHERE qd.jobber_request_id = jwr.jobber_request_id
             AND qd.quote_sent_at IS NOT NULL
         )
+        UNION ALL
+        -- Manual requests
+        SELECT
+          mr.id AS request_key,
+          'manual' AS source,
+          mr.created_at AS created_at
+        FROM manual_requests mr
+        WHERE mr.user_id = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM quote_drafts qd
+            WHERE qd.manual_request_id = mr.id
+              AND qd.quote_sent_at IS NOT NULL
+          )
+      )
+      SELECT
+        SUM(CASE WHEN CAST((unixepoch('now') - unixepoch(created_at)) AS INTEGER) < 86400  THEN 1 ELSE 0 END) AS green,
+        SUM(CASE WHEN CAST((unixepoch('now') - unixepoch(created_at)) AS INTEGER) >= 86400  AND CAST((unixepoch('now') - unixepoch(created_at)) AS INTEGER) < 172800 THEN 1 ELSE 0 END) AS yellow,
+        SUM(CASE WHEN CAST((unixepoch('now') - unixepoch(created_at)) AS INTEGER) >= 172800 AND CAST((unixepoch('now') - unixepoch(created_at)) AS INTEGER) < 259200 THEN 1 ELSE 0 END) AS orange,
+        SUM(CASE WHEN CAST((unixepoch('now') - unixepoch(created_at)) AS INTEGER) >= 259200 THEN 1 ELSE 0 END) AS red,
+        COUNT(*) AS total_active
+      FROM all_requests
     `;
 
     const row = await this.db.prepare(sql).bind(userId).first<Record<string, unknown>>();
@@ -175,61 +218,73 @@ export class ManualRequestService {
    */
   async getTrends(userId: string): Promise<DeathclockTrends> {
     // ── Query 1: rolling averages ──────────────────────────────
+    // Include both Jobber-request-linked drafts and manual-request-linked drafts
     const avgSql = `
       SELECT
         (SELECT ROUND(AVG(request_to_quote_seconds), 1)
            FROM quote_drafts qd
-           JOIN manual_requests mr ON mr.id = qd.manual_request_id
           WHERE qd.user_id = ?1
             AND qd.request_to_quote_seconds IS NOT NULL
             AND qd.quote_sent_at >= datetime('now', '-7 days')
+            AND (qd.manual_request_id IS NOT NULL OR qd.jobber_request_id IS NOT NULL)
         ) AS avg_7_days,
         (SELECT ROUND(AVG(request_to_quote_seconds), 1)
            FROM quote_drafts qd
-           JOIN manual_requests mr ON mr.id = qd.manual_request_id
           WHERE qd.user_id = ?1
             AND qd.request_to_quote_seconds IS NOT NULL
             AND qd.quote_sent_at >= datetime('now', '-30 days')
+            AND (qd.manual_request_id IS NOT NULL OR qd.jobber_request_id IS NOT NULL)
         ) AS avg_30_days
     `;
 
     const avgRow = await this.db.prepare(avgSql).bind(userId).first<Record<string, unknown>>();
 
     // ── Query 2: bucket history ────────────────────────────────
-    // For each of the last 7 days, count active requests grouped by
-    // deathclock bucket as-of the end of that day. A request is considered
-    // "active" on day D if it was created before D's end and had no
-    // quote_send_event before D's end.
+    // For each of the last 7 days, count ALL active requests (Jobber + manual)
+    // grouped by deathclock bucket as-of the end of that day.
     const bucketSql = `
       WITH RECURSIVE dates(d) AS (
         SELECT date('now')
         UNION ALL
         SELECT date(d, '-1 day') FROM dates WHERE d > date('now', '-6 days')
+      ),
+      all_requests AS (
+        -- Jobber webhook requests
+        SELECT jwr.received_at AS created_at, jwr.jobber_request_id AS req_key, 'jobber' AS src
+        FROM jobber_webhook_requests jwr
+        UNION ALL
+        -- Manual requests
+        SELECT mr.created_at AS created_at, mr.id AS req_key, 'manual' AS src
+        FROM manual_requests mr
+        WHERE mr.user_id = ?1
       )
       SELECT
         d AS date,
         COALESCE(SUM(CASE
-          WHEN CAST((unixepoch(datetime(d || 'T23:59:59Z')) - unixepoch(mr.created_at)) AS INTEGER) < 86400
+          WHEN CAST((unixepoch(datetime(d || 'T23:59:59Z')) - unixepoch(ar.created_at)) AS INTEGER) < 86400
           THEN 1 ELSE 0 END), 0) AS green,
         COALESCE(SUM(CASE
-          WHEN CAST((unixepoch(datetime(d || 'T23:59:59Z')) - unixepoch(mr.created_at)) AS INTEGER) >= 86400
-           AND CAST((unixepoch(datetime(d || 'T23:59:59Z')) - unixepoch(mr.created_at)) AS INTEGER) < 172800
+          WHEN CAST((unixepoch(datetime(d || 'T23:59:59Z')) - unixepoch(ar.created_at)) AS INTEGER) >= 86400
+           AND CAST((unixepoch(datetime(d || 'T23:59:59Z')) - unixepoch(ar.created_at)) AS INTEGER) < 172800
           THEN 1 ELSE 0 END), 0) AS yellow,
         COALESCE(SUM(CASE
-          WHEN CAST((unixepoch(datetime(d || 'T23:59:59Z')) - unixepoch(mr.created_at)) AS INTEGER) >= 172800
-           AND CAST((unixepoch(datetime(d || 'T23:59:59Z')) - unixepoch(mr.created_at)) AS INTEGER) < 259200
+          WHEN CAST((unixepoch(datetime(d || 'T23:59:59Z')) - unixepoch(ar.created_at)) AS INTEGER) >= 172800
+           AND CAST((unixepoch(datetime(d || 'T23:59:59Z')) - unixepoch(ar.created_at)) AS INTEGER) < 259200
           THEN 1 ELSE 0 END), 0) AS orange,
         COALESCE(SUM(CASE
-          WHEN CAST((unixepoch(datetime(d || 'T23:59:59Z')) - unixepoch(mr.created_at)) AS INTEGER) >= 259200
+          WHEN CAST((unixepoch(datetime(d || 'T23:59:59Z')) - unixepoch(ar.created_at)) AS INTEGER) >= 259200
           THEN 1 ELSE 0 END), 0) AS red
       FROM dates
-      CROSS JOIN manual_requests mr
-      WHERE mr.user_id = ?1
-        AND mr.created_at < datetime(d || 'T23:59:59Z')
+      CROSS JOIN all_requests ar
+      WHERE ar.created_at < datetime(d || 'T23:59:59Z')
         AND NOT EXISTS (
           SELECT 1 FROM quote_send_events qse
-          WHERE qse.request_id = mr.id
-            AND qse.sent_at < datetime(d || 'T23:59:59Z')
+          JOIN quote_drafts qd ON qd.id = qse.quote_id
+          WHERE (
+            (ar.src = 'manual' AND qd.manual_request_id = ar.req_key) OR
+            (ar.src = 'jobber' AND qd.jobber_request_id = ar.req_key)
+          )
+          AND qse.sent_at < datetime(d || 'T23:59:59Z')
         )
       GROUP BY d
       ORDER BY d ASC
@@ -485,7 +540,7 @@ export class ManualRequestService {
       customerAddress: (row.customer_address as string) || null,
       serviceDescription: row.service_description as string,
       mediaItemIds,
-      requestSource: 'manual',
+      requestSource: (row.request_source as 'manual' | 'jobber') ?? 'manual',
       createdAt: new Date(row.created_at as string),
     };
   }

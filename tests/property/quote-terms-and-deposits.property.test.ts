@@ -100,9 +100,11 @@ const arbValidDepositScheduleFloat: fc.Arbitrary<DepositSchedule> = fc
         const percentages = points.slice(1).map((p, i) =>
           Math.round((p - points[i]) * 100) / 100,
         );
-        // Fix rounding drift on last element so sum is exactly 100
+        // Fix rounding drift on last element so sum is exactly 100.
+        // Use `|| 0` to normalize -0 → 0: Math.round of a tiny negative float
+        // (e.g. -1e-10) produces -0, which Object.is treats as distinct from +0.
         const sumSoFar = percentages.slice(0, -1).reduce((s, v) => s + v, 0);
-        percentages[percentages.length - 1] = Math.round((100 - sumSoFar) * 100) / 100;
+        percentages[percentages.length - 1] = Math.round((100 - sumSoFar) * 100) / 100 || 0;
         return {
           label,
           milestones: percentages.map((percentage, i) => ({

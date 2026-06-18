@@ -474,8 +474,9 @@ export async function fetchDrafts(): Promise<QuoteDraft[]> {
   return data.drafts;
 }
 
-export async function fetchDraft(id: string): Promise<QuoteDraft> {
-  const res = await fetch(API_BASE + '/api/quotes/drafts/' + id, {
+export async function fetchDraft(id: string, params?: Record<string, string>): Promise<QuoteDraft> {
+  const query = params ? '?' + new URLSearchParams(params).toString() : '';
+  const res = await fetch(API_BASE + '/api/quotes/drafts/' + id + query, {
     headers: { ...authHeaders() },
   });
   return handleResponse(res);
@@ -854,6 +855,14 @@ export async function pushDraftToJobber(draftId: string): Promise<{ jobberQuoteI
   return handleResponseWithToast(res);
 }
 
+export async function pushDraftUpdateToJobber(draftId: string): Promise<{ jobberQuoteId: string; jobberQuoteNumber: string; jobberQuoteWebUri: string }> {
+  const res = await fetch(API_BASE + '/api/quotes/drafts/' + draftId + '/push-update', {
+    method: 'POST',
+    headers: { ...authHeaders() },
+  });
+  return handleResponseWithToast(res);
+}
+
 // ── Extraction Presets ──
 
 export interface ExtractionPreset {
@@ -895,6 +904,174 @@ export async function updateProductivityRate(
   return handleResponseWithToast(res);
 }
 
+// ── Review Quote API ──
+
+export interface PendingReviewItem {
+  id: string;
+  quoteDraftId: string;
+  draftNumber: number;
+  jobberQuoteNumber: string | null;
+  totalValue: number;
+  status: string;
+  submittedAt: string;
+  reviewCycle: number;
+  submittedBy: { id: string; name: string };
+}
+
+export interface ReviewDetailData {
+  review: {
+    id: string;
+    quoteDraftId: string;
+    status: string;
+    submittedAt: string;
+    completedAt: string | null;
+    snapshotId: string | null;
+    notes: string | null;
+    createdAt: string;
+    updatedAt: string;
+  };
+  quote: Partial<QuoteDraft>;
+  feedback: Array<{
+    id: string;
+    reviewId: string;
+    lineItemId: string;
+    fieldName: string;
+    comment: string;
+    createdAt: string;
+  }>;
+  previousSnapshots: Array<{
+    id: string;
+    quoteDraftId: string;
+    reviewId: string;
+    snapshotData: string;
+    createdAt: string;
+  }>;
+}
+
+export interface ReviewDiffData {
+  modifiedItems: Array<{
+    lineItemId: string;
+    productName: string;
+    previous: { quantity: number; unitPrice: number; description: string };
+    current: { quantity: number; unitPrice: number; description: string };
+  }>;
+  addedItems: Array<{
+    lineItemId: string;
+    productName: string;
+    quantity: number;
+    unitPrice: number;
+  }>;
+  removedItems: Array<{
+    lineItemId: string;
+    productName: string;
+    previousQuantity: number;
+    previousUnitPrice: number;
+  }>;
+  resolvedFeedback: Array<{
+    feedbackId: string;
+    content: string;
+    resolvedAt: string;
+  }>;
+}
+
+/** Submit a quote draft for review. */
+export async function submitForReview(draftId: string): Promise<{ reviewId: string; reviewCycle: number; status: string }> {
+  const res = await fetch(API_BASE + '/api/quotes/' + draftId + '/submit-review', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({}),
+  });
+  return handleResponseWithToast(res);
+}
+
+/** Get the pending review queue. */
+export async function getPendingReviews(): Promise<PendingReviewItem[]> {
+  const res = await fetch(API_BASE + '/api/reviews/pending', {
+    headers: { ...authHeaders() },
+  });
+  const data = await handleResponse<{ reviews: PendingReviewItem[] }>(res);
+  return data.reviews;
+}
+
+/** Get full review detail with feedback and quote data. */
+export async function getReview(reviewId: string): Promise<ReviewDetailData> {
+  const res = await fetch(API_BASE + '/api/reviews/' + reviewId, {
+    headers: { ...authHeaders() },
+  });
+  return handleResponse(res);
+}
+
+/** Add feedback (comment) to a line item within a review. */
+export async function addFeedback(
+  reviewId: string,
+  lineItemId: string,
+  fieldName: string,
+  comment: string,
+): Promise<{ feedbackId: string; createdAt: string }> {
+  const res = await fetch(API_BASE + '/api/reviews/' + reviewId + '/feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ type: 'line_item', lineItemId, fieldName, content: comment }),
+  });
+  return handleResponseWithToast(res);
+}
+
+/** Complete a review with an outcome. */
+export async function completeReview(
+  reviewId: string,
+  outcome: 'push_to_jobber' | 'changes_requested',
+  quoteLevelComments?: string,
+): Promise<{
+  status: string;
+  jobberQuoteId?: string;
+  jobberQuoteNumber?: string;
+  jobberQuoteWebUri?: string;
+  reviewCompletedAt?: string;
+}> {
+  const res = await fetch(API_BASE + '/api/reviews/' + reviewId + '/complete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ outcome, quoteLevelComments }),
+  });
+  return handleResponseWithToast(res);
+}
+
+/** Push a reviewed quote to Jobber. */
+export async function pushToJobber(reviewId: string): Promise<{ jobberQuoteId: string; jobberQuoteNumber: string; jobberQuoteWebUri: string }> {
+  const res = await fetch(API_BASE + '/api/reviews/' + reviewId + '/push', {
+    method: 'POST',
+    headers: { ...authHeaders() },
+  });
+  return handleResponseWithToast(res);
+}
+
+/** Get the diff for a review cycle. */
+export async function getReviewDiff(reviewId: string): Promise<ReviewDiffData> {
+  const res = await fetch(API_BASE + '/api/reviews/' + reviewId + '/diff', {
+    headers: { ...authHeaders() },
+  });
+  return handleResponse(res);
+}
+
+/** Re-submit a quote for review after changes. */
+export async function reSubmitForReview(draftId: string): Promise<{ reviewId: string; reviewCycle: number; status: string }> {
+  const res = await fetch(API_BASE + '/api/quotes/' + draftId + '/re-submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({}),
+  });
+  return handleResponseWithToast(res);
+}
+
+/** Get pending review count for badge display. */
+export async function getPendingReviewCount(): Promise<number> {
+  const res = await fetch(API_BASE + '/api/reviews/pending/count', {
+    headers: { ...authHeaders() },
+  });
+  const data = await handleResponse<{ count: number }>(res);
+  return data.count;
+}
+
 // ── Deathclock Dashboard ──
 
 export interface DeathclockBucketCounts {
@@ -931,4 +1108,60 @@ export async function fetchTrends(): Promise<DeathclockTrends> {
     headers: { ...authHeaders() },
   });
   return handleResponse(res);
+}
+
+// ── Jobber Quote Import ──
+
+export interface ImportableQuoteLineItem {
+  name: string;
+  description: string | null;
+  quantity: number;
+  unitPrice: number;
+}
+
+export interface ImportableQuote {
+  id: string;
+  quoteNumber: string;
+  title: string | null;
+  message: string | null;
+  quoteStatus: string;
+  jobberWebUri: string | null;
+  createdAt: string;
+  lineItems: ImportableQuoteLineItem[];
+  client: {
+    id: string;
+    firstName: string | null;
+    lastName: string | null;
+    companyName: string | null;
+  } | null;
+  property: {
+    address: {
+      fullAddress: string;
+      city: string;
+      state: string;
+      zipCode: string;
+    } | null;
+  } | null;
+}
+
+export interface ImportQuoteResult {
+  draft: QuoteDraft;
+  warnings: string[];
+}
+
+/** Fetch in-progress Jobber quotes that can be imported as Cotiza drafts. */
+export async function fetchImportableQuotes(): Promise<{ quotes: ImportableQuote[]; available: boolean; scopeError?: boolean }> {
+  const res = await fetch(API_BASE + '/api/quotes/jobber/quotes/in-progress', {
+    headers: { ...authHeaders() },
+  });
+  return handleResponse(res);
+}
+
+/** Import a Jobber quote as a Cotiza quote draft. Returns the draft + warnings. */
+export async function importJobberQuote(jobberQuoteId: string): Promise<ImportQuoteResult> {
+  const res = await fetch(API_BASE + '/api/quotes/jobber/quotes/' + jobberQuoteId + '/import', {
+    method: 'POST',
+    headers: { ...authHeaders() },
+  });
+  return handleResponseWithToast(res);
 }

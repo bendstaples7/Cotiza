@@ -23,6 +23,8 @@ import {
 import { JobberWebhookService } from '../services/jobber-webhook-service.js';
 import { JobberTokenStore } from '../services/jobber-token-store.js';
 import { RulesSyncService } from '../services/rules-sync.js';
+import { JobberQuoteImportService } from '../services/jobber-quote-importer.js';
+import type { ImportableQuote } from '../services/jobber-quote-importer.js';
 import { invalidateDeathclockCache, invalidateTrendsCache } from './dashboard.js';
 import { computeDeathclock } from '../services/deathclock-service.js';
 
@@ -849,10 +851,15 @@ app.get('/drafts', async (c) => {
 /**
  * GET /drafts/:id
  * Get a single quote draft by ID.
+ * Supports ?reviewAccess=true for review workflows (bypasses user-ownership check).
  */
 app.get('/drafts/:id', async (c) => {
   const quoteDraftService = new QuoteDraftService(c.env.DB);
-  const draft = await quoteDraftService.getById(c.req.param('id'), c.get('user').id);
+  const id = c.req.param('id');
+  const reviewAccess = c.req.query('reviewAccess') === 'true';
+  const draft = reviewAccess
+    ? await quoteDraftService.getByIdForReview(id)
+    : await quoteDraftService.getById(id, c.get('user').id);
   return c.json(draft);
 });
 
@@ -1070,6 +1077,18 @@ app.post('/drafts/:id/push', async (c) => {
     });
   }
 
+  // Block push while under review (must go through review completion)
+  if (draft.reviewStatus === 'pending_review') {
+    throw new PlatformError({
+      severity: 'error',
+      component: 'QuoteRoutes',
+      operation: 'pushToJobber',
+      description: 'Cannot push directly while quote is under review. Complete the review first.',
+      recommendedActions: ['Use the review flow to push this quote to Jobber'],
+      statusCode: 400,
+    });
+  }
+
   const { jobberIntegration } = await createJobberIntegration(db, c.env);
   const pushService = new JobberQuotePushService(db, jobberIntegration);
   const result = await pushService.pushToJobber(draft);
@@ -1095,6 +1114,71 @@ app.post('/drafts/:id/push', async (c) => {
   }
 
   // Invalidate deathclock and trends caches for this user
+  invalidateDeathclockCache(userId);
+  invalidateTrendsCache(userId);
+
+  return c.json(result);
+});
+
+/**
+ * POST /drafts/:id/push-update
+ * Push improvements to an existing Jobber quote (update, not create).
+ * Requires the draft to have a jobberQuoteId (from import or previous push).
+ */
+app.post('/drafts/:id/push-update', async (c) => {
+  const userId = c.get('user').id;
+  const db = c.env.DB;
+  const draftId = c.req.param('id');
+
+  const quoteDraftService = new QuoteDraftService(db);
+  const draft = await quoteDraftService.getById(draftId, userId);
+
+  // Require an existing Jobber quote to update
+  if (!draft.jobberQuoteId) {
+    throw new PlatformError({
+      severity: 'error',
+      component: 'QuoteRoutes',
+      operation: 'pushUpdateToJobber',
+      description: 'This draft has no linked Jobber quote to update. Use POST /drafts/:id/push to create a new quote instead.',
+      recommendedActions: ['Use push (not push-update) for drafts without a Jobber quote link'],
+      statusCode: 400,
+    });
+  }
+
+  // Block push-update while under review
+  if (draft.reviewStatus === 'pending_review') {
+    throw new PlatformError({
+      severity: 'error',
+      component: 'QuoteRoutes',
+      operation: 'pushUpdateToJobber',
+      description: 'Cannot push updates while quote is under review. Complete the review first.',
+      recommendedActions: ['Use the review flow to push this quote to Jobber'],
+      statusCode: 400,
+    });
+  }
+
+  const { jobberIntegration } = await createJobberIntegration(db, c.env);
+  const pushService = new JobberQuotePushService(db, jobberIntegration);
+  const result = await pushService.pushUpdateToJobber(draft);
+
+  // ── Deathclock: record send event ───────────────────────────────────────
+  await db.prepare(
+    `UPDATE quote_drafts
+        SET quote_sent_at = datetime('now'),
+            last_quote_sent_at = datetime('now')
+      WHERE id = ?`
+  ).bind(draftId).run();
+
+  if (draft.manualRequestId) {
+    const sendType = 'resend';
+    await db.prepare(
+      `INSERT INTO quote_send_events (quote_id, request_id, sent_at, elapsed_seconds_from_request, send_type)
+       VALUES (?, ?, datetime('now'),
+               CAST((unixepoch('now') - unixepoch((SELECT created_at FROM manual_requests WHERE id = ?))) AS INTEGER),
+               ?)`
+    ).bind(draftId, draft.manualRequestId, draft.manualRequestId, sendType).run();
+  }
+
   invalidateDeathclockCache(userId);
   invalidateTrendsCache(userId);
 
@@ -2292,6 +2376,76 @@ app.put('/productivity-rates/:id', async (c) => {
   const body = await c.req.json() as UpdateProductivityRatePayload;
   const rate = await service.updateRate(c.req.param('id'), body);
   return c.json(rate);
+});
+
+// ── Jobber Quote Import ─────────────────────────────────────────────
+
+/**
+ * GET /jobber/quotes/in-progress
+ * Fetch in-progress (draft + sent) quotes from Jobber that are importable as Cotiza drafts.
+ * Returns the list of quotes and whether the Jobber API is available.
+ */
+app.get('/jobber/quotes/in-progress', async (c) => {
+  const db = c.env.DB;
+  const { jobberIntegration } = await createJobberIntegration(db, c.env);
+
+  let quotes: ImportableQuote[] = [];
+  let available = false;
+  let scopeError = false;
+
+  // Gate on whether Jobber is configured (client ID present), not on isAvailable()
+  // isAvailable() only becomes true after syncProductCatalog() which isn't called here
+  if (c.env.JOBBER_CLIENT_ID) {
+    const activityLog = new ActivityLogService(db);
+    const quoteDraftService = new QuoteDraftService(db);
+    const importer = new JobberQuoteImportService(db, quoteDraftService, jobberIntegration, activityLog);
+    try {
+      quotes = await importer.fetchImportableQuotes();
+      available = true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/throttl|401|403|unauthorized|forbidden|scope/i.test(msg)) {
+        scopeError = true;
+        console.warn('[quotes] Jobber throttled on quotes fetch. Re-auth may be required.');
+      } else {
+        console.error('[quotes] fetchImportableQuotes error:', msg);
+      }
+    }
+  }
+
+  return c.json({ quotes, available, scopeError });
+});
+
+/**
+ * POST /jobber/quotes/:jobberQuoteId/import
+ * Import a Jobber quote as a Cotiza quote draft.
+ *
+ * Returns 201 with the created draft and any warnings.
+ * Returns 409 if the quote has already been imported.
+ * Returns 404 if the quote doesn't exist in Jobber.
+ */
+app.post('/jobber/quotes/:jobberQuoteId/import', async (c) => {
+  const userId = c.get('user').id;
+  const db = c.env.DB;
+  const jobberQuoteId = c.req.param('jobberQuoteId');
+  const { jobberIntegration, activityLog } = await createJobberIntegration(db, c.env);
+
+  if (!jobberIntegration.isAvailable()) {
+    throw new PlatformError({
+      severity: 'error',
+      component: 'QuoteRoutes',
+      operation: 'importJobberQuote',
+      description: 'Jobber API is not available. Check credentials and connectivity.',
+      recommendedActions: ['Verify Jobber API credentials and try again.'],
+      statusCode: 503,
+    });
+  }
+
+  const quoteDraftService = new QuoteDraftService(db);
+  const importer = new JobberQuoteImportService(db, quoteDraftService, jobberIntegration, activityLog);
+  const result = await importer.importQuote(jobberQuoteId, userId);
+
+  return c.json(result, 201);
 });
 
 export default app;

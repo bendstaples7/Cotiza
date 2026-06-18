@@ -154,101 +154,89 @@ export default function DeathclockDashboardPage() {
     navigate('/quotes/queue?sort=age_asc');
   };
 
-  // ── Loading state ──
-  if (loading) {
-    return (
-      <div style={containerStyle}>
-        <div style={loadingContainerStyle}>
-          <span style={spinnerStyle} />
-          <p style={{ margin: '0.75rem 0 0', color: '#555' }}>Loading stats…</p>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Error state ──
-  if (error) {
-    return (
-      <div style={containerStyle}>
-        <div role="alert" style={alertStyle}>{error}</div>
-        <button
-          type="button"
-          onClick={loadStats}
-          style={retryButtonStyle}
-        >
-          Retry
-        </button>
-      </div>
-    );
-  }
-
-  // ── Empty state ──
-  if (!stats || stats.totalActive === 0) {
-    return (
-      <div style={containerStyle}>
-        <h1 style={titleStyle}>Dashboard</h1>
-        <div style={emptyStyle}>
-          <p style={{ margin: 0, color: '#888' }}>No active requests.</p>
-        </div>
-      </div>
-    );
-  }
-
-  const total = stats.totalActive;
+  // ── Empty state — only for deathclock section, not the whole page ──
+  const deathclockIsEmpty = !stats || stats.totalActive === 0;
+  const total = stats?.totalActive ?? 0;
 
   return (
     <div style={containerStyle}>
       <h1 style={titleStyle}>Dashboard</h1>
-      <p style={summaryStyle}>{total} active request{total !== 1 ? 's' : ''}</p>
 
-      <div style={chartContainerStyle}>
-        {BUCKET_ORDER.map((key) => {
-          const count = stats[key];
-          const color = BUCKET_COLORS[key];
-          const label = BUCKET_LABELS[key];
-          const pct = total > 0 ? (count / total) * 100 : 0;
+      {/* ── Deathclock Section ── */}
+      {loading ? (
+        <div style={loadingContainerStyle}>
+          <span style={spinnerStyle} />
+          <p style={{ margin: '0.75rem 0 0', color: '#555' }}>Loading stats…</p>
+        </div>
+      ) : error ? (
+        <>
+          <div role="alert" style={alertStyle}>{error}</div>
+          <button
+            type="button"
+            onClick={loadStats}
+            style={retryButtonStyle}
+          >
+            Retry
+          </button>
+        </>
+      ) : deathclockIsEmpty ? (
+        <div style={emptyStyle}>
+          <p style={{ margin: 0, color: '#888' }}>No active requests.</p>
+        </div>
+      ) : (
+        <>
+          <p style={summaryStyle}>{total} active request{total !== 1 ? 's' : ''}</p>
 
-          return (
-            <div
-              key={key}
-              role="button"
-              tabIndex={0}
-              onClick={handleBarClick}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleBarClick(); }}
-              aria-label={`${label}: ${count} requests, ${Math.round(pct)}%`}
-              style={barRowStyle}
-            >
-              <div style={barLabelStyle}>
-                <span style={{ ...dotStyle, background: color }} />
-                <span>{label}</span>
-              </div>
-              <div style={barTrackStyle}>
+          <div style={chartContainerStyle}>
+            {BUCKET_ORDER.map((key) => {
+              const count = stats![key];
+              const color = BUCKET_COLORS[key];
+              const label = BUCKET_LABELS[key];
+              const pct = total > 0 ? (count / total) * 100 : 0;
+
+              return (
                 <div
-                  style={{
-                    ...barFillStyle,
-                    width: Math.max(pct, count > 0 ? 2 : 0) + '%',
-                    background: color,
-                  }}
-                />
-              </div>
-              <div style={barMetaStyle}>
-                <span style={barCountStyle}>{count}</span>
-                <span style={barPctStyle}>{Math.round(pct)}%</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+                  key={key}
+                  role="button"
+                  tabIndex={0}
+                  onClick={handleBarClick}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleBarClick(); } }}
+                  aria-label={`${label}: ${count} requests, ${Math.round(pct)}%`}
+                  style={barRowStyle}
+                >
+                  <div style={barLabelStyle}>
+                    <span style={{ ...dotStyle, background: color }} />
+                    <span>{label}</span>
+                  </div>
+                  <div style={barTrackStyle}>
+                    <div
+                      style={{
+                        ...barFillStyle,
+                        width: Math.max(pct, count > 0 ? 2 : 0) + '%',
+                        background: color,
+                      }}
+                    />
+                  </div>
+                  <div style={barMetaStyle}>
+                    <span style={barCountStyle}>{count}</span>
+                    <span style={barPctStyle}>{Math.round(pct)}%</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
 
-      {/* ── Trends Section ── */}
-      <TrendsSection
-        trends={trends}
-        loading={trendsLoading}
-        error={trendsError}
-        onRetry={loadTrends}
-      />
+          {/* ── Trends Section ── */}
+          <TrendsSection
+            trends={trends}
+            loading={trendsLoading}
+            error={trendsError}
+            onRetry={loadTrends}
+          />
+        </>
+      )}
 
-      {/* ── Social Media Summary ── */}
+      {/* ── Social Media Summary — always shown ── */}
       <div style={{ marginTop: '1.5rem' }}>
         <h2 style={{ margin: '0 0 1rem', fontSize: '1.2rem', fontWeight: 600, color: '#061216' }}>
           Social Media Summary

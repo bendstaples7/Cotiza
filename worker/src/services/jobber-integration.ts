@@ -171,9 +171,12 @@ export class JobberIntegration {
       if (stored) {
         this.accessToken = stored.accessToken;
         this.refreshToken = stored.refreshToken;
+        console.log(`[DEBUG] loadPersistedTokens: loaded token ${this.accessToken.substring(0, 15)}... len=${this.accessToken.length}`);
+      } else {
+        console.log(`[DEBUG] loadPersistedTokens: no stored tokens, using env vars: ${this.accessToken.substring(0, 15)}...`);
       }
     } catch {
-      // Fall back to env tokens
+      console.log(`[DEBUG] loadPersistedTokens: FAILED, falling back to env vars: ${this.accessToken.substring(0, 15)}...`);
     }
   }
 
@@ -508,6 +511,13 @@ export class JobberIntegration {
       throw new Error('JOBBER_ACCESS_TOKEN is not configured');
     }
 
+    // DEBUG: log token prefix and query cost hint
+    const tokenStart = this.accessToken.substring(0, 5);
+    const tokenEnd = this.accessToken.substring(this.accessToken.length - 5);
+    const tokenSum = tokenStart.split('').reduce((a, c) => a + c.charCodeAt(0), 0) + tokenEnd.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+    console.log(`[DEBUG] executeGraphql token_checksum=${tokenSum} len=${this.accessToken.length}`);
+    console.log(`[DEBUG] query hint: ${query.substring(0, 60).replace(/\n/g, ' ')}`);
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
 
@@ -525,12 +535,14 @@ export class JobberIntegration {
 
       if (!response.ok) {
         const text = await response.text();
+        console.log(`[DEBUG] Jobber HTTP ${response.status}: ${text.substring(0, 100)}`);
         return { status: response.status, errorText: text };
       }
 
       const json = (await response.json()) as GraphQLResponse<T>;
 
       if (json.errors && json.errors.length > 0) {
+        console.log(`[DEBUG] Jobber GraphQL errors: ${JSON.stringify(json.errors)}`);
         const isThrottled = json.errors.some((e) => /throttle/i.test(e.message));
         if (isThrottled) {
           return { throttled: true };
@@ -542,6 +554,7 @@ export class JobberIntegration {
         throw new Error('Jobber GraphQL response missing data field');
       }
 
+      console.log(`[DEBUG] Jobber success, data keys: ${Object.keys(json.data as object).join(',')}`);
       return { data: json.data };
     } finally {
       clearTimeout(timeout);
