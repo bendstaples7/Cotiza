@@ -189,10 +189,20 @@ export default function RequestQueuePage() {
                   borderLeft: `4px solid ${colorHex}`,
                   ...(shouldPulse ? { '--dc-card-rgb': hexToRgb(colorHex), animation: 'dc-card-glow 2s ease-in-out infinite' } as React.CSSProperties : {}),
                 }}
-                onClick={() => navigate('/quotes?createFromRequestId=' + encodeURIComponent(req.id))}
+                onClick={() => {
+                  const key = req.jobberRequestId ? 'createFromJobberRequestId' : 'createFromManualRequestId';
+                  const val = req.jobberRequestId ? encodeURIComponent(req.jobberRequestId) : encodeURIComponent(req.id);
+                  navigate('/quotes?' + key + '=' + val);
+                }}
                 role="button"
                 tabIndex={0}
-                onKeyDown={(e) => { if (e.key === 'Enter') navigate('/quotes?createFromRequestId=' + encodeURIComponent(req.id)); }}
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const key = req.jobberRequestId ? 'createFromJobberRequestId' : 'createFromManualRequestId';
+                      const val = req.jobberRequestId ? encodeURIComponent(req.jobberRequestId) : encodeURIComponent(req.id);
+                      navigate('/quotes?' + key + '=' + val);
+                    }
+                  }}
                 aria-label={`Request from ${req.customerName}`}
               >
                 <div style={cardInnerStyle}>

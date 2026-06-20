@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { QuoteDraft, ErrorResponse } from 'shared';
 import { fetchManualRequests, fetchImportableQuotes, importJobberQuote, generateQuote, fetchDrafts } from '../api';
@@ -23,7 +23,13 @@ function formatCurrency(amount: number): string {
 export default function QuotesHubPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const createFromRequestId = searchParams.get('createFromRequestId');
+  const createFromManualRequestId = searchParams.get('createFromManualRequestId');
+  const createFromJobberRequestId = searchParams.get('createFromJobberRequestId');
+  const createFromLegacyRequestId = searchParams.get('createFromRequestId');
+
+  // Resolve which request ID we're generating from and its source type
+  const resolvedRequestId = createFromManualRequestId || createFromJobberRequestId || createFromLegacyRequestId || null;
+  const isJobberSourced = !!createFromJobberRequestId;
 
   // ── Create New section ──
   const [descriptionText, setDescriptionText] = useState('');
@@ -101,25 +107,33 @@ export default function QuotesHubPage() {
   }, [loadImportable]);
 
   // ── Handle generate from request ──
+  const generatedRef = useRef(false);
   const handleGenerateFromRequest = useCallback(async () => {
-    if (!createFromRequestId) return;
+    if (!resolvedRequestId) return;
+    // Prevent double-generation in React Strict Mode
+    if (generatedRef.current) return;
+    generatedRef.current = true;
+
     setGeneratingFromRequest(true);
     setCreateError(null);
     try {
-      const draft = await generateQuote({ jobberRequestId: createFromRequestId });
+      const payload = isJobberSourced
+        ? { jobberRequestId: resolvedRequestId }
+        : { manualRequestId: resolvedRequestId };
+      const draft = await generateQuote(payload);
       navigate('/quotes/drafts/' + draft.id);
     } catch (err) {
       setCreateError((err as ErrorResponse).message ?? 'Generation failed.');
     } finally {
       setGeneratingFromRequest(false);
     }
-  }, [createFromRequestId, navigate]);
+  }, [resolvedRequestId, isJobberSourced, navigate]);
 
   useEffect(() => {
-    if (createFromRequestId && !generatingFromRequest) {
+    if (resolvedRequestId && !generatingFromRequest) {
       handleGenerateFromRequest();
     }
-  }, [createFromRequestId]); // only trigger on mount
+  }, [resolvedRequestId]); // only trigger on mount
 
   // ── Handle new description generate ──
   const handleGenerate = async () => {
@@ -163,7 +177,7 @@ export default function QuotesHubPage() {
   return (
     <div style={pageStyle}>
       {/* ── Section 1: Create New Quote ── */}
-      {createFromRequestId ? (
+      {resolvedRequestId ? (
         <div style={cardStyle}>
           <h2 style={sectionTitleStyle}>Create New Quote</h2>
           {generatingFromRequest ? (
@@ -174,7 +188,7 @@ export default function QuotesHubPage() {
           ) : (
             <div>
               <p style={{ color: '#555', fontSize: '0.9rem', margin: '0 0 0.75rem' }}>
-                Generating from request #{createFromRequestId}
+                Generating from request #{resolvedRequestId}
               </p>
               {createError && <div role="alert" style={errorStyle}>{createError}</div>}
             </div>

@@ -28,7 +28,8 @@ npm-debug.log*
 # TypeScript
 *.tsbuildinfo
 
-# Wrangler local state
+# Wrangler local state (repo root and worker subdir)
+.wrangler/
 worker/.wrangler/
 
 # Kiro local config

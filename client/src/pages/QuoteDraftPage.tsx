@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import type { QuoteDraft, QuoteLineItem, LineItemRationale, GenerationTrace, ErrorResponse, RuleGroupWithRules, Rule, ProductCatalogEntry, ActionItem, QuantityPredictionMeta, QuantitySource, ResolutionConfidence, ResolutionTier, DeathclockState } from 'shared';
-import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber, pushDraftUpdateToJobber, fetchDeathclock, markRequestSent, submitForReview, reSubmitForReview, getPendingReviews } from '../api';
+import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber, pushDraftUpdateToJobber, fetchDeathclock, markRequestSent, submitForReview, reSubmitForReview, getPendingReviews, getReview, addFeedback, completeReview, pushToJobber as pushReviewToJobber } from '../api';
 import type { JobberRequestDetail } from '../api';
 import SimilarQuotesPanel from './SimilarQuotesPanel';
 import DeathclockBadge, { getLabel } from '../components/DeathclockBadge';
 import ReviewBadge from '../components/review/ReviewBadge';
+import PushToJobberButton from '../components/review/PushToJobberButton';
 import LineItemsTable from '../components/LineItemsTable';
 
 const MANUALLY_ADDED_SENTINEL = 'Manually added';
@@ -53,6 +54,11 @@ export default function QuoteDraftPage() {
   const [submittingReview, setSubmittingReview] = useState(false);
   const [submitReviewError, setSubmitReviewError] = useState<string | null>(null);
   const [currentReviewId, setCurrentReviewId] = useState<string | null>(null);
+
+  // Reviewer mode state (for when a reviewer views a pending review quote)
+  const [reviewDetail, setReviewDetail] = useState<any>(null);
+  const [reviewFeedbackText, setReviewFeedbackText] = useState('');
+  const [reviewFeedbackError, setReviewFeedbackError] = useState<string | null>(null);
 
   // Inline editing state
   const [editingCell, setEditingCell] = useState<{ itemId: string; field: 'quantity' | 'unitPrice' | 'productName' | 'description' } | null>(null);

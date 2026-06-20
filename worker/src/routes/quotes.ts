@@ -785,11 +785,13 @@ app.post('/generate', async (c) => {
     }
   }
 
+  // Fetch manual request once and cache for reuse across address/email/clientName
+  let cachedManualRequest: Record<string, unknown> | null = null;
   if (body.manualRequestId) {
     try {
       const manualRequestService = new ManualRequestService(db);
-      const manualRequest = await manualRequestService.getById(body.manualRequestId, userId);
-      manualRequestAddress = manualRequest.customerAddress ?? null;
+      cachedManualRequest = await manualRequestService.getById(body.manualRequestId, userId);
+      manualRequestAddress = (cachedManualRequest as any).customerAddress ?? null;
     } catch {
       // Graceful degradation
     }
@@ -817,10 +819,8 @@ app.post('/generate', async (c) => {
         const detail = JSON.parse(jobberRow.request_body as string);
         customerEmail = detail?.email || detail?.request?.email || detail?.client?.email || null;
       }
-    } else if (body.manualRequestId) {
-      const manualRequestService = new ManualRequestService(db);
-      const manualRequest = await manualRequestService.getById(body.manualRequestId, userId);
-      customerEmail = (manualRequest as any).customerEmail ?? null;
+    } else if (body.manualRequestId && cachedManualRequest) {
+      customerEmail = (cachedManualRequest as any).customerEmail ?? null;
     }
 
     if (customerEmail) {
@@ -831,7 +831,7 @@ app.post('/generate', async (c) => {
       );
       emailContext = await Promise.race<string>([
         emailService.fetchContext(customerEmail),
-        new Promise<string>((resolve) => setTimeout(() => resolve(''), 2000)),
+        new Promise<string>((resolve) => setTimeout(() => resolve(''), 6000)),
       ]);
       if (emailContext) {
         body.customerText = emailContext + '\n\n' + (body.customerText ?? '');
@@ -865,10 +865,10 @@ app.post('/generate', async (c) => {
 
   if (body.manualRequestId) {
     result.draft.manualRequestId = body.manualRequestId;
-    // Populate clientName from the manual request's customerName
-    const manualRequestService = new ManualRequestService(db);
-    const manualRequest = await manualRequestService.getById(body.manualRequestId, userId);
-    result.draft.clientName = manualRequest.customerName;
+    // Populate clientName from the cached manual request
+    if (cachedManualRequest) {
+      result.draft.clientName = (cachedManualRequest as any).customerName ?? null;
+    }
   }
 
   const saved = await quoteDraftService.save(result.draft);
