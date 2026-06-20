@@ -30,6 +30,6 @@ export interface Bindings {
   GMAIL_CLIENT_ID: string;
   /** Gmail API OAuth client secret for email context enrichment. */
   GMAIL_CLIENT_SECRET: string;
-  /** Gmail API OAuth refresh token (with https://mail.google.com/ scope) for email context enrichment. */
+  /** Gmail API OAuth refresh token (with https://www.googleapis.com/auth/gmail.readonly scope) for email context enrichment. */
   GMAIL_REFRESH_TOKEN: string;
 }

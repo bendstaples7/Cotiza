@@ -806,15 +806,23 @@ app.post('/generate', async (c) => {
   }
 
   // Email context enrichment: fetch recent Gmail conversations with the customer (graceful degradation)
+  let emailContext = '';
   try {
     let customerEmail: string | null = null;
     if (body.jobberRequestId) {
       const jobberRow = await db.prepare(
-        `SELECT request_body FROM jobber_webhook_requests WHERE jobber_request_id = ? ORDER BY processed_at DESC LIMIT 1`
-      ).bind(body.jobberRequestId).first() as Record<string, unknown> | null;
+        `SELECT jwr.request_body
+           FROM jobber_webhook_requests jwr
+           INNER JOIN quote_drafts qd
+             ON qd.jobber_request_id = jwr.jobber_request_id
+            AND qd.user_id = ?
+          WHERE jwr.jobber_request_id = ?
+          ORDER BY jwr.processed_at DESC
+          LIMIT 1`
+      ).bind(userId, body.jobberRequestId).first() as Record<string, unknown> | null;
       if (jobberRow?.request_body) {
         const detail = JSON.parse(jobberRow.request_body as string);
-        customerEmail = detail?.request?.email || detail?.client?.email || null;
+        customerEmail = detail?.email || detail?.request?.email || detail?.client?.email || null;
       }
     } else if (body.manualRequestId) {
       const manualRequestService = new ManualRequestService(db);
@@ -828,7 +836,10 @@ app.post('/generate', async (c) => {
         c.env.GMAIL_CLIENT_SECRET,
         c.env.GMAIL_REFRESH_TOKEN,
       );
-      const emailContext = await emailService.fetchContext(customerEmail);
+      emailContext = await Promise.race<string>([
+        emailService.fetchContext(customerEmail),
+        new Promise<string>((resolve) => setTimeout(() => resolve(''), 2000)),
+      ]);
       if (emailContext) {
         body.customerText = emailContext + '\n\n' + (body.customerText ?? '');
       }
@@ -865,6 +876,18 @@ app.post('/generate', async (c) => {
     const manualRequestService = new ManualRequestService(db);
     const manualRequest = await manualRequestService.getById(body.manualRequestId, userId);
     result.draft.clientName = manualRequest.customerName;
+  }
+
+  // Store email context in the draft response for frontend display
+  if (emailContext) {
+    result.draft.emailContext = emailContext;
+    // Populate email context sources in the generation trace
+    if (result.draft.generationTrace) {
+      result.draft.generationTrace.emailContextSources = [
+        'Email conversations were prepended to customer request text',
+        'Recent email context with the customer was analyzed during generation',
+      ];
+    }
   }
 
   const saved = await quoteDraftService.save(result.draft);
@@ -2479,6 +2502,30 @@ app.post('/jobber/quotes/:jobberQuoteId/import', async (c) => {
   const result = await importer.importQuote(jobberQuoteId, userId);
 
   return c.json(result, 201);
+});
+
+/**
+ * GET /email-context
+ * Fetch Gmail email context for a given customer email.
+ * Returns formatted email conversations for display on the request review page.
+ */
+app.get('/email-context', async (c) => {
+  const customerEmail = c.req.query('email');
+  if (!customerEmail) {
+    return c.json({ ok: false, error: 'email query param required' }, 400);
+  }
+
+  try {
+    const emailService = new EmailContextService(
+      c.env.GMAIL_CLIENT_ID,
+      c.env.GMAIL_CLIENT_SECRET,
+      c.env.GMAIL_REFRESH_TOKEN,
+    );
+    const context = await emailService.fetchContext(customerEmail);
+    return c.json({ ok: true, context });
+  } catch {
+    return c.json({ ok: true, context: '' });
+  }
 });
 
 export default app;
