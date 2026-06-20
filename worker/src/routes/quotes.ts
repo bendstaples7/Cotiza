@@ -813,7 +813,7 @@ app.post('/generate', async (c) => {
       const jobberRow = await db.prepare(
         `SELECT jwr.request_body
            FROM jobber_webhook_requests jwr
-           INNER JOIN quote_drafts qd
+           LEFT JOIN quote_drafts qd
              ON qd.jobber_request_id = jwr.jobber_request_id
             AND qd.user_id = ?
           WHERE jwr.jobber_request_id = ?
