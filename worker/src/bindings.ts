@@ -26,4 +26,10 @@ export interface Bindings {
   ENABLE_LOCAL_SYNC?: string;
   /** Secret key for admin operations (e.g. deathclock backfill). */
   BACKFILL_SECRET_KEY: string;
+  /** Gmail API OAuth client ID for email context enrichment. */
+  GMAIL_CLIENT_ID: string;
+  /** Gmail API OAuth client secret for email context enrichment. */
+  GMAIL_CLIENT_SECRET: string;
+  /** Gmail API OAuth refresh token (with https://mail.google.com/ scope) for email context enrichment. */
+  GMAIL_REFRESH_TOKEN: string;
 }

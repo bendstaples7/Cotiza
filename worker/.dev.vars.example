@@ -26,3 +26,8 @@ CLOUDFLARE_API_TOKEN=
 
 # Enable local-to-remote D1 sync (rules, cookies). Only set in .dev.vars, never in production.
 ENABLE_LOCAL_SYNC=true
+
+# Gmail API credentials for email context enrichment (attach recent email conversations to quote generation)
+# GMAIL_CLIENT_ID=your-google-oauth-client-id
+# GMAIL_CLIENT_SECRET=your-google-oauth-client-secret
+# GMAIL_REFRESH_TOKEN=your-google-oauth-refresh-token

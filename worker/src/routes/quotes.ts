@@ -19,6 +19,7 @@ import {
   QuantityEngine,
   ProductivityRatesService,
   UserSettingsService,
+  EmailContextService,
 } from '../services/index.js';
 import { JobberWebhookService } from '../services/jobber-webhook-service.js';
 import { JobberTokenStore } from '../services/jobber-token-store.js';
@@ -802,6 +803,38 @@ app.post('/generate', async (c) => {
     materialPriceMode = userSettings.materialPriceMode;
   } catch {
     // Graceful degradation — settings fetch failure must not block quote generation
+  }
+
+  // Email context enrichment: fetch recent Gmail conversations with the customer (graceful degradation)
+  try {
+    let customerEmail: string | null = null;
+    if (body.jobberRequestId) {
+      const jobberRow = await db.prepare(
+        `SELECT request_body FROM jobber_webhook_requests WHERE jobber_request_id = ? ORDER BY processed_at DESC LIMIT 1`
+      ).bind(body.jobberRequestId).first() as Record<string, unknown> | null;
+      if (jobberRow?.request_body) {
+        const detail = JSON.parse(jobberRow.request_body as string);
+        customerEmail = detail?.request?.email || detail?.client?.email || null;
+      }
+    } else if (body.manualRequestId) {
+      const manualRequestService = new ManualRequestService(db);
+      const manualRequest = await manualRequestService.getById(body.manualRequestId, userId);
+      customerEmail = (manualRequest as any).customerEmail ?? null;
+    }
+
+    if (customerEmail) {
+      const emailService = new EmailContextService(
+        c.env.GMAIL_CLIENT_ID,
+        c.env.GMAIL_CLIENT_SECRET,
+        c.env.GMAIL_REFRESH_TOKEN,
+      );
+      const emailContext = await emailService.fetchContext(customerEmail);
+      if (emailContext) {
+        body.customerText = emailContext + '\n\n' + (body.customerText ?? '');
+      }
+    }
+  } catch {
+    // Graceful degradation — email context failure must not block quote generation
   }
 
   const result = await quoteEngine.generateQuote(
