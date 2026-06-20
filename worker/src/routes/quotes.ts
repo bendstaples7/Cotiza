@@ -811,15 +811,8 @@ app.post('/generate', async (c) => {
     let customerEmail: string | null = null;
     if (body.jobberRequestId) {
       const jobberRow = await db.prepare(
-        `SELECT jwr.request_body
-           FROM jobber_webhook_requests jwr
-           LEFT JOIN quote_drafts qd
-             ON qd.jobber_request_id = jwr.jobber_request_id
-            AND qd.user_id = ?
-          WHERE jwr.jobber_request_id = ?
-          ORDER BY jwr.processed_at DESC
-          LIMIT 1`
-      ).bind(userId, body.jobberRequestId).first() as Record<string, unknown> | null;
+        `SELECT request_body FROM jobber_webhook_requests WHERE jobber_request_id = ? ORDER BY processed_at DESC LIMIT 1`
+      ).bind(body.jobberRequestId).first() as Record<string, unknown> | null;
       if (jobberRow?.request_body) {
         const detail = JSON.parse(jobberRow.request_body as string);
         customerEmail = detail?.email || detail?.request?.email || detail?.client?.email || null;
