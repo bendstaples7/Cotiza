@@ -878,18 +878,6 @@ app.post('/generate', async (c) => {
     result.draft.clientName = manualRequest.customerName;
   }
 
-  // Store email context in the draft response for frontend display
-  if (emailContext) {
-    result.draft.emailContext = emailContext;
-    // Populate email context sources in the generation trace
-    if (result.draft.generationTrace) {
-      result.draft.generationTrace.emailContextSources = [
-        'Email conversations were prepended to customer request text',
-        'Recent email context with the customer was analyzed during generation',
-      ];
-    }
-  }
-
   const saved = await quoteDraftService.save(result.draft);
   return c.json(saved, 201);
 });
@@ -2502,30 +2490,6 @@ app.post('/jobber/quotes/:jobberQuoteId/import', async (c) => {
   const result = await importer.importQuote(jobberQuoteId, userId);
 
   return c.json(result, 201);
-});
-
-/**
- * GET /email-context
- * Fetch Gmail email context for a given customer email.
- * Returns formatted email conversations for display on the request review page.
- */
-app.get('/email-context', async (c) => {
-  const customerEmail = c.req.query('email');
-  if (!customerEmail) {
-    return c.json({ ok: false, error: 'email query param required' }, 400);
-  }
-
-  try {
-    const emailService = new EmailContextService(
-      c.env.GMAIL_CLIENT_ID,
-      c.env.GMAIL_CLIENT_SECRET,
-      c.env.GMAIL_REFRESH_TOKEN,
-    );
-    const context = await emailService.fetchContext(customerEmail);
-    return c.json({ ok: true, context });
-  } catch {
-    return c.json({ ok: true, context: '' });
-  }
 });
 
 export default app;
