@@ -180,4 +180,45 @@ describe('POST /api/quotes/generate email enrichment', () => {
       expect.anything(),
     );
   });
+
+  it('prepends email context for Jobber requests using top-level email in webhook payload', async () => {
+    db.prepare.mockImplementation((sql: string) => {
+      const stmt = {
+        bind: vi.fn().mockReturnThis(),
+        first: vi.fn().mockImplementation(async () => {
+          if (sql.includes('jobber_webhook_requests')) {
+            return {
+              request_body: JSON.stringify({ email: 'client@example.com', title: 'Kitchen job' }),
+            };
+          }
+          return null;
+        }),
+        all: vi.fn().mockResolvedValue({ results: [], success: true }),
+        run: vi.fn().mockResolvedValue({ success: true, meta: {} }),
+        raw: vi.fn().mockResolvedValue([]),
+      };
+      return stmt;
+    });
+
+    const app = createTestApp(db);
+    const res = await app.request('/api/quotes/generate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer test-token',
+      },
+      body: JSON.stringify({ jobberRequestId: 'jobber-req-1' }),
+    });
+
+    expect(res.status).toBe(201);
+    expect(mockFetchContext).toHaveBeenCalledWith('client@example.com');
+    expect(mockGenerateQuote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customerText: expect.stringContaining('--- Email Conversation Context ---'),
+      }),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
 });

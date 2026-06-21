@@ -130,6 +130,7 @@ export default function QuotesHubPage() {
         ? { jobberRequestId: resolvedRequestId }
         : { manualRequestId: resolvedRequestId, customerText: '' };
       const draft = await generateQuote(payload);
+      sessionStorage.removeItem(sessionKey);
       navigate('/quotes/drafts/' + draft.id);
     } catch (err) {
       sessionStorage.removeItem(sessionKey);

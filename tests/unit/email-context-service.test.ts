@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EmailContextService } from '../../worker/src/services/email-context-service.js';
 
 function mockFetch(response: unknown, ok = true) {
@@ -15,6 +15,10 @@ function mockFetchError() {
 describe('EmailContextService', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   const VALID_CREDENTIALS = {
