@@ -6,6 +6,7 @@ import { API_BASE, getPendingReviewCount, triggerCookieRefresh } from './api';
 const quotesNavItems = [
   { to: '/quotes/requests', label: 'Requests' },
   { to: '/quotes', label: 'Quotes' },
+  { to: '/quotes/reviews', label: 'Pending Reviews' },
   { to: '/quotes/rules', label: 'Rules & Product Ordering' },
   { to: '/quotes/catalog', label: 'Catalog & Templates' },
 ];

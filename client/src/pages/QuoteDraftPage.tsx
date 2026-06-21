@@ -7,6 +7,7 @@ import SimilarQuotesPanel from './SimilarQuotesPanel';
 import DeathclockBadge, { getLabel } from '../components/DeathclockBadge';
 import ReviewBadge from '../components/review/ReviewBadge';
 import PushToJobberButton from '../components/review/PushToJobberButton';
+import ReviewLineItemFeedbackPanel from '../components/review/ReviewLineItemFeedbackPanel';
 import LineItemsTable from '../components/LineItemsTable';
 
 const MANUALLY_ADDED_SENTINEL = 'Manually added';
@@ -168,6 +169,16 @@ export default function QuoteDraftPage() {
     }
   }, [id, draft?.reviewStatus, currentReviewId]);
 
+  // Load review detail when in reviewer mode
+  useEffect(() => {
+    if (!currentReviewId || !cameFromReview || draft?.reviewStatus !== 'pending_review') return;
+    getReview(currentReviewId)
+      .then((detail: any) => {
+        setReviewDetail(detail);
+      })
+      .catch(() => { /* non-critical */ });
+  }, [currentReviewId, cameFromReview, draft?.reviewStatus]);
+
   const handleSubmitFeedback = async () => {
     if (!id || !feedbackText.trim()) {
       setFeedbackValidation('Please enter feedback before submitting.');
@@ -315,6 +326,20 @@ export default function QuoteDraftPage() {
     } finally {
       setSubmittingReview(false);
     }
+  };
+
+  /** Reviewer: push the review to Jobber (approve + push). */
+  const handleReviewPush = async () => {
+    if (!currentReviewId) throw new Error('No review ID');
+    await pushReviewToJobber(currentReviewId);
+    await loadDraft();
+  };
+
+  /** Reviewer: request changes (send back for edits). */
+  const handleReviewRequestChanges = async () => {
+    if (!currentReviewId) throw new Error('No review ID');
+    await completeReview(currentReviewId, 'changes_requested');
+    await loadDraft();
   };
 
   // ── Customer note save-on-blur handler ──
@@ -677,6 +702,7 @@ export default function QuoteDraftPage() {
   const hasUnresolved = draft.unresolvedItems.length > 0;
   const showSidePanel = !!(draft.customerRequestText || requestDetail || draft.jobberQuoteId);
   const isReadOnly = draft.reviewStatus === 'pending_review';
+  const isReviewerMode = cameFromReview && isReadOnly;
 
   return (
     <div style={{ display: 'flex', gap: '1.5rem', maxWidth: showSidePanel ? 1200 : 800, margin: '0 auto' }}>
@@ -1542,7 +1568,8 @@ export default function QuoteDraftPage() {
         );
       })()}
 
-      {/* Feedback input */}
+      {/* Feedback input — hidden in reviewer mode */}
+      {!isReviewerMode && (
       <div style={{ ...sectionStyle, marginTop: '1rem' }}>
         <h2 style={sectionTitleStyle}>Revise This Quote</h2>
         <p style={{ margin: '0 0 0.5rem', fontSize: '0.85rem', color: '#666' }}>
@@ -1611,6 +1638,7 @@ export default function QuoteDraftPage() {
           <div style={ruleCreationWarningStyle} role="alert">{ruleCreationWarning}</div>
         )}
       </div>
+      )}
 
       {/* Revision history */}
       {draft.revisionHistory && draft.revisionHistory.length > 0 && (
@@ -1629,12 +1657,47 @@ export default function QuoteDraftPage() {
         </div>
       )}
 
-      {/* Draft metadata */}
+      {/* ── Reviewer mode UI ── */}
+      {isReviewerMode && reviewDetail && (
+        <>
+          <div style={sectionStyle}>
+            <h2 style={sectionTitleStyle}>Review Feedback</h2>
+            <ReviewLineItemFeedbackPanel
+              lineItems={draft.lineItems}
+              feedback={reviewDetail.feedback ?? []}
+              reviewId={currentReviewId ?? ''}
+              readOnly={false}
+              onAddFeedback={(lineItemId) => {
+                // The panel already handles prompting; wire addFeedback call here
+                const comment = prompt('Enter feedback for this line item:');
+                if (comment && comment.trim()) {
+                  addFeedback(reviewDetail.review.id, lineItemId, 'general', comment.trim())
+                    .then(() => getReview(currentReviewId!).then((d: any) => setReviewDetail(d)))
+                    .catch(() => { /* non-critical */ });
+                }
+              }}
+            />
+          </div>
+          <div style={sectionStyle}>
+            <h2 style={sectionTitleStyle}>Review Actions</h2>
+            <PushToJobberButton
+              onPush={handleReviewPush}
+              onRequestChanges={handleReviewRequestChanges}
+              pushDisabled={draft.status === 'finalized'}
+              pushTooltip={draft.status === 'finalized' ? 'Quote already finalized' : undefined}
+              hasFeedback={(reviewDetail.feedback ?? []).length > 0}
+            />
+          </div>
+        </>
+      )}
+
+      {/* Feedback input — hidden in reviewer mode */}
       <div style={{ fontSize: '0.8rem', color: '#888', marginTop: '1.5rem' }}>
         Created: {new Date(draft.createdAt).toLocaleString()}
       </div>
 
-      {/* Push to Jobber section */}
+      {/* Push to Jobber section — hidden in reviewer mode */}
+      {!isReviewerMode && (
       <div style={{ ...sectionStyle, marginTop: '1rem' }}>
         <h2 style={sectionTitleStyle}>
           {draft.jobberQuoteId ? 'Update Jobber Quote' : 'Push to Jobber'}
@@ -1718,6 +1781,7 @@ export default function QuoteDraftPage() {
           </div>
         )}
       </div>
+      )}
       </div>{/* end main content column */}
 
       {/* Request details side panel */}

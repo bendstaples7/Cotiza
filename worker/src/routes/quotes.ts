@@ -786,7 +786,7 @@ app.post('/generate', async (c) => {
   }
 
   // Fetch manual request once and cache for reuse across address/email/clientName
-  let cachedManualRequest: Record<string, unknown> | null = null;
+  let cachedManualRequest: any = null;
   if (body.manualRequestId) {
     try {
       const manualRequestService = new ManualRequestService(db);
