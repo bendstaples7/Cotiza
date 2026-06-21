@@ -559,6 +559,7 @@ export default function LineItemsTable({
   const pendingDeleteCommitRef = useRef<Promise<void>>(Promise.resolve());
   const deleteCommitTokenRef = useRef(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const editInputRef = useRef<HTMLInputElement>(null);
 
   const effectiveReadOnly = isReadOnly;
 
