@@ -60,6 +60,7 @@ export default function QuoteDraftPage() {
   const [reviewDetail, setReviewDetail] = useState<any>(null);
   const [reviewFeedbackText, setReviewFeedbackText] = useState('');
   const [reviewFeedbackError, setReviewFeedbackError] = useState<string | null>(null);
+  const [reviewError, setReviewError] = useState<string | null>(null);
 
   // Inline editing state
   const [editingCell, setEditingCell] = useState<{ itemId: string; field: 'quantity' | 'unitPrice' | 'productName' | 'description' } | null>(null);
@@ -132,6 +133,13 @@ export default function QuoteDraftPage() {
 
   useEffect(() => { loadDraft(); }, [loadDraft]);
 
+  // Reset reviewer state when draft ID changes
+  useEffect(() => {
+    setCurrentReviewId(null);
+    setReviewDetail(null);
+    setReviewError(null);
+  }, [id]);
+
   useEffect(() => {
     fetchRules().then(setRuleGroups).catch(() => { /* rules are supplementary; ignore errors */ });
   }, []);
@@ -172,11 +180,12 @@ export default function QuoteDraftPage() {
   // Load review detail when in reviewer mode
   useEffect(() => {
     if (!currentReviewId || !cameFromReview || draft?.reviewStatus !== 'pending_review') return;
+    setReviewError(null);
     getReview(currentReviewId)
       .then((detail: any) => {
         setReviewDetail(detail);
       })
-      .catch(() => { /* non-critical */ });
+      .catch((err) => setReviewError((err as { message?: string })?.message ?? 'Failed to load review details.'));
   }, [currentReviewId, cameFromReview, draft?.reviewStatus]);
 
   const handleSubmitFeedback = async () => {
@@ -1569,7 +1578,7 @@ export default function QuoteDraftPage() {
       })()}
 
       {/* Feedback input — hidden in reviewer mode */}
-      {!isReviewerMode && (
+      {!isReadOnly && (
       <div style={{ ...sectionStyle, marginTop: '1rem' }}>
         <h2 style={sectionTitleStyle}>Revise This Quote</h2>
         <p style={{ margin: '0 0 0.5rem', fontSize: '0.85rem', color: '#666' }}>
@@ -1660,12 +1669,16 @@ export default function QuoteDraftPage() {
       {/* ── Reviewer mode UI ── */}
       {isReviewerMode && reviewDetail && (
         <>
+          {reviewError && (
+            <div style={{ padding: '0.75rem', marginBottom: '1rem', background: '#fef2f2', border: '1px solid #f87171', borderRadius: 6, color: '#b91c1c', fontSize: '0.9rem' }}>
+              ⚠️ {reviewError}
+            </div>
+          )}
           <div style={sectionStyle}>
             <h2 style={sectionTitleStyle}>Review Feedback</h2>
             <ReviewLineItemFeedbackPanel
               lineItems={draft.lineItems}
               feedback={reviewDetail.feedback ?? []}
-              reviewId={currentReviewId ?? ''}
               readOnly={false}
               onAddFeedback={(lineItemId) => {
                 // The panel already handles prompting; wire addFeedback call here
@@ -1697,7 +1710,7 @@ export default function QuoteDraftPage() {
       </div>
 
       {/* Push to Jobber section — hidden in reviewer mode */}
-      {!isReviewerMode && (
+      {!isReadOnly && (
       <div style={{ ...sectionStyle, marginTop: '1rem' }}>
         <h2 style={sectionTitleStyle}>
           {draft.jobberQuoteId ? 'Update Jobber Quote' : 'Push to Jobber'}

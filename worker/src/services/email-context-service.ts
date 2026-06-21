@@ -174,7 +174,7 @@ export class EmailContextService {
 
   /**
    * Fetch recent email messages involving the given customer email address.
-   * Searches for messages from or to this address, limited to the 10 most recent.
+   * Searches for messages from or to this address, limited to the 3 most recent.
    */
   private async fetchMessages(accessToken: string, customerEmail: string): Promise<GmailMessage[]> {
     // Search for messages involving this email address

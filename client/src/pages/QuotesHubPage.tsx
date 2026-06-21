@@ -27,9 +27,18 @@ export default function QuotesHubPage() {
   const createFromJobberRequestId = searchParams.get('createFromJobberRequestId');
   const createFromLegacyRequestId = searchParams.get('createFromRequestId');
 
-  // Resolve which request ID we're generating from and its source type
-  const resolvedRequestId = createFromManualRequestId || createFromJobberRequestId || createFromLegacyRequestId || null;
-  const isJobberSourced = !!createFromJobberRequestId;
+  // Explicitly determine which source is active (single source, priority order)
+  const requestSource: 'manual' | 'jobber' | 'legacy' | null =
+    createFromManualRequestId ? 'manual' :
+    createFromJobberRequestId ? 'jobber' :
+    createFromLegacyRequestId ? 'legacy' : null;
+
+  const resolvedRequestId = requestSource === 'manual' ? createFromManualRequestId :
+    requestSource === 'jobber' ? createFromJobberRequestId :
+    requestSource === 'legacy' ? createFromLegacyRequestId : null;
+
+  // Legacy deep links (createFromRequestId) are treated as Jobber-sourced
+  const isJobberSourced = requestSource === 'jobber' || requestSource === 'legacy';
 
   // ── Create New section ──
   const [descriptionText, setDescriptionText] = useState('');
@@ -119,7 +128,7 @@ export default function QuotesHubPage() {
     try {
       const payload = isJobberSourced
         ? { jobberRequestId: resolvedRequestId }
-        : { manualRequestId: resolvedRequestId };
+        : { manualRequestId: resolvedRequestId, customerText: '' };
       const draft = await generateQuote(payload);
       navigate('/quotes/drafts/' + draft.id);
     } catch (err) {
@@ -128,6 +137,11 @@ export default function QuotesHubPage() {
       setGeneratingFromRequest(false);
     }
   }, [resolvedRequestId, isJobberSourced, navigate]);
+
+  // Reset the duplicate-generation guard when the request ID changes
+  useEffect(() => {
+    generatedRef.current = false;
+  }, [resolvedRequestId]);
 
   useEffect(() => {
     if (resolvedRequestId && !generatingFromRequest) {

@@ -197,7 +197,8 @@ export default function RequestQueuePage() {
                 role="button"
                 tabIndex={0}
                 onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
                       const key = req.jobberRequestId ? 'createFromJobberRequestId' : 'createFromManualRequestId';
                       const val = req.jobberRequestId ? encodeURIComponent(req.jobberRequestId) : encodeURIComponent(req.id);
                       navigate('/quotes?' + key + '=' + val);
