@@ -19,6 +19,7 @@ import {
   QuantityEngine,
   ProductivityRatesService,
   UserSettingsService,
+  EmailContextService,
 } from '../services/index.js';
 import { JobberWebhookService } from '../services/jobber-webhook-service.js';
 import { JobberTokenStore } from '../services/jobber-token-store.js';
@@ -630,7 +631,8 @@ app.post('/generate', async (c) => {
   // fetched during enrichment and may be the sole image source.
   const trimmedCustomerTextForValidation = (body.customerText ?? '').trim();
   const trimmedJobberRequestId = (body.jobberRequestId ?? '').trim();
-  if (!trimmedCustomerTextForValidation && (!body.mediaItemIds || body.mediaItemIds.length === 0) && !trimmedJobberRequestId) {
+  const trimmedManualRequestId = (body.manualRequestId ?? '').trim();
+  if (!trimmedCustomerTextForValidation && (!body.mediaItemIds || body.mediaItemIds.length === 0) && !trimmedJobberRequestId && !trimmedManualRequestId) {
     throw new PlatformError({
       severity: 'error',
       component: 'QuoteRoutes',
@@ -784,11 +786,16 @@ app.post('/generate', async (c) => {
     }
   }
 
+  // Fetch manual request once and cache for reuse across address/email/clientName
+  let cachedManualRequest: any = null;
   if (body.manualRequestId) {
     try {
       const manualRequestService = new ManualRequestService(db);
-      const manualRequest = await manualRequestService.getById(body.manualRequestId, userId);
-      manualRequestAddress = manualRequest.customerAddress ?? null;
+      cachedManualRequest = await manualRequestService.getById(body.manualRequestId, userId);
+      manualRequestAddress = (cachedManualRequest as any).customerAddress ?? null;
+      if (!(body.customerText ?? '').trim()) {
+        body.customerText = (cachedManualRequest as any).serviceDescription ?? '';
+      }
     } catch {
       // Graceful degradation
     }
@@ -802,6 +809,49 @@ app.post('/generate', async (c) => {
     materialPriceMode = userSettings.materialPriceMode;
   } catch {
     // Graceful degradation — settings fetch failure must not block quote generation
+  }
+
+  // Email context enrichment: fetch recent Gmail conversations with the customer (graceful degradation)
+  let emailContext = '';
+  try {
+    let customerEmail: string | null = null;
+    if (body.jobberRequestId) {
+      const jobberRow = await db.prepare(
+        `SELECT request_body FROM jobber_webhook_requests WHERE jobber_request_id = ? ORDER BY processed_at DESC LIMIT 1`
+      ).bind(body.jobberRequestId).first() as Record<string, unknown> | null;
+      if (jobberRow?.request_body) {
+        const detail = JSON.parse(jobberRow.request_body as string);
+        customerEmail = detail?.email || detail?.request?.email || detail?.client?.email || null;
+      }
+    } else if (body.manualRequestId && cachedManualRequest) {
+      customerEmail = (cachedManualRequest as any).customerEmail ?? null;
+    }
+
+    if (customerEmail) {
+      const emailService = new EmailContextService(
+        c.env.GMAIL_CLIENT_ID,
+        c.env.GMAIL_CLIENT_SECRET,
+        c.env.GMAIL_REFRESH_TOKEN,
+      );
+      const enrichmentStarted = Date.now();
+      emailContext = await Promise.race<string>([
+        emailService.fetchContext(customerEmail),
+        new Promise<string>((resolve) => setTimeout(() => resolve(''), 6000)),
+      ]);
+      if (emailContext) {
+        body.customerText = emailContext + '\n\n' + (body.customerText ?? '');
+      } else {
+        console.warn(
+          '[quotes/generate] Email enrichment empty for',
+          customerEmail,
+          'after',
+          Date.now() - enrichmentStarted,
+          'ms',
+        );
+      }
+    }
+  } catch {
+    // Graceful degradation — email context failure must not block quote generation
   }
 
   const result = await quoteEngine.generateQuote(
@@ -828,10 +878,10 @@ app.post('/generate', async (c) => {
 
   if (body.manualRequestId) {
     result.draft.manualRequestId = body.manualRequestId;
-    // Populate clientName from the manual request's customerName
-    const manualRequestService = new ManualRequestService(db);
-    const manualRequest = await manualRequestService.getById(body.manualRequestId, userId);
-    result.draft.clientName = manualRequest.customerName;
+    // Populate clientName from the cached manual request
+    if (cachedManualRequest) {
+      result.draft.clientName = (cachedManualRequest as any).customerName ?? null;
+    }
   }
 
   const saved = await quoteDraftService.save(result.draft);

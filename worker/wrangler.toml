@@ -48,6 +48,9 @@ D1_DATABASE_ID = "300f9629-60b2-4e2d-a574-e77bf50235ff"
 # CLOUDFLARE_ACCOUNT_ID    — Cloudflare account ID (used by Browser Rendering REST API for cookie refresh)
 # CLOUDFLARE_API_TOKEN     — Cloudflare API token with Browser Rendering permissions (used for cookie refresh)
 # GITHUB_PAT               — GitHub personal access token with 'workflow' scope (triggers cookie refresh workflow from the app)
+# GMAIL_CLIENT_ID          — Google OAuth client ID for Gmail API (email context enrichment)
+# GMAIL_CLIENT_SECRET      — Google OAuth client secret for Gmail API (email context enrichment)
+# GMAIL_REFRESH_TOKEN      — OAuth refresh token with https://www.googleapis.com/auth/gmail.readonly scope (email context enrichment)
 
 [triggers]
 # Run corpus sync daily at 3:00 AM UTC to keep quote history and quantity data fresh

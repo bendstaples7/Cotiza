@@ -23,7 +23,22 @@ function formatCurrency(amount: number): string {
 export default function QuotesHubPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const createFromRequestId = searchParams.get('createFromRequestId');
+  const createFromManualRequestId = searchParams.get('createFromManualRequestId');
+  const createFromJobberRequestId = searchParams.get('createFromJobberRequestId');
+  const createFromLegacyRequestId = searchParams.get('createFromRequestId');
+
+  // Explicitly determine which source is active (single source, priority order)
+  const requestSource: 'manual' | 'jobber' | 'legacy' | null =
+    createFromManualRequestId ? 'manual' :
+    createFromJobberRequestId ? 'jobber' :
+    createFromLegacyRequestId ? 'legacy' : null;
+
+  const resolvedRequestId = requestSource === 'manual' ? createFromManualRequestId :
+    requestSource === 'jobber' ? createFromJobberRequestId :
+    requestSource === 'legacy' ? createFromLegacyRequestId : null;
+
+  // Legacy deep links (createFromRequestId) predate source-specific params — treat as manual
+  const isJobberSourced = requestSource === 'jobber';
 
   // ── Create New section ──
   const [descriptionText, setDescriptionText] = useState('');
@@ -102,24 +117,34 @@ export default function QuotesHubPage() {
 
   // ── Handle generate from request ──
   const handleGenerateFromRequest = useCallback(async () => {
-    if (!createFromRequestId) return;
+    if (!resolvedRequestId) return;
+
+    const sessionKey = `quote-gen:${requestSource}:${resolvedRequestId}`;
+    if (sessionStorage.getItem(sessionKey)) return;
+    sessionStorage.setItem(sessionKey, '1');
+
     setGeneratingFromRequest(true);
     setCreateError(null);
     try {
-      const draft = await generateQuote({ jobberRequestId: createFromRequestId });
+      const payload = isJobberSourced
+        ? { jobberRequestId: resolvedRequestId }
+        : { manualRequestId: resolvedRequestId, customerText: '' };
+      const draft = await generateQuote(payload);
+      sessionStorage.removeItem(sessionKey);
       navigate('/quotes/drafts/' + draft.id);
     } catch (err) {
+      sessionStorage.removeItem(sessionKey);
       setCreateError((err as ErrorResponse).message ?? 'Generation failed.');
     } finally {
       setGeneratingFromRequest(false);
     }
-  }, [createFromRequestId, navigate]);
+  }, [resolvedRequestId, requestSource, isJobberSourced, navigate]);
 
   useEffect(() => {
-    if (createFromRequestId && !generatingFromRequest) {
+    if (resolvedRequestId) {
       handleGenerateFromRequest();
     }
-  }, [createFromRequestId]); // only trigger on mount
+  }, [resolvedRequestId, handleGenerateFromRequest]);
 
   // ── Handle new description generate ──
   const handleGenerate = async () => {
@@ -163,7 +188,7 @@ export default function QuotesHubPage() {
   return (
     <div style={pageStyle}>
       {/* ── Section 1: Create New Quote ── */}
-      {createFromRequestId ? (
+      {resolvedRequestId ? (
         <div style={cardStyle}>
           <h2 style={sectionTitleStyle}>Create New Quote</h2>
           {generatingFromRequest ? (
@@ -174,7 +199,7 @@ export default function QuotesHubPage() {
           ) : (
             <div>
               <p style={{ color: '#555', fontSize: '0.9rem', margin: '0 0 0.75rem' }}>
-                Generating from request #{createFromRequestId}
+                Generating from request #{resolvedRequestId}
               </p>
               {createError && <div role="alert" style={errorStyle}>{createError}</div>}
             </div>

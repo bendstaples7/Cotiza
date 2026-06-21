@@ -44,6 +44,7 @@ export type { ResolutionContext, ResolutionResult, SqftResolutionResult, Resolut
 export { ProductivityRatesService } from './productivity-rates-service.js';
 export { MaterialPriceService } from './material-price-service.js';
 export type { MaterialPriceAdjustment } from './material-price-service.js';
+export { EmailContextService } from './email-context-service.js';
 export { resolveSpaceAllocation, SPACE_ALLOCATIONS } from './space-allocation-service.js';
 export type { SpaceAllocationResult } from './space-allocation-service.js';
 export { SpaceExtractionService } from './space-extraction-service.js';

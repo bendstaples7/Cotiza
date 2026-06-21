@@ -1,14 +1,24 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import type { QuoteDraft, QuoteLineItem, LineItemRationale, GenerationTrace, ErrorResponse, RuleGroupWithRules, Rule, ProductCatalogEntry, ActionItem, QuantityPredictionMeta, QuantitySource, ResolutionConfidence, ResolutionTier, DeathclockState } from 'shared';
-import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber, pushDraftUpdateToJobber, fetchDeathclock, markRequestSent, submitForReview, reSubmitForReview, getPendingReviews } from '../api';
+import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber, pushDraftUpdateToJobber, fetchDeathclock, markRequestSent, submitForReview, reSubmitForReview, getPendingReviews, getReview, addFeedback, completeReview, pushToJobber as pushReviewToJobber } from '../api';
 import type { JobberRequestDetail } from '../api';
 import SimilarQuotesPanel from './SimilarQuotesPanel';
 import DeathclockBadge, { getLabel } from '../components/DeathclockBadge';
 import ReviewBadge from '../components/review/ReviewBadge';
+import PushToJobberButton from '../components/review/PushToJobberButton';
+import ReviewLineItemFeedbackPanel from '../components/review/ReviewLineItemFeedbackPanel';
 import LineItemsTable from '../components/LineItemsTable';
 
 const MANUALLY_ADDED_SENTINEL = 'Manually added';
+
+/** True when the draft was created by importing an existing Jobber quote (not pushed from Cotiza). */
+function isImportedFromJobber(draft: QuoteDraft): boolean {
+  return !!draft.jobberQuoteId
+    && !draft.jobberRequestId
+    && !draft.manualRequestId
+    && draft.generationTrace == null;
+}
 
 const DEATHCLOCK_COLOR_MAP: Record<string, string> = {
   green: '#10b981',
@@ -54,6 +64,12 @@ export default function QuoteDraftPage() {
   const [submitReviewError, setSubmitReviewError] = useState<string | null>(null);
   const [currentReviewId, setCurrentReviewId] = useState<string | null>(null);
 
+  // Reviewer mode state (for when a reviewer views a pending review quote)
+  const [reviewDetail, setReviewDetail] = useState<any>(null);
+  const [reviewFeedbackText, setReviewFeedbackText] = useState('');
+  const [reviewFeedbackError, setReviewFeedbackError] = useState<string | null>(null);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+
   // Inline editing state
   const [editingCell, setEditingCell] = useState<{ itemId: string; field: 'quantity' | 'unitPrice' | 'productName' | 'description' } | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -65,7 +81,11 @@ export default function QuoteDraftPage() {
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   // Pending delete (undo) state
-  const [pendingDelete, setPendingDelete] = useState<{ item: QuoteLineItem; timerId: ReturnType<typeof setTimeout> } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{
+    item: QuoteLineItem;
+    timerId: ReturnType<typeof setTimeout>;
+    commitToken: number;
+  } | null>(null);
 
   // Add line item state
   const [showAddRow, setShowAddRow] = useState(false);
@@ -102,6 +122,8 @@ export default function QuoteDraftPage() {
   const [showGenerationTrace, setShowGenerationTrace] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingDeleteCommitRef = useRef<Promise<void>>(Promise.resolve());
+  const deleteCommitTokenRef = useRef(0);
 
   const loadDraft = useCallback(async () => {
     if (!id) return;
@@ -124,6 +146,13 @@ export default function QuoteDraftPage() {
   }, [id, cameFromReview]);
 
   useEffect(() => { loadDraft(); }, [loadDraft]);
+
+  // Reset reviewer state when draft ID changes
+  useEffect(() => {
+    setCurrentReviewId(null);
+    setReviewDetail(null);
+    setReviewError(null);
+  }, [id]);
 
   useEffect(() => {
     fetchRules().then(setRuleGroups).catch(() => { /* rules are supplementary; ignore errors */ });
@@ -161,6 +190,17 @@ export default function QuoteDraftPage() {
         .catch(() => {});
     }
   }, [id, draft?.reviewStatus, currentReviewId]);
+
+  // Load review detail when in reviewer mode
+  useEffect(() => {
+    if (!currentReviewId || !cameFromReview || draft?.reviewStatus !== 'pending_review') return;
+    setReviewError(null);
+    getReview(currentReviewId)
+      .then((detail: any) => {
+        setReviewDetail(detail);
+      })
+      .catch((err) => setReviewError((err as { message?: string })?.message ?? 'Failed to load review details.'));
+  }, [currentReviewId, cameFromReview, draft?.reviewStatus]);
 
   const handleSubmitFeedback = async () => {
     if (!id || !feedbackText.trim()) {
@@ -309,6 +349,20 @@ export default function QuoteDraftPage() {
     } finally {
       setSubmittingReview(false);
     }
+  };
+
+  /** Reviewer: push the review to Jobber (approve + push). */
+  const handleReviewPush = async () => {
+    if (!currentReviewId) throw new Error('No review ID');
+    await pushReviewToJobber(currentReviewId);
+    navigate('/quotes/reviews');
+  };
+
+  /** Reviewer: request changes (send back for edits). */
+  const handleReviewRequestChanges = async () => {
+    if (!currentReviewId) throw new Error('No review ID');
+    await completeReview(currentReviewId, 'changes_requested');
+    navigate('/quotes/reviews');
   };
 
   // ── Customer note save-on-blur handler ──
@@ -484,45 +538,61 @@ export default function QuoteDraftPage() {
     if (e.key === 'Escape') { setEditingCell(null); }
   };
 
+  const commitDeleteToServer = async (itemId: string, updateUi: boolean) => {
+    if (!id) return;
+    const currentDraft = await fetchDraft(id);
+    const withoutItem = currentDraft.lineItems.filter((i) => i.id !== itemId);
+    const updated = await updateDraft(id, { lineItems: withoutItem, unresolvedItems: currentDraft.unresolvedItems });
+    if (updateUi) {
+      setDraft(updated);
+    }
+  };
+
   const deleteLineItem = (itemId: string) => {
     if (!draft || !id) return;
     const itemToDelete = draft.lineItems.find((item) => item.id === itemId);
     if (!itemToDelete) return;
 
-    // Cancel any existing pending delete first (commit it immediately)
+    // Commit any existing pending delete before starting a new one (serialized)
     if (pendingDelete) {
       clearTimeout(pendingDelete.timerId);
-      const prevItem = pendingDelete.item;
-      const withoutPrev = draft.lineItems.filter((i) => i.id !== prevItem.id);
-      updateDraft(id, { lineItems: withoutPrev, unresolvedItems: draft.unresolvedItems }).catch(() => {});
+      const prev = pendingDelete;
+      deleteCommitTokenRef.current += 1;
+      setPendingDelete(null);
+      pendingDeleteCommitRef.current = pendingDeleteCommitRef.current
+        .then(() => commitDeleteToServer(prev.item.id, false))
+        .catch(() => {});
     }
+
+    deleteCommitTokenRef.current += 1;
+    const commitToken = deleteCommitTokenRef.current;
 
     // Optimistically remove from view
     setDraft({ ...draft, lineItems: draft.lineItems.filter((i) => i.id !== itemId) });
 
     // Start 5-second undo window — on expiry, commit the delete to the API
-    const timerId = setTimeout(async () => {
-      setPendingDelete(null);
-      setSaving(true);
-      try {
-        const currentDraft = await fetchDraft(id);
-        const withoutItem = currentDraft.lineItems.filter((i) => i.id !== itemId);
-        const updated = await updateDraft(id, { lineItems: withoutItem, unresolvedItems: currentDraft.unresolvedItems });
-        setDraft(updated);
-      } catch {
-        await loadDraft();
-      } finally {
-        setSaving(false);
-      }
+    const timerId = setTimeout(() => {
+      pendingDeleteCommitRef.current = pendingDeleteCommitRef.current.then(async () => {
+        if (deleteCommitTokenRef.current !== commitToken) return;
+        setPendingDelete(null);
+        setSaving(true);
+        try {
+          await commitDeleteToServer(itemId, true);
+        } catch {
+          await loadDraft();
+        } finally {
+          setSaving(false);
+        }
+      });
     }, 5000);
 
-    setPendingDelete({ item: itemToDelete, timerId });
+    setPendingDelete({ item: itemToDelete, timerId, commitToken });
   };
 
   const handleUndoDelete = () => {
     if (!pendingDelete || !draft) return;
     clearTimeout(pendingDelete.timerId);
-    // Restore the item at the end of the list
+    deleteCommitTokenRef.current += 1;
     setDraft({ ...draft, lineItems: [...draft.lineItems, pendingDelete.item] });
     setPendingDelete(null);
   };
@@ -671,6 +741,7 @@ export default function QuoteDraftPage() {
   const hasUnresolved = draft.unresolvedItems.length > 0;
   const showSidePanel = !!(draft.customerRequestText || requestDetail || draft.jobberQuoteId);
   const isReadOnly = draft.reviewStatus === 'pending_review';
+  const isReviewerMode = cameFromReview && isReadOnly;
 
   return (
     <div style={{ display: 'flex', gap: '1.5rem', maxWidth: showSidePanel ? 1200 : 800, margin: '0 auto' }}>
@@ -1536,7 +1607,8 @@ export default function QuoteDraftPage() {
         );
       })()}
 
-      {/* Feedback input */}
+      {/* Feedback input — hidden in reviewer mode */}
+      {!isReadOnly && (
       <div style={{ ...sectionStyle, marginTop: '1rem' }}>
         <h2 style={sectionTitleStyle}>Revise This Quote</h2>
         <p style={{ margin: '0 0 0.5rem', fontSize: '0.85rem', color: '#666' }}>
@@ -1605,6 +1677,7 @@ export default function QuoteDraftPage() {
           <div style={ruleCreationWarningStyle} role="alert">{ruleCreationWarning}</div>
         )}
       </div>
+      )}
 
       {/* Revision history */}
       {draft.revisionHistory && draft.revisionHistory.length > 0 && (
@@ -1623,12 +1696,55 @@ export default function QuoteDraftPage() {
         </div>
       )}
 
-      {/* Draft metadata */}
+      {/* ── Reviewer mode UI ── */}
+      {isReviewerMode && (
+        <>
+          {reviewError && (
+            <div style={{ padding: '0.75rem', marginBottom: '1rem', background: '#fef2f2', border: '1px solid #f87171', borderRadius: 6, color: '#b91c1c', fontSize: '0.9rem' }}>
+              ⚠️ {reviewError}
+            </div>
+          )}
+          {reviewDetail && (
+          <>
+          <div style={sectionStyle}>
+            <h2 style={sectionTitleStyle}>Review Feedback</h2>
+            <ReviewLineItemFeedbackPanel
+              lineItems={draft.lineItems}
+              feedback={reviewDetail.feedback ?? []}
+              readOnly={false}
+              onAddFeedback={(lineItemId) => {
+                // The panel already handles prompting; wire addFeedback call here
+                const comment = prompt('Enter feedback for this line item:');
+                if (comment && comment.trim()) {
+                  addFeedback(reviewDetail.review.id, lineItemId, 'general', comment.trim())
+                    .then(() => getReview(currentReviewId!).then((d: any) => setReviewDetail(d)))
+                    .catch(() => { /* non-critical */ });
+                }
+              }}
+            />
+          </div>
+          <div style={sectionStyle}>
+            <h2 style={sectionTitleStyle}>Review Actions</h2>
+            <PushToJobberButton
+              onPush={handleReviewPush}
+              onRequestChanges={handleReviewRequestChanges}
+              pushDisabled={draft.status === 'finalized'}
+              pushTooltip={draft.status === 'finalized' ? 'Quote already finalized' : undefined}
+              hasFeedback={(reviewDetail.feedback ?? []).length > 0}
+            />
+          </div>
+          </>
+          )}
+        </>
+      )}
+
+      {/* Feedback input — hidden in reviewer mode */}
       <div style={{ fontSize: '0.8rem', color: '#888', marginTop: '1.5rem' }}>
         Created: {new Date(draft.createdAt).toLocaleString()}
       </div>
 
-      {/* Push to Jobber section */}
+      {/* Push to Jobber section — hidden in reviewer mode */}
+      {!isReadOnly && (
       <div style={{ ...sectionStyle, marginTop: '1rem' }}>
         <h2 style={sectionTitleStyle}>
           {draft.jobberQuoteId ? 'Update Jobber Quote' : 'Push to Jobber'}
@@ -1636,7 +1752,11 @@ export default function QuoteDraftPage() {
         {draft.jobberQuoteId && draft.jobberQuoteNumber ? (
           <div>
             <p style={{ margin: '0 0 0.5rem', fontSize: '0.9rem', color: '#333' }}>
-              🔄 Imported from Jobber Quote <strong>{draft.jobberQuoteNumber}</strong>
+              {isImportedFromJobber(draft) ? (
+                <>🔄 Imported from Jobber Quote <strong>{draft.jobberQuoteNumber}</strong></>
+              ) : (
+                <>🔗 Linked to Jobber Quote <strong>{draft.jobberQuoteNumber}</strong></>
+              )}
             </p>
             <a
               href={draft.jobberQuoteWebUri || `https://secure.getjobber.com/quotes/${draft.jobberQuoteNumber}`}
@@ -1712,6 +1832,7 @@ export default function QuoteDraftPage() {
           </div>
         )}
       </div>
+      )}
       </div>{/* end main content column */}
 
       {/* Request details side panel */}

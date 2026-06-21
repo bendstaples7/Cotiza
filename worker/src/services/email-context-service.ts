@@ -174,31 +174,29 @@ export class EmailContextService {
 
   /**
    * Fetch recent email messages involving the given customer email address.
-   * Searches for messages from or to this address, limited to the 10 most recent.
+   * Searches for messages from or to this address, limited to the 3 most recent.
    */
   private async fetchMessages(accessToken: string, customerEmail: string): Promise<GmailMessage[]> {
     // Search for messages involving this email address
     const query = encodeURIComponent(`from:${customerEmail} OR to:${customerEmail}`);
     const listResult = await this.apiFetch<GmailListResponse>(
       accessToken,
-      `/messages?q=${query}&maxResults=10`,
+      `/messages?q=${query}&maxResults=3`,
     );
 
     if (!listResult?.messages || listResult.messages.length === 0) {
       return [];
     }
 
-    // Fetch each message detail
-    const messages: GmailMessage[] = [];
-    for (const msgRef of listResult.messages) {
-      const msg = await this.apiFetch<GmailMessage>(
+    // Fetch each message detail in parallel
+    const messagePromises = listResult.messages.map((msgRef) =>
+      this.apiFetch<GmailMessage>(
         accessToken,
         `/messages/${msgRef.id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`,
-      );
-      if (msg) {
-        messages.push(msg);
-      }
-    }
+      )
+    );
+    const results = await Promise.all(messagePromises);
+    const messages = results.filter((msg): msg is GmailMessage => msg !== null);
 
     // Sort by internalDate descending (newest first)
     messages.sort((a, b) => parseInt(b.internalDate) - parseInt(a.internalDate));
@@ -208,7 +206,7 @@ export class EmailContextService {
 
   // ── Format messages into readable text ─────────────────────────
 
-  private formatMessages(messages: GmailMessage[]): string {
+  private formatMessages(messages: GmailMessage[], customerEmail: string): string {
     if (messages.length === 0) return '';
 
     const parts: string[] = [];
@@ -242,8 +240,8 @@ export class EmailContextService {
         // Keep original date string
       }
 
-      const direction = from.toLowerCase().includes('@') && !to.toLowerCase().includes('@')
-        ? 'Incoming' : 'Outgoing';
+      const fromAddr = extractEmail(from);
+      const direction = fromAddr.toLowerCase() === customerEmail.toLowerCase() ? 'Incoming' : 'Outgoing';
 
       parts.push(`--- ${direction} Email ---`);
       parts.push(`From: ${from}`);
@@ -294,10 +292,16 @@ export class EmailContextService {
     const parts: string[] = [
       '--- Email Conversation Context ---',
       '',
-      this.formatMessages(messages),
+      this.formatMessages(messages, customerEmail),
       '--- End Email Context ---',
     ];
 
     return parts.join('\n');
   }
+}
+
+/** Extract the email address from a "Name <email@example.com>" header value. */
+function extractEmail(header: string): string {
+  const match = header.match(/<([^>]+)>/);
+  return match ? match[1] : header.trim();
 }

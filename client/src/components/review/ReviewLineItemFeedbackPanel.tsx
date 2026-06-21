@@ -11,7 +11,6 @@ export interface ReviewFeedbackItem {
 interface Props {
   lineItems: QuoteLineItem[];
   feedback: ReviewFeedbackItem[];
-  reviewId: string;
   readOnly?: boolean;
   onAddFeedback?: (lineItemId: string) => void;
 }
