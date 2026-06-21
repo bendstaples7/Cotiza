@@ -1667,13 +1667,15 @@ export default function QuoteDraftPage() {
       )}
 
       {/* ── Reviewer mode UI ── */}
-      {isReviewerMode && reviewDetail && (
+      {isReviewerMode && (
         <>
           {reviewError && (
             <div style={{ padding: '0.75rem', marginBottom: '1rem', background: '#fef2f2', border: '1px solid #f87171', borderRadius: 6, color: '#b91c1c', fontSize: '0.9rem' }}>
               ⚠️ {reviewError}
             </div>
           )}
+          {reviewDetail && (
+          <>
           <div style={sectionStyle}>
             <h2 style={sectionTitleStyle}>Review Feedback</h2>
             <ReviewLineItemFeedbackPanel
@@ -1701,6 +1703,8 @@ export default function QuoteDraftPage() {
               hasFeedback={(reviewDetail.feedback ?? []).length > 0}
             />
           </div>
+          </>
+          )}
         </>
       )}
 
