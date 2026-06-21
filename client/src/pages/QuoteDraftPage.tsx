@@ -81,7 +81,11 @@ export default function QuoteDraftPage() {
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   // Pending delete (undo) state
-  const [pendingDelete, setPendingDelete] = useState<{ item: QuoteLineItem; timerId: ReturnType<typeof setTimeout> } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{
+    item: QuoteLineItem;
+    timerId: ReturnType<typeof setTimeout>;
+    commitToken: number;
+  } | null>(null);
 
   // Add line item state
   const [showAddRow, setShowAddRow] = useState(false);
@@ -119,6 +123,7 @@ export default function QuoteDraftPage() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editInputRef = useRef<HTMLInputElement | null>(null);
   const pendingDeleteCommitRef = useRef<Promise<void>>(Promise.resolve());
+  const deleteCommitTokenRef = useRef(0);
 
   const loadDraft = useCallback(async () => {
     if (!id) return;
@@ -533,6 +538,16 @@ export default function QuoteDraftPage() {
     if (e.key === 'Escape') { setEditingCell(null); }
   };
 
+  const commitDeleteToServer = async (itemId: string, updateUi: boolean) => {
+    if (!id) return;
+    const currentDraft = await fetchDraft(id);
+    const withoutItem = currentDraft.lineItems.filter((i) => i.id !== itemId);
+    const updated = await updateDraft(id, { lineItems: withoutItem, unresolvedItems: currentDraft.unresolvedItems });
+    if (updateUi) {
+      setDraft(updated);
+    }
+  };
+
   const deleteLineItem = (itemId: string) => {
     if (!draft || !id) return;
     const itemToDelete = draft.lineItems.find((item) => item.id === itemId);
@@ -542,14 +557,15 @@ export default function QuoteDraftPage() {
     if (pendingDelete) {
       clearTimeout(pendingDelete.timerId);
       const prev = pendingDelete;
+      deleteCommitTokenRef.current += 1;
       setPendingDelete(null);
-      pendingDeleteCommitRef.current = pendingDeleteCommitRef.current.then(async () => {
-        const currentDraft = await fetchDraft(id);
-        const withoutPrev = currentDraft.lineItems.filter((i) => i.id !== prev.item.id);
-        const updated = await updateDraft(id, { lineItems: withoutPrev, unresolvedItems: currentDraft.unresolvedItems });
-        setDraft(updated);
-      }).catch(() => loadDraft());
+      pendingDeleteCommitRef.current = pendingDeleteCommitRef.current
+        .then(() => commitDeleteToServer(prev.item.id, false))
+        .catch(() => {});
     }
+
+    deleteCommitTokenRef.current += 1;
+    const commitToken = deleteCommitTokenRef.current;
 
     // Optimistically remove from view
     setDraft({ ...draft, lineItems: draft.lineItems.filter((i) => i.id !== itemId) });
@@ -557,13 +573,11 @@ export default function QuoteDraftPage() {
     // Start 5-second undo window — on expiry, commit the delete to the API
     const timerId = setTimeout(() => {
       pendingDeleteCommitRef.current = pendingDeleteCommitRef.current.then(async () => {
+        if (deleteCommitTokenRef.current !== commitToken) return;
         setPendingDelete(null);
         setSaving(true);
         try {
-          const currentDraft = await fetchDraft(id);
-          const withoutItem = currentDraft.lineItems.filter((i) => i.id !== itemId);
-          const updated = await updateDraft(id, { lineItems: withoutItem, unresolvedItems: currentDraft.unresolvedItems });
-          setDraft(updated);
+          await commitDeleteToServer(itemId, true);
         } catch {
           await loadDraft();
         } finally {
@@ -572,13 +586,13 @@ export default function QuoteDraftPage() {
       });
     }, 5000);
 
-    setPendingDelete({ item: itemToDelete, timerId });
+    setPendingDelete({ item: itemToDelete, timerId, commitToken });
   };
 
   const handleUndoDelete = () => {
     if (!pendingDelete || !draft) return;
     clearTimeout(pendingDelete.timerId);
-    // Restore the item at the end of the list
+    deleteCommitTokenRef.current += 1;
     setDraft({ ...draft, lineItems: [...draft.lineItems, pendingDelete.item] });
     setPendingDelete(null);
   };
