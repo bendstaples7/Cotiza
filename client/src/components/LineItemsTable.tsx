@@ -663,12 +663,16 @@ export default function LineItemsTable({
     const itemToDelete = lineItems.find((item) => item.id === itemId);
     if (!itemToDelete) return;
 
-    // Cancel any existing pending delete first (commit it immediately)
+    // Cancel any existing pending delete first (commit it immediately from server state)
     if (pendingDelete) {
       clearTimeout(pendingDelete.timerId);
       const prevItem = pendingDelete.item;
-      const withoutPrev = lineItems.filter((i) => i.id !== prevItem.id);
-      updateDraft(id, { lineItems: withoutPrev, unresolvedItems: unresolvedItems }).catch(() => {});
+      fetchDraft(id)
+        .then((currentDraft) => {
+          const withoutPrev = currentDraft.lineItems.filter((i) => i.id !== prevItem.id);
+          return updateDraft(id, { lineItems: withoutPrev, unresolvedItems: currentDraft.unresolvedItems });
+        })
+        .catch(() => {});
     }
 
     // Optimistically remove from view

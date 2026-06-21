@@ -12,6 +12,14 @@ import LineItemsTable from '../components/LineItemsTable';
 
 const MANUALLY_ADDED_SENTINEL = 'Manually added';
 
+/** True when the draft was created by importing an existing Jobber quote (not pushed from Cotiza). */
+function isImportedFromJobber(draft: QuoteDraft): boolean {
+  return !!draft.jobberQuoteId
+    && !draft.jobberRequestId
+    && !draft.manualRequestId
+    && draft.generationTrace == null;
+}
+
 const DEATHCLOCK_COLOR_MAP: Record<string, string> = {
   green: '#10b981',
   yellow: '#eab308',
@@ -341,14 +349,14 @@ export default function QuoteDraftPage() {
   const handleReviewPush = async () => {
     if (!currentReviewId) throw new Error('No review ID');
     await pushReviewToJobber(currentReviewId);
-    await loadDraft();
+    navigate('/quotes/reviews');
   };
 
   /** Reviewer: request changes (send back for edits). */
   const handleReviewRequestChanges = async () => {
     if (!currentReviewId) throw new Error('No review ID');
     await completeReview(currentReviewId, 'changes_requested');
-    await loadDraft();
+    navigate('/quotes/reviews');
   };
 
   // ── Customer note save-on-blur handler ──
@@ -529,12 +537,16 @@ export default function QuoteDraftPage() {
     const itemToDelete = draft.lineItems.find((item) => item.id === itemId);
     if (!itemToDelete) return;
 
-    // Cancel any existing pending delete first (commit it immediately)
+    // Cancel any existing pending delete first (commit it immediately from server state)
     if (pendingDelete) {
       clearTimeout(pendingDelete.timerId);
       const prevItem = pendingDelete.item;
-      const withoutPrev = draft.lineItems.filter((i) => i.id !== prevItem.id);
-      updateDraft(id, { lineItems: withoutPrev, unresolvedItems: draft.unresolvedItems }).catch(() => {});
+      fetchDraft(id)
+        .then((currentDraft) => {
+          const withoutPrev = currentDraft.lineItems.filter((i) => i.id !== prevItem.id);
+          return updateDraft(id, { lineItems: withoutPrev, unresolvedItems: currentDraft.unresolvedItems });
+        })
+        .catch(() => {});
     }
 
     // Optimistically remove from view
@@ -1722,7 +1734,11 @@ export default function QuoteDraftPage() {
         {draft.jobberQuoteId && draft.jobberQuoteNumber ? (
           <div>
             <p style={{ margin: '0 0 0.5rem', fontSize: '0.9rem', color: '#333' }}>
-              🔄 Imported from Jobber Quote <strong>{draft.jobberQuoteNumber}</strong>
+              {isImportedFromJobber(draft) ? (
+                <>🔄 Imported from Jobber Quote <strong>{draft.jobberQuoteNumber}</strong></>
+              ) : (
+                <>🔗 Linked to Jobber Quote <strong>{draft.jobberQuoteNumber}</strong></>
+              )}
             </p>
             <a
               href={draft.jobberQuoteWebUri || `https://secure.getjobber.com/quotes/${draft.jobberQuoteNumber}`}

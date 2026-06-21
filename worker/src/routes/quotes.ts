@@ -631,7 +631,8 @@ app.post('/generate', async (c) => {
   // fetched during enrichment and may be the sole image source.
   const trimmedCustomerTextForValidation = (body.customerText ?? '').trim();
   const trimmedJobberRequestId = (body.jobberRequestId ?? '').trim();
-  if (!trimmedCustomerTextForValidation && (!body.mediaItemIds || body.mediaItemIds.length === 0) && !trimmedJobberRequestId) {
+  const trimmedManualRequestId = (body.manualRequestId ?? '').trim();
+  if (!trimmedCustomerTextForValidation && (!body.mediaItemIds || body.mediaItemIds.length === 0) && !trimmedJobberRequestId && !trimmedManualRequestId) {
     throw new PlatformError({
       severity: 'error',
       component: 'QuoteRoutes',
@@ -792,6 +793,9 @@ app.post('/generate', async (c) => {
       const manualRequestService = new ManualRequestService(db);
       cachedManualRequest = await manualRequestService.getById(body.manualRequestId, userId);
       manualRequestAddress = (cachedManualRequest as any).customerAddress ?? null;
+      if (!(body.customerText ?? '').trim()) {
+        body.customerText = (cachedManualRequest as any).serviceDescription ?? '';
+      }
     } catch {
       // Graceful degradation
     }
@@ -829,12 +833,21 @@ app.post('/generate', async (c) => {
         c.env.GMAIL_CLIENT_SECRET,
         c.env.GMAIL_REFRESH_TOKEN,
       );
+      const enrichmentStarted = Date.now();
       emailContext = await Promise.race<string>([
         emailService.fetchContext(customerEmail),
         new Promise<string>((resolve) => setTimeout(() => resolve(''), 6000)),
       ]);
       if (emailContext) {
         body.customerText = emailContext + '\n\n' + (body.customerText ?? '');
+      } else {
+        console.warn(
+          '[quotes/generate] Email enrichment empty for',
+          customerEmail,
+          'after',
+          Date.now() - enrichmentStarted,
+          'ms',
+        );
       }
     }
   } catch {

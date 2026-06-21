@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom';
 import { AuthProvider } from './AuthContext';
 import { ErrorToastProvider } from './ErrorToast';
 import ProtectedRoute from './ProtectedRoute';
@@ -26,6 +26,11 @@ function LegacyPostRedirect() {
   return <Navigate to={`/social/posts/${id}`} replace />;
 }
 
+function QuotesQueueRedirect() {
+  const { search } = useLocation();
+  return <Navigate to={`/quotes/requests${search}`} replace />;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -48,7 +53,7 @@ export default function App() {
 
                 {/* Quotes section */}
                 <Route path="/quotes/requests" element={<RequestQueuePage />} />
-                <Route path="/quotes/queue" element={<Navigate to="/quotes/requests" replace />} />
+                <Route path="/quotes/queue" element={<QuotesQueueRedirect />} />
                 <Route path="/quotes/reviews" element={<ReviewQueuePage />} />
                 <Route path="/quotes" element={<QuotesHubPage />} />
                 <Route path="/quotes/new" element={<QuoteInputPage />} />

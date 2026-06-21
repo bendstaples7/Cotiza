@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { QuoteDraft, ErrorResponse } from 'shared';
 import { fetchManualRequests, fetchImportableQuotes, importJobberQuote, generateQuote, fetchDrafts } from '../api';
@@ -37,8 +37,8 @@ export default function QuotesHubPage() {
     requestSource === 'jobber' ? createFromJobberRequestId :
     requestSource === 'legacy' ? createFromLegacyRequestId : null;
 
-  // Legacy deep links (createFromRequestId) are treated as Jobber-sourced
-  const isJobberSourced = requestSource === 'jobber' || requestSource === 'legacy';
+  // Legacy deep links (createFromRequestId) predate source-specific params — treat as manual
+  const isJobberSourced = requestSource === 'jobber';
 
   // ── Create New section ──
   const [descriptionText, setDescriptionText] = useState('');
@@ -116,12 +116,12 @@ export default function QuotesHubPage() {
   }, [loadImportable]);
 
   // ── Handle generate from request ──
-  const generatedRef = useRef(false);
   const handleGenerateFromRequest = useCallback(async () => {
     if (!resolvedRequestId) return;
-    // Prevent double-generation in React Strict Mode
-    if (generatedRef.current) return;
-    generatedRef.current = true;
+
+    const sessionKey = `quote-gen:${requestSource}:${resolvedRequestId}`;
+    if (sessionStorage.getItem(sessionKey)) return;
+    sessionStorage.setItem(sessionKey, '1');
 
     setGeneratingFromRequest(true);
     setCreateError(null);
@@ -132,22 +132,18 @@ export default function QuotesHubPage() {
       const draft = await generateQuote(payload);
       navigate('/quotes/drafts/' + draft.id);
     } catch (err) {
+      sessionStorage.removeItem(sessionKey);
       setCreateError((err as ErrorResponse).message ?? 'Generation failed.');
     } finally {
       setGeneratingFromRequest(false);
     }
-  }, [resolvedRequestId, isJobberSourced, navigate]);
-
-  // Reset the duplicate-generation guard when the request ID changes
-  useEffect(() => {
-    generatedRef.current = false;
-  }, [resolvedRequestId]);
+  }, [resolvedRequestId, requestSource, isJobberSourced, navigate]);
 
   useEffect(() => {
-    if (resolvedRequestId && !generatingFromRequest) {
+    if (resolvedRequestId) {
       handleGenerateFromRequest();
     }
-  }, [resolvedRequestId]); // only trigger on mount
+  }, [resolvedRequestId, handleGenerateFromRequest]);
 
   // ── Handle new description generate ──
   const handleGenerate = async () => {

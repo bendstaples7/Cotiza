@@ -224,6 +224,90 @@ describe('EmailContextService', () => {
       expect(result).toBe('');
     });
 
+    it('labels customer-sent messages as Incoming', async () => {
+      const tokenResponse = {
+        access_token: 'test-access-token',
+        expires_in: 3600,
+        token_type: 'Bearer',
+      };
+      const listResponse = {
+        messages: [{ id: 'msg1', threadId: 'thread1' }],
+        resultSizeEstimate: 1,
+      };
+      const msgDetail = {
+        id: 'msg1',
+        threadId: 'thread1',
+        labelIds: ['INBOX'],
+        snippet: 'Need a quote please',
+        payload: {
+          headers: [
+            { name: 'From', value: 'Customer Name <customer@example.com>' },
+            { name: 'To', value: 'business@example.com' },
+            { name: 'Subject', value: 'Quote request' },
+            { name: 'Date', value: 'Mon, 15 Jun 2026 10:30:00 -0500' },
+          ],
+        },
+        internalDate: '1781605800000',
+      };
+
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(tokenResponse) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(listResponse) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(msgDetail) });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const service = new EmailContextService(
+        VALID_CREDENTIALS.clientId,
+        VALID_CREDENTIALS.clientSecret,
+        VALID_CREDENTIALS.refreshToken,
+      );
+      const result = await service.fetchContext('customer@example.com');
+
+      expect(result).toContain('--- Incoming Email ---');
+    });
+
+    it('labels business-sent messages as Outgoing', async () => {
+      const tokenResponse = {
+        access_token: 'test-access-token',
+        expires_in: 3600,
+        token_type: 'Bearer',
+      };
+      const listResponse = {
+        messages: [{ id: 'msg2', threadId: 'thread2' }],
+        resultSizeEstimate: 1,
+      };
+      const msgDetail = {
+        id: 'msg2',
+        threadId: 'thread2',
+        labelIds: ['SENT'],
+        snippet: 'Thanks for reaching out',
+        payload: {
+          headers: [
+            { name: 'From', value: 'business@example.com' },
+            { name: 'To', value: 'customer@example.com' },
+            { name: 'Subject', value: 'Re: Quote request' },
+            { name: 'Date', value: 'Mon, 15 Jun 2026 11:00:00 -0500' },
+          ],
+        },
+        internalDate: '1781607600000',
+      };
+
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(tokenResponse) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(listResponse) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(msgDetail) });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const service = new EmailContextService(
+        VALID_CREDENTIALS.clientId,
+        VALID_CREDENTIALS.clientSecret,
+        VALID_CREDENTIALS.refreshToken,
+      );
+      const result = await service.fetchContext('customer@example.com');
+
+      expect(result).toContain('--- Outgoing Email ---');
+    });
+
     it('caches OAuth token for subsequent calls within expiry', async () => {
       const tokenResponse = {
         access_token: 'test-access-token',
