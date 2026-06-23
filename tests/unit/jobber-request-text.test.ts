@@ -129,7 +129,7 @@ describe('resolveJobberRequestFields', () => {
     expect(fields.requestBodyText).toBe('');
   });
 
-  it('clears requestBodyText when it would duplicate the title', () => {
+  it('clears requestBodyText when description equals the title', () => {
     const fields = resolveJobberRequestFields({
       clientName: 'Fiona Duncan',
       title: 'Bathroom Renovation',

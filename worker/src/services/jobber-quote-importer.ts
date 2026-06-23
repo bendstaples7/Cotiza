@@ -141,9 +141,9 @@ const FETCH_QUOTE_BY_ID_QUERY = `
 `;
 
 const REQUEST_QUOTES_QUERY = `
-  query RequestQuotes($id: EncodedId!) {
+  query RequestQuotes($id: EncodedId!, $after: String) {
     request(id: $id) {
-      quotes(first: 50) {
+      quotes(first: 50, after: $after) {
         nodes {
           id
           quoteNumber
@@ -151,6 +151,10 @@ const REQUEST_QUOTES_QUERY = `
           quoteStatus
           jobberWebUri
           createdAt
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
         }
       }
     }
@@ -225,26 +229,56 @@ export class JobberQuoteImportService {
 
   /**
    * Fetch active in-progress quotes linked to a Jobber request (lightweight, no line items).
+   * Paginates through all request quotes (up to 200 active matches).
    */
   async fetchQuotesForRequest(jobberRequestId: string, signal?: AbortSignal): Promise<ImportableQuote[]> {
-    const data = await this.jobberIntegration.graphqlRequest<Record<string, unknown>>(
-      REQUEST_QUOTES_QUERY,
-      { id: jobberRequestId },
-      { signal },
-    );
+    const activeQuotes: ImportableQuote[] = [];
+    let after: string | null = null;
+    const MAX_QUOTES = 200;
 
-    const nodes = (data?.request as { quotes?: { nodes?: ImportableQuote[] } } | undefined)
-      ?.quotes?.nodes ?? [];
+    do {
+      if (signal?.aborted) {
+        throw signal.reason ?? new Error('Aborted');
+      }
 
-    return nodes
-      .filter((node) => isActiveJobberQuoteStatus(node.quoteStatus))
-      .map((node) => ({
-        ...node,
-        message: null,
-        lineItems: [],
-        client: null,
-        property: null,
-      }));
+      const data = await this.jobberIntegration.graphqlRequest<Record<string, unknown>>(
+        REQUEST_QUOTES_QUERY,
+        { id: jobberRequestId, after },
+        { signal },
+      );
+
+      const quotesConnection = (data?.request as {
+        quotes?: {
+          nodes?: ImportableQuote[];
+          pageInfo?: { hasNextPage: boolean; endCursor: string | null };
+        };
+      } | undefined)?.quotes;
+
+      const nodes = quotesConnection?.nodes ?? [];
+
+      for (const node of nodes) {
+        if (isActiveJobberQuoteStatus(node.quoteStatus)) {
+          activeQuotes.push({
+            ...node,
+            message: null,
+            lineItems: [],
+            client: null,
+            property: null,
+          });
+        }
+      }
+
+      if (activeQuotes.length >= MAX_QUOTES) break;
+
+      const pageInfo = quotesConnection?.pageInfo;
+      if (pageInfo?.hasNextPage && pageInfo.endCursor) {
+        after = pageInfo.endCursor;
+      } else {
+        break;
+      }
+    } while (true);
+
+    return activeQuotes;
   }
 
   /**

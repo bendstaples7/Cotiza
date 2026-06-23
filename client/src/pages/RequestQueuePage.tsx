@@ -85,6 +85,19 @@ export default function RequestQueuePage() {
   // Tick counter to trigger re-renders every second for live deathclock age
   const [tick, setTick] = useState(0);
   const lastFetchedAtRef = useRef(0);
+  const generatingRef = useRef<string | null>(null);
+
+  const beginGenerating = (cardKey: string): boolean => {
+    if (generatingRef.current) return false;
+    generatingRef.current = cardKey;
+    setGeneratingForId(cardKey);
+    return true;
+  };
+
+  const endGenerating = () => {
+    generatingRef.current = null;
+    setGeneratingForId(null);
+  };
 
   // 1-second tick — drives local age interpolation between polls
   useEffect(() => {
@@ -138,20 +151,21 @@ export default function RequestQueuePage() {
         .map((r) => r.jobberRequestId as string)
         .slice(0, MAX_BACKGROUND_QUEUE_IDS);
       if (jobberIdsForBadges.length > 0) {
-        void enrichInBatches(jobberIdsForBadges, BACKGROUND_BATCH_SIZE, async (chunk) => {
-          const quotesByRequest = await fetchRequestJobberQuotes(chunk);
-          setJobberQuoteBadges((prev) => {
-            const next = { ...prev };
+        void (async () => {
+          const merged: Record<string, Array<{ quoteNumber: string; quoteStatus: string }>> = {};
+          await enrichInBatches(jobberIdsForBadges, BACKGROUND_BATCH_SIZE, async (chunk) => {
+            const quotesByRequest = await fetchRequestJobberQuotes(chunk);
             for (const id of chunk) {
-              if (quotesByRequest[id]?.length) {
-                next[id] = quotesByRequest[id];
-              } else {
-                delete next[id];
+              const badges = quotesByRequest[id];
+              if (badges?.length) {
+                merged[id] = badges;
               }
             }
-            return next;
           });
-        });
+          setJobberQuoteBadges(merged);
+        })();
+      } else {
+        setJobberQuoteBadges({});
       }
     } catch (err) {
       setError((err as ErrorResponse).message ?? 'Failed to load request queue.');
@@ -222,55 +236,56 @@ export default function RequestQueuePage() {
     navigate('?' + params.toString(), { replace: false });
   };
 
+  const doGenerateQuote = async (req: ManualRequestWithDeathclock) => {
+    const drafts = await fetchDrafts();
+    const existingDraft = drafts
+      .filter((d) => d.status !== 'finalized')
+      .find((d) =>
+        req.jobberRequestId
+          ? d.jobberRequestId === req.jobberRequestId
+          : d.manualRequestId === req.id,
+      );
+
+    if (existingDraft) {
+      if (!isSparseDraft(existingDraft)) {
+        navigate('/quotes/drafts/' + existingDraft.id);
+        return;
+      }
+      await deleteDraft(existingDraft.id);
+    }
+
+    const payload = req.jobberRequestId
+      ? { jobberRequestId: req.jobberRequestId }
+      : { manualRequestId: req.id, customerText: '' };
+    const draft = await generateQuote(payload);
+    navigate('/quotes/drafts/' + draft.id);
+  };
+
   const runGenerateQuote = async (req: ManualRequestWithDeathclock) => {
     const cardKey = req.jobberRequestId ?? req.id;
-    if (generatingForId) return;
+    if (!beginGenerating(cardKey)) return;
     setGenerateError(null);
-    setGeneratingForId(cardKey);
 
     try {
-      const drafts = await fetchDrafts();
-      const existingDraft = drafts
-        .filter((d) => d.status !== 'finalized')
-        .find((d) =>
-          req.jobberRequestId
-            ? d.jobberRequestId === req.jobberRequestId
-            : d.manualRequestId === req.id,
-        );
-
-      if (existingDraft) {
-        if (!isSparseDraft(existingDraft)) {
-          navigate('/quotes/drafts/' + existingDraft.id);
-          return;
-        }
-        await deleteDraft(existingDraft.id);
-      }
-
-      const payload = req.jobberRequestId
-        ? { jobberRequestId: req.jobberRequestId }
-        : { manualRequestId: req.id, customerText: '' };
-      const draft = await generateQuote(payload);
-      navigate('/quotes/drafts/' + draft.id);
+      await doGenerateQuote(req);
     } catch (err) {
       setGenerateError((err as ErrorResponse).message ?? 'Failed to create quote draft.');
     } finally {
-      setGeneratingForId(null);
+      endGenerating();
     }
   };
 
   const handleRequestClick = async (req: ManualRequestWithDeathclock) => {
-    if (generatingForId) return;
-
-    if (!req.jobberRequestId) {
-      await runGenerateQuote(req);
-      return;
-    }
-
-    const cardKey = req.jobberRequestId;
+    const cardKey = req.jobberRequestId ?? req.id;
+    if (!beginGenerating(cardKey)) return;
     setGenerateError(null);
-    setGeneratingForId(cardKey);
 
     try {
+      if (!req.jobberRequestId) {
+        await doGenerateQuote(req);
+        return;
+      }
+
       const resolution = await resolveRequestQuote(req.jobberRequestId);
 
       if (resolution.recommendedAction === 'import_jobber') {
@@ -287,11 +302,11 @@ export default function RequestQueuePage() {
         }
       }
 
-      await runGenerateQuote(req);
+      await doGenerateQuote(req);
     } catch (err) {
       setGenerateError((err as ErrorResponse).message ?? 'Failed to resolve quote for this request.');
     } finally {
-      setGeneratingForId(null);
+      endGenerating();
     }
   };
 
