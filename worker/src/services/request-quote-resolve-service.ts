@@ -1,4 +1,5 @@
 import type { ImportableQuote } from './jobber-quote-importer.js';
+import { withAbortTimeout } from '../utils/abort.js';
 
 export type RequestQuoteRecommendedAction = 'import_jobber' | 'open_cotiza' | 'generate';
 
@@ -77,7 +78,7 @@ export async function resolveRequestQuote(
   db: D1Database,
   userId: string,
   jobberRequestId: string,
-  fetchRequestQuotes: (jobberRequestId: string) => Promise<ImportableQuote[]>,
+  fetchRequestQuotes: (jobberRequestId: string, signal?: AbortSignal) => Promise<ImportableQuote[]>,
 ): Promise<ResolveRequestQuoteResult> {
   const cotizaRow = await db.prepare(
     `SELECT qd.id,
@@ -109,12 +110,11 @@ export async function resolveRequestQuote(
   let activeQuotes: ImportableQuote[] = [];
 
   try {
-    activeQuotes = await Promise.race([
-      fetchRequestQuotes(jobberRequestId),
-      new Promise<ImportableQuote[]>((_, reject) => {
-        setTimeout(() => reject(new Error('Jobber quote lookup timed out')), JOBBER_LOOKUP_TIMEOUT_MS);
-      }),
-    ]);
+    activeQuotes = await withAbortTimeout(
+      (signal) => fetchRequestQuotes(jobberRequestId, signal),
+      JOBBER_LOOKUP_TIMEOUT_MS,
+      'Jobber quote lookup timed out',
+    );
   } catch {
     jobberLookupFailed = true;
     activeQuotes = [];
@@ -150,19 +150,18 @@ export async function resolveRequestQuote(
 /** Batch lookup for queue card badges (best-effort, no Cotiza draft resolution). */
 export async function fetchJobberQuotesForRequests(
   jobberRequestIds: string[],
-  fetchRequestQuotes: (jobberRequestId: string) => Promise<ImportableQuote[]>,
+  fetchRequestQuotes: (jobberRequestId: string, signal?: AbortSignal) => Promise<ImportableQuote[]>,
 ): Promise<Record<string, Array<{ quoteNumber: string; quoteStatus: string }>>> {
   const result: Record<string, Array<{ quoteNumber: string; quoteStatus: string }>> = {};
 
   await Promise.allSettled(
     jobberRequestIds.map(async (jobberRequestId) => {
       try {
-        const quotes = await Promise.race([
-          fetchRequestQuotes(jobberRequestId),
-          new Promise<ImportableQuote[]>((_, reject) => {
-            setTimeout(() => reject(new Error('timeout')), 4_000);
-          }),
-        ]);
+        const quotes = await withAbortTimeout(
+          (signal) => fetchRequestQuotes(jobberRequestId, signal),
+          4_000,
+          'Jobber quote lookup timed out',
+        );
         if (quotes.length > 0) {
           result[jobberRequestId] = quotes.map((q) => ({
             quoteNumber: q.quoteNumber,

@@ -226,10 +226,11 @@ export class JobberQuoteImportService {
   /**
    * Fetch active in-progress quotes linked to a Jobber request (lightweight, no line items).
    */
-  async fetchQuotesForRequest(jobberRequestId: string): Promise<ImportableQuote[]> {
+  async fetchQuotesForRequest(jobberRequestId: string, signal?: AbortSignal): Promise<ImportableQuote[]> {
     const data = await this.jobberIntegration.graphqlRequest<Record<string, unknown>>(
       REQUEST_QUOTES_QUERY,
       { id: jobberRequestId },
+      { signal },
     );
 
     const nodes = (data?.request as { quotes?: { nodes?: ImportableQuote[] } } | undefined)

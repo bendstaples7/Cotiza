@@ -24,6 +24,11 @@ FRONTEND_URL=
 CLOUDFLARE_ACCOUNT_ID=
 CLOUDFLARE_API_TOKEN=
 
+# Dedicated key for pulling Gmail secrets into local .dev.vars (worker/scripts/pull-gmail-secrets.mjs).
+# Set the same value in production via: wrangler secret put DEV_SECRETS_KEY
+# Do NOT reuse CLOUDFLARE_API_TOKEN.
+DEV_SECRETS_KEY=
+
 # Enable local-to-remote D1 sync (rules, cookies, tokens). Only set in .dev.vars, never in production.
 # Does not bypass Jobber OAuth or session checks — reconnect via the app when tokens expire.
 ENABLE_LOCAL_SYNC=true

@@ -173,7 +173,11 @@ describe('resolveRequestQuote', () => {
       },
     ]);
 
-    const fetchRequestQuotes = vi.fn(() => new Promise<ImportableQuote[]>(() => {}));
+    const fetchRequestQuotes = vi.fn((_id: string, signal?: AbortSignal) =>
+      new Promise<ImportableQuote[]>((resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+      }),
+    );
 
     const resultPromise = resolveRequestQuote(db, 'user-1', 'req-1', fetchRequestQuotes);
     await vi.advanceTimersByTimeAsync(5_001);
@@ -183,5 +187,6 @@ describe('resolveRequestQuote', () => {
     expect(result.jobberLookupFailed).toBe(true);
     expect(result.jobberQuotes).toEqual([]);
     expect(result.recommendedAction).toBe('open_cotiza');
+    expect(fetchRequestQuotes).toHaveBeenCalledWith('req-1', expect.any(AbortSignal));
   });
 });

@@ -39,8 +39,7 @@ export function parseTarget(args) {
   if (idx === -1 || idx + 1 >= args.length) return 'both';
   const value = args[idx + 1];
   if (['local', 'remote', 'both'].includes(value)) return value;
-  console.error(`[sync-cookies] ERROR: Invalid --target value '${value}'. Must be 'local', 'remote', or 'both'.`);
-  process.exit(1);
+  throw new Error(`Invalid --target value '${value}'. Must be 'local', 'remote', or 'both'.`);
 }
 
 /**
@@ -264,8 +263,7 @@ async function main() {
 
   const creds = readCredentials();
   if (!creds) {
-    console.error('[sync-cookies] ERROR: Credentials not available. Set JOBBER_WEB_EMAIL and JOBBER_WEB_PASSWORD in .dev.vars or as environment variables.');
-    process.exit(1);
+    throw new Error('Credentials not available. Set JOBBER_WEB_EMAIL and JOBBER_WEB_PASSWORD in .dev.vars or as environment variables.');
   }
 
   console.log('[sync-cookies] No valid cookies found. Logging into Jobber...');
@@ -281,15 +279,23 @@ async function main() {
   console.log(`[sync-cookies] Done. Cookies written to ${target} D1.`);
 }
 
-main().then(() => {
-  process.exit(0);
-}).catch((err) => {
-  const msg = err.message || String(err);
-  const target = parseTarget(process.argv);
-  if (target === 'local' && /Could not find Chrome/i.test(msg)) {
-    console.warn('[sync-cookies] Chrome not available — skipping cookie login for local dev.');
-    process.exit(0);
-  }
-  console.error(`[sync-cookies] FATAL: ${msg}`);
-  process.exit(1);
-});
+main()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    let target = 'both';
+    try {
+      target = parseTarget(process.argv);
+    } catch {
+      console.error(`[sync-cookies] FATAL: ${msg}`);
+      process.exit(1);
+      return;
+    }
+    if (target === 'local' && /Could not find Chrome/i.test(msg)) {
+      console.warn('[sync-cookies] Chrome not available — skipping cookie login for local dev.');
+      process.exit(0);
+      return;
+    }
+    console.error(`[sync-cookies] FATAL: ${msg}`);
+    process.exit(1);
+  });

@@ -10,6 +10,20 @@ export interface RequestJobberQuoteModalProps {
   onGenerateNew: () => void;
 }
 
+const FOCUSABLE_SELECTOR = [
+  'a[href]',
+  'button:not([disabled])',
+  'textarea:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(', ');
+
+function getFocusableElements(container: HTMLElement): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+    .filter((el) => el.offsetParent !== null || el === document.activeElement);
+}
+
 function statusBadgeStyle(status: string): React.CSSProperties {
   const normalized = status.toLowerCase();
   return {
@@ -37,30 +51,64 @@ export default function RequestJobberQuoteModal({
   const [importError, setImportError] = useState<string | null>(null);
   const mountedRef = useRef(true);
   const cancelledRef = useRef(false);
+  const importingRef = useRef(importing);
   const dialogRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  importingRef.current = importing;
 
   useEffect(() => {
     mountedRef.current = true;
     cancelledRef.current = false;
-    previousFocusRef.current = document.activeElement as HTMLElement;
-    dialogRef.current?.focus();
-
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !importing) {
-        cancelledRef.current = true;
-        onClose();
-      }
-    };
-    document.addEventListener('keydown', onKeyDown);
-
     return () => {
       mountedRef.current = false;
       cancelledRef.current = true;
-      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, []);
+
+  useEffect(() => {
+    previousFocusRef.current = document.activeElement as HTMLElement;
+    dialogRef.current?.focus();
+    return () => {
       previousFocusRef.current?.focus();
     };
-  }, [importing, onClose]);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !importingRef.current) {
+        cancelledRef.current = true;
+        onClose();
+        return;
+      }
+
+      if (e.key !== 'Tab' || !dialogRef.current) return;
+
+      const focusable = getFocusableElements(dialogRef.current);
+      if (focusable.length === 0) {
+        e.preventDefault();
+        dialogRef.current.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+
+      if (e.shiftKey) {
+        if (active === first || active === dialogRef.current) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
 
   const handleImport = async () => {
     if (!primaryQuote || primaryQuote.importedDraftId) return;

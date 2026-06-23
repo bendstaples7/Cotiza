@@ -3,7 +3,7 @@
  *
  * Cloudflare does not expose secret values via wrangler/API, so this calls a
  * protected admin route on production that returns Gmail creds when authorized
- * with the same CLOUDFLARE_API_TOKEN already in .dev.vars.
+ * with DEV_SECRETS_KEY (a dedicated secret — not CLOUDFLARE_API_TOKEN).
  *
  * Usage (from worker/):
  *   node scripts/pull-gmail-secrets.mjs
@@ -88,9 +88,10 @@ async function main() {
     return;
   }
 
-  const apiToken = vars.get('CLOUDFLARE_API_TOKEN');
+  const apiToken = vars.get('DEV_SECRETS_KEY');
   if (!apiToken) {
-    console.error('[pull-gmail-secrets] ERROR: CLOUDFLARE_API_TOKEN missing from .dev.vars');
+    console.error('[pull-gmail-secrets] ERROR: DEV_SECRETS_KEY missing from .dev.vars');
+    console.error('[pull-gmail-secrets] Set a dedicated export key (wrangler secret put DEV_SECRETS_KEY) — do not reuse CLOUDFLARE_API_TOKEN.');
     process.exit(OPTIONAL ? 0 : 1);
   }
 

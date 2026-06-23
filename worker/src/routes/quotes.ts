@@ -437,7 +437,7 @@ app.post('/manual-requests/resolve-quote', async (c) => {
   const { jobberIntegration, activityLog } = await createJobberIntegration(db, c.env);
   const quoteDraftService = new QuoteDraftService(db);
   const importer = new JobberQuoteImportService(db, quoteDraftService, jobberIntegration, activityLog);
-  const fetchRequestQuotes = (id: string) => importer.fetchQuotesForRequest(id);
+  const fetchRequestQuotes = (id: string, signal?: AbortSignal) => importer.fetchQuotesForRequest(id, signal);
 
   const result = await resolveRequestQuote(db, userId, jobberRequestId, fetchRequestQuotes);
 
@@ -475,7 +475,7 @@ app.post('/manual-requests/jobber-quotes', async (c) => {
   const { jobberIntegration, activityLog } = await createJobberIntegration(db, c.env);
   const quoteDraftService = new QuoteDraftService(db);
   const importer = new JobberQuoteImportService(db, quoteDraftService, jobberIntegration, activityLog);
-  const fetchRequestQuotes = (id: string) => importer.fetchQuotesForRequest(id);
+  const fetchRequestQuotes = (id: string, signal?: AbortSignal) => importer.fetchQuotesForRequest(id, signal);
 
   const quotesByRequest = await fetchJobberQuotesForRequests(ids, fetchRequestQuotes);
   return c.json({ quotesByRequest });

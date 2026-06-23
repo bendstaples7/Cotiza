@@ -5,6 +5,7 @@ import { sessionMiddleware } from '../middleware/session.js';
 import { JobberTokenStore } from '../services/jobber-token-store.js';
 import { JobberIntegration, ActivityLogService } from '../services/index.js';
 import { JobberWebSession } from '../services/jobber-web-session.js';
+import { createTimeoutSignal } from '../utils/abort.js';
 
 const app = new Hono<{ Bindings: Bindings; Variables: { user: User } }>();
 
@@ -13,16 +14,14 @@ app.use('*', sessionMiddleware);
 const JOBBER_PING_TIMEOUT_MS = 3_000;
 
 async function pingJobber(jobber: JobberIntegration): Promise<boolean> {
+  const { signal, clear } = createTimeoutSignal(JOBBER_PING_TIMEOUT_MS, 'Jobber health check timed out');
   try {
-    await Promise.race([
-      jobber.graphqlRequest('{ account { name } }', {}),
-      new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('Jobber health check timed out')), JOBBER_PING_TIMEOUT_MS);
-      }),
-    ]);
+    await jobber.graphqlRequest('{ account { name } }', {}, { signal });
     return jobber.isAvailable();
   } catch {
     return false;
+  } finally {
+    clear();
   }
 }
 

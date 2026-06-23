@@ -26,6 +26,11 @@ export interface Bindings {
   ENABLE_LOCAL_SYNC?: string;
   /** Secret key for admin operations (e.g. deathclock backfill). */
   BACKFILL_SECRET_KEY: string;
+  /**
+   * Separate key for exporting dev-only secrets (e.g. Gmail creds to local .dev.vars).
+   * Must NOT reuse CLOUDFLARE_API_TOKEN. Route is disabled when unset.
+   */
+  DEV_SECRETS_KEY?: string;
   /** Gmail API OAuth client ID for email context enrichment. */
   GMAIL_CLIENT_ID: string;
   /** Gmail API OAuth client secret for email context enrichment. */

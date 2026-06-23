@@ -122,14 +122,19 @@ app.post('/api/admin/backfill-deathclock', async (c) => {
 /**
  * GET /api/admin/dev-secrets/gmail
  * Export Gmail OAuth credentials for local .dev.vars setup.
- * Protected by Authorization: Bearer <CLOUDFLARE_API_TOKEN> (same token used for CF API).
+ * Protected by Authorization: Bearer <DEV_SECRETS_KEY> — a dedicated secret,
+ * not CLOUDFLARE_API_TOKEN. Route returns 404 when DEV_SECRETS_KEY is unset.
  */
 app.get('/api/admin/dev-secrets/gmail', async (c) => {
+  const expected = (c.env.DEV_SECRETS_KEY || '').trim();
+  if (!expected) {
+    return c.json({ error: 'Not found' }, 404);
+  }
+
   const authHeader = c.req.header('Authorization') || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-  const expected = (c.env.CLOUDFLARE_API_TOKEN || '').trim();
 
-  if (!expected || token !== expected) {
+  if (!token || token !== expected) {
     return c.json({ error: 'Unauthorized' }, 401);
   }
 
