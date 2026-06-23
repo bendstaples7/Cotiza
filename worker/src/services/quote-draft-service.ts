@@ -355,6 +355,18 @@ export class QuoteDraftService {
    */
   async prependEmailContext(draftId: string, userId: string, emailContext: string): Promise<QuoteDraft> {
     const draft = await this.getById(draftId, userId);
+
+    if (draft.reviewStatus === 'pending_review') {
+      throw new PlatformError({
+        severity: 'error',
+        component: 'QuoteDraftService',
+        operation: 'prependEmailContext',
+        description: 'Cannot modify a quote that is currently under review.',
+        recommendedActions: ['Wait for the review to complete, or request changes'],
+        statusCode: 400,
+      });
+    }
+
     const trimmedContext = emailContext.trim();
     if (!trimmedContext) return draft;
 

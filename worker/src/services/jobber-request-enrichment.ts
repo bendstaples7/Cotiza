@@ -31,7 +31,7 @@ export interface EnrichedJobberRow {
 export function queueRowNeedsEnrichment(row: ManualRequestListRow): boolean {
   if (row.requestSource !== 'jobber' || !row.jobberRequestId) return false;
   const name = row.customerName?.trim();
-  if (!name || isPlaceholderJobberClientName(name) || name.toLowerCase() === 'null') return true;
+  if (!name || isPlaceholderJobberClientName(name) || isAbsentStoredValue(name)) return true;
   if (!row.requestBodyText?.trim() && !row.noteHighlights?.length) return true;
   return false;
 }

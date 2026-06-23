@@ -19,6 +19,7 @@ const PROD_WORKER_URL = 'https://social-media-cross-poster.chicago-reno.workers.
 
 const GMAIL_KEYS = ['GMAIL_CLIENT_ID', 'GMAIL_CLIENT_SECRET', 'GMAIL_REFRESH_TOKEN'];
 const OPTIONAL = process.argv.includes('--optional');
+const FETCH_TIMEOUT_MS = 10_000;
 
 function parseDevVars(content) {
   const map = new Map();
@@ -95,9 +96,17 @@ async function main() {
 
   console.log('[pull-gmail-secrets] Fetching Gmail secrets from production worker...');
 
-  const res = await fetch(`${PROD_WORKER_URL}/api/admin/dev-secrets/gmail`, {
-    headers: { Authorization: `Bearer ${apiToken}` },
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(`${PROD_WORKER_URL}/api/admin/dev-secrets/gmail`, {
+      headers: { Authorization: `Bearer ${apiToken}` },
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!res.ok) {
     const body = await res.text();

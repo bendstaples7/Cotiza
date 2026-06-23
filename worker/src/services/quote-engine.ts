@@ -1141,7 +1141,7 @@ export class QuoteEngine {
       description: li.description ?? '',
       quantity: li.quantity,
       unitPrice: li.unitPrice,
-      confidenceScore: 85,
+      confidenceScore: 0,
       originalText: li.originalText || li.productName,
       unmatchedReason: undefined,
     }));
@@ -1154,6 +1154,7 @@ export class QuoteEngine {
           aiItems,
           input.customerText,
         );
+        const alignmentReturned = alignmentScores.size > 0;
         for (const item of aiItems) {
           const alignment = alignmentScores.get(item.id ?? '');
           if (alignment !== undefined) {
@@ -1161,6 +1162,12 @@ export class QuoteEngine {
             if (alignment.reason) {
               item.unmatchedReason = alignment.reason;
             }
+          } else if (alignmentReturned) {
+            item.confidenceScore = CONFIDENCE_THRESHOLD - 1;
+            item.unmatchedReason = item.unmatchedReason || 'No alignment score returned for this line item';
+          } else {
+            item.confidenceScore = CONFIDENCE_THRESHOLD - 1;
+            item.unmatchedReason = item.unmatchedReason || 'Request alignment scoring returned no results';
           }
         }
       } catch (err) {
@@ -1168,6 +1175,14 @@ export class QuoteEngine {
           '[QuoteEngine] Request alignment scoring failed:',
           err instanceof Error ? err.message : err,
         );
+        for (const item of aiItems) {
+          item.confidenceScore = CONFIDENCE_THRESHOLD - 1;
+          item.unmatchedReason = item.unmatchedReason || 'Request alignment scoring failed';
+        }
+      }
+    } else {
+      for (const item of aiItems) {
+        item.confidenceScore = CONFIDENCE_THRESHOLD;
       }
     }
 
@@ -1700,6 +1715,16 @@ export function detectRequestScopes(customerText: string): Set<string> {
   // Exterior work
   if (/\bexterior\b|\boutside\b|\boutdoor\b|\broof\b|\broofing\b|\bsiding\b|\bgutter\b|\bfence\b|\bfencing\b|\bdeck\b|\bporch\b/.test(text)) {
     scopes.add('exterior');
+  }
+
+  // Plumbing work
+  if (/\bplumb(?:ing|er)?\b|\bpipe(?:s|d)?\b|\bdrain(?:age)?\b|\bwater line\b|\bshower\b|\bfaucet\b|\bsink\b|\btoilet\b|\bvalve\b/.test(text)) {
+    scopes.add('plumbing');
+  }
+
+  // Electrical work
+  if (/\belectri(?:c|cal|cian)\b|\bwiring\b|\bwire\b|\boutlet\b|\bswitch\b|\bbreaker\b|\bpanel\b|\blight(?:ing)?\b|\brecessed\b/.test(text)) {
+    scopes.add('electrical');
   }
 
   // If only 'any' was added (no surface keywords found), return empty set

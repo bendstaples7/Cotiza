@@ -121,11 +121,20 @@ export async function resolveRequestQuote(
   }
 
   const jobberQuotes: ResolvedJobberQuote[] = [];
-  for (const quote of activeQuotes) {
-    const imported = await db.prepare(
-      'SELECT id FROM quote_drafts WHERE jobber_quote_id = ? AND user_id = ? LIMIT 1',
-    ).bind(quote.id, userId).first<{ id: string }>();
-    jobberQuotes.push(toResolvedJobberQuote(quote, imported?.id ?? null));
+  if (activeQuotes.length > 0) {
+    const placeholders = activeQuotes.map(() => '?').join(', ');
+    const quoteIds = activeQuotes.map((q) => q.id);
+    const importedResult = await db.prepare(
+      `SELECT jobber_quote_id, id FROM quote_drafts WHERE user_id = ? AND jobber_quote_id IN (${placeholders})`,
+    ).bind(userId, ...quoteIds).all<{ jobber_quote_id: string; id: string }>();
+
+    const importedByQuoteId = new Map(
+      (importedResult.results ?? []).map((row) => [row.jobber_quote_id, row.id]),
+    );
+
+    for (const quote of activeQuotes) {
+      jobberQuotes.push(toResolvedJobberQuote(quote, importedByQuoteId.get(quote.id) ?? null));
+    }
   }
 
   const recommendedAction = computeRecommendedAction({ jobberQuotes, cotizaDraft });

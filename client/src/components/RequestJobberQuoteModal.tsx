@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import type { ResolveRequestQuoteResult } from '../api';
 import { importJobberQuote } from '../api';
 
@@ -35,6 +35,12 @@ export default function RequestJobberQuoteModal({
   const primaryQuote = displayQuotes[0];
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const handleImport = async () => {
     if (!primaryQuote || primaryQuote.importedDraftId) return;
@@ -42,11 +48,17 @@ export default function RequestJobberQuoteModal({
     setImportError(null);
     try {
       const result = await importJobberQuote(primaryQuote.id);
-      onOpenCotiza(result.draft.id);
+      if (mountedRef.current) {
+        onOpenCotiza(result.draft.id);
+      }
     } catch (err) {
-      setImportError((err as { message?: string }).message ?? 'Failed to import Jobber quote.');
+      if (mountedRef.current) {
+        setImportError((err as { message?: string }).message ?? 'Failed to import Jobber quote.');
+      }
     } finally {
-      setImporting(false);
+      if (mountedRef.current) {
+        setImporting(false);
+      }
     }
   };
 
@@ -118,7 +130,7 @@ export default function RequestJobberQuoteModal({
               Open existing Cotiza draft (D-{resolution.cotizaDraft!.draftNumber})
             </button>
           )}
-          <button type="button" style={ghostBtnStyle} onClick={onClose}>
+          <button type="button" style={ghostBtnStyle} onClick={onClose} disabled={importing}>
             Cancel
           </button>
         </div>

@@ -272,7 +272,10 @@ export class EmailContextService {
     if (!accessToken) return null;
 
     const lastName = normalizedName.split(/\s+/).pop();
-    const queries = [normalizedName, lastName].filter((q): q is string => Boolean(q?.trim()));
+    const queries = [normalizedName];
+    if (lastName && lastName !== normalizedName) {
+      queries.push(lastName);
+    }
     const seenIds = new Set<string>();
 
     for (const rawQuery of queries) {
@@ -283,14 +286,19 @@ export class EmailContextService {
       );
       if (!listResult?.messages?.length) continue;
 
-      for (const msgRef of listResult.messages) {
-        if (seenIds.has(msgRef.id)) continue;
+      const newRefs = listResult.messages.filter((msgRef) => !seenIds.has(msgRef.id));
+      for (const msgRef of newRefs) {
         seenIds.add(msgRef.id);
+      }
 
-        const msg = await this.apiFetch<GmailMessage & { snippet?: string }>(
+      const messageDetails = await Promise.all(
+        newRefs.map((msgRef) => this.apiFetch<GmailMessage & { snippet?: string }>(
           accessToken,
           `/messages/${msgRef.id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject`,
-        );
+        )),
+      );
+
+      for (const msg of messageDetails) {
         if (!msg) continue;
 
         const headerText = (msg.payload?.headers ?? [])
@@ -367,7 +375,7 @@ function isAutomatedEmail(email: string): boolean {
     || lower.includes('getjobber.com')
     || lower.includes('xsmtpapi')
     || lower.includes('@em9688.')
-    || lower.includes('@ip-');
+    || /\.ip-\d/i.test(lower);
 }
 
 /** Pick the best customer email from message text (Jobber notifications include email in snippet). */

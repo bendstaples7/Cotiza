@@ -65,7 +65,11 @@ app.get('/health', async (c) => {
     console.warn(`[health] Missing env vars: ${missing.join(', ')}`);
   }
   checks.env = missing.length > 0 ? 'degraded' : 'ok';
-  checks.gmail = (c.env.GMAIL_CLIENT_ID && c.env.GMAIL_CLIENT_SECRET && c.env.GMAIL_REFRESH_TOKEN)
+  checks.gmail = [
+    c.env.GMAIL_CLIENT_ID,
+    c.env.GMAIL_CLIENT_SECRET,
+    c.env.GMAIL_REFRESH_TOKEN,
+  ].every((value) => value?.trim())
     ? 'ok'
     : 'missing';
 
@@ -138,6 +142,8 @@ app.get('/api/admin/dev-secrets/gmail', async (c) => {
     GMAIL_CLIENT_ID,
     GMAIL_CLIENT_SECRET,
     GMAIL_REFRESH_TOKEN,
+  }, 200, {
+    'Cache-Control': 'no-store',
   });
 });
 

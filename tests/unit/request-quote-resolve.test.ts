@@ -5,6 +5,7 @@ import {
   type ResolvedCotizaDraft,
   type ResolvedJobberQuote,
 } from '../../worker/src/services/request-quote-resolve-service.js';
+import type { ImportableQuote } from '../../worker/src/services/jobber-quote-importer.js';
 import { createMockD1, configurePrepareResults } from './helpers/mock-d1.js';
 
 function jobberQuote(overrides: Partial<ResolvedJobberQuote> & { id: string }): ResolvedJobberQuote {
@@ -83,7 +84,7 @@ describe('resolveRequestQuote', () => {
     const db = createMockD1();
     configurePrepareResults(db, [
       { first: null },
-      { first: null },
+      { all: { results: [] } },
     ]);
 
     const fetchRequestQuotes = vi.fn().mockResolvedValue([
@@ -111,7 +112,7 @@ describe('resolveRequestQuote', () => {
     const db = createMockD1();
     configurePrepareResults(db, [
       { first: null },
-      { first: { id: 'draft-99' } },
+      { all: { results: [{ jobber_quote_id: 'jobber-q-1', id: 'draft-99' }] } },
     ]);
 
     const fetchRequestQuotes = vi.fn().mockResolvedValue([
@@ -155,5 +156,32 @@ describe('resolveRequestQuote', () => {
     expect(result.jobberQuotes).toEqual([]);
     expect(result.recommendedAction).toBe('open_cotiza');
     expect(result.cotizaDraft?.id).toBe('draft-1');
+  });
+
+  it('fails open when Jobber lookup times out', async () => {
+    vi.useFakeTimers();
+    const db = createMockD1();
+    configurePrepareResults(db, [
+      {
+        first: {
+          id: 'draft-1',
+          draft_number: 87,
+          jobber_quote_id: null,
+          customer_request_text: 'Existing request text',
+          line_item_count: 0,
+        },
+      },
+    ]);
+
+    const fetchRequestQuotes = vi.fn(() => new Promise<ImportableQuote[]>(() => {}));
+
+    const resultPromise = resolveRequestQuote(db, 'user-1', 'req-1', fetchRequestQuotes);
+    await vi.advanceTimersByTimeAsync(5_001);
+    const result = await resultPromise;
+    vi.useRealTimers();
+
+    expect(result.jobberLookupFailed).toBe(true);
+    expect(result.jobberQuotes).toEqual([]);
+    expect(result.recommendedAction).toBe('open_cotiza');
   });
 });

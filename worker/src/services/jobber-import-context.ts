@@ -53,8 +53,11 @@ export async function buildJobberImportCustomerContext(
         }
       }
     }
-  } catch {
-    // Graceful degradation — email context failure must not block import scoring
+  } catch (err) {
+    console.warn(
+      '[buildJobberImportCustomerContext] Email enrichment failed:',
+      err instanceof Error ? err.message : err,
+    );
   }
 
   return customerText;

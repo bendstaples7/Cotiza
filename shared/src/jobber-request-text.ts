@@ -96,15 +96,17 @@ export function extractCustomerEmailFromRequestBody(requestBody: unknown): strin
 }
 
 function extractClientNameFromBody(detail: Record<string, unknown>): string | null {
-  const companyName = typeof detail.companyName === 'string' ? detail.companyName.trim() : '';
-  const contactName = typeof detail.contactName === 'string' ? detail.contactName.trim() : '';
+  const companyName = normalizeStoredField(typeof detail.companyName === 'string' ? detail.companyName : null) ?? '';
+  const contactName = normalizeStoredField(typeof detail.contactName === 'string' ? detail.contactName : null) ?? '';
   const client = detail.client as {
     firstName?: string;
     lastName?: string;
     companyName?: string;
   } | undefined;
   const fromClient = client
-    ? `${client.firstName || ''} ${client.lastName || ''}`.trim() || (client.companyName?.trim() ?? '')
+    ? normalizeStoredField(
+      `${client.firstName || ''} ${client.lastName || ''}`.trim() || (client.companyName?.trim() ?? ''),
+    ) ?? ''
     : '';
   for (const candidate of [contactName, fromClient, companyName]) {
     if (candidate && !isPlaceholderJobberClientName(candidate)) {
@@ -139,10 +141,10 @@ export function resolveJobberRequestFields(input: {
   }
 
   const structuredNotes = detail ? parseStructuredNotesFromRequestBody(detail) : [];
-  const titleFromBody = typeof detail?.title === 'string' ? detail.title.trim() : '';
+  const titleFromBody = normalizeStoredField(typeof detail?.title === 'string' ? detail.title : null) ?? '';
   const requestTitle = (normalizeStoredField(input.title) || titleFromBody || null);
   const description = normalizeStoredField(input.description)
-    || (typeof detail?.description === 'string' ? detail.description.trim() : '')
+    || normalizeStoredField(typeof detail?.description === 'string' ? detail.description : null)
     || null;
 
   const storedName = normalizeStoredField(input.clientName);

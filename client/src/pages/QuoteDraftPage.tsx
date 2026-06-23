@@ -153,7 +153,10 @@ export default function QuoteDraftPage() {
 
   // Lazy-load Gmail history when not already embedded in customerRequestText
   useEffect(() => {
-    if (!draft?.id || cameFromReview) return;
+    if (!draft?.id || cameFromReview) {
+      setEmailContextLoading(false);
+      return;
+    }
 
     const { emailContext } = splitEmailContextFromCustomerText(draft.customerRequestText || '');
     if (emailContext) {
@@ -163,10 +166,12 @@ export default function QuoteDraftPage() {
         messages: parseEmailMessages(emailContext),
         gmailConfigured: true,
       });
+      setEmailContextLoading(false);
       return;
     }
 
     let cancelled = false;
+    setEmailContextInfo(null);
     setEmailContextLoading(true);
     fetchDraftEmailContext(draft.id)
       .then(async (info) => {

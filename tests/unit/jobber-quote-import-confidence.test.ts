@@ -131,4 +131,16 @@ describe('detectRequestScopes', () => {
     expect(scopes.has('ceiling')).toBe(true);
     expect(scopes.has('floor')).toBe(false);
   });
+
+  it('detects plumbing scope from customer text', () => {
+    const scopes = detectRequestScopes('Need a plumber to replace the shower valve');
+    expect(scopes.has('plumbing')).toBe(true);
+    expect(scopes.has('electrical')).toBe(false);
+  });
+
+  it('detects electrical scope from customer text', () => {
+    const scopes = detectRequestScopes('Install recessed lighting and new wiring');
+    expect(scopes.has('electrical')).toBe(true);
+    expect(scopes.has('plumbing')).toBe(false);
+  });
 });

@@ -95,40 +95,49 @@ export default function RequestQueuePage() {
           && r.jobberRequestId
           && isPlaceholderJobberClientName(r.customerName),
         )
-        .map((r) => r.jobberRequestId as string)
-        .slice(0, 10);
+        .map((r) => r.jobberRequestId as string);
+      const enrichInBatches = async (ids: string[], batchSize: number, fn: (chunk: string[]) => Promise<void>) => {
+        for (let i = 0; i < ids.length; i += batchSize) {
+          await fn(ids.slice(i, i + batchSize));
+        }
+      };
       if (sparseJobberIds.length > 0) {
-        enrichManualRequests(sparseJobberIds)
-          .then((enriched) => {
-            if (enriched.length === 0) return;
-            setRequests((prev) => prev.map((req) => {
-              const hit = enriched.find((e) => e.jobberRequestId === req.jobberRequestId);
-              if (!hit) return req;
-              return {
-                ...req,
-                customerName: hit.customerName,
-                requestTitle: hit.requestTitle,
-                requestBodyText: hit.requestBodyText,
-                noteHighlights: hit.noteHighlights,
-                serviceDescription: hit.serviceDescription,
-              };
-            }));
-          })
-          .catch(() => { /* best-effort background enrich */ });
+        void enrichInBatches(sparseJobberIds, 10, async (chunk) => {
+          const enriched = await enrichManualRequests(chunk);
+          if (enriched.length === 0) return;
+          setRequests((prev) => prev.map((req) => {
+            const hit = enriched.find((e) => e.jobberRequestId === req.jobberRequestId);
+            if (!hit) return req;
+            return {
+              ...req,
+              customerName: hit.customerName,
+              requestTitle: hit.requestTitle,
+              requestBodyText: hit.requestBodyText,
+              noteHighlights: hit.noteHighlights,
+              serviceDescription: hit.serviceDescription,
+            };
+          }));
+        }).catch(() => { /* best-effort background enrich */ });
       }
 
       const jobberIdsForBadges = result
         .filter((r) => r.jobberRequestId)
-        .map((r) => r.jobberRequestId as string)
-        .slice(0, 10);
+        .map((r) => r.jobberRequestId as string);
       if (jobberIdsForBadges.length > 0) {
-        fetchRequestJobberQuotes(jobberIdsForBadges)
-          .then((quotesByRequest) => {
-            if (Object.keys(quotesByRequest).length > 0) {
-              setJobberQuoteBadges((prev) => ({ ...prev, ...quotesByRequest }));
+        void enrichInBatches(jobberIdsForBadges, 10, async (chunk) => {
+          const quotesByRequest = await fetchRequestJobberQuotes(chunk);
+          setJobberQuoteBadges((prev) => {
+            const next = { ...prev };
+            for (const id of chunk) {
+              if (quotesByRequest[id]?.length) {
+                next[id] = quotesByRequest[id];
+              } else {
+                delete next[id];
+              }
             }
-          })
-          .catch(() => { /* best-effort badge fetch */ });
+            return next;
+          });
+        }).catch(() => { /* best-effort badge fetch */ });
       }
     } catch (err) {
       setError((err as ErrorResponse).message ?? 'Failed to load request queue.');
@@ -201,7 +210,9 @@ export default function RequestQueuePage() {
 
   const runGenerateQuote = async (req: ManualRequestWithDeathclock) => {
     const cardKey = req.jobberRequestId ?? req.id;
+    if (generatingForId) return;
     setGenerateError(null);
+    setGeneratingForId(cardKey);
 
     try {
       const drafts = await fetchDrafts();
@@ -221,7 +232,6 @@ export default function RequestQueuePage() {
         await deleteDraft(existingDraft.id);
       }
 
-      setGeneratingForId(cardKey);
       const payload = req.jobberRequestId
         ? { jobberRequestId: req.jobberRequestId }
         : { manualRequestId: req.id, customerText: '' };

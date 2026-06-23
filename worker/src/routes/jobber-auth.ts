@@ -15,6 +15,40 @@ const app = new Hono<{ Bindings: Bindings }>();
 const JOBBER_AUTHORIZE_URL = 'https://api.getjobber.com/api/oauth/authorize';
 const JOBBER_TOKEN_URL = 'https://api.getjobber.com/api/oauth/token';
 
+function toBase64Url(bytes: ArrayBuffer): string {
+  const binary = String.fromCharCode(...new Uint8Array(bytes));
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+async function signOAuthState(secret: string): Promise<string> {
+  const nonce = crypto.randomUUID();
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(nonce));
+  return `${nonce}.${toBase64Url(signature)}`;
+}
+
+async function verifyOAuthState(state: string, secret: string): Promise<boolean> {
+  const [nonce, sig] = state.split('.');
+  if (!nonce || !sig) return false;
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(nonce));
+  return sig === toBase64Url(signature);
+}
+
 /** Stable OAuth callback URL — must match a redirect URI registered in the Jobber app. */
 function oauthRedirectUri(c: { req: { url: string }; env: Bindings }): string {
   const frontend = c.env.FRONTEND_URL || '';
@@ -49,10 +83,11 @@ app.use('*', async (c, next) => {
  * GET /authorize
  * Redirects the user to Jobber's OAuth authorization page.
  */
-app.get('/authorize', (c) => {
+app.get('/authorize', async (c) => {
   const clientId = c.env.JOBBER_CLIENT_ID;
-  if (!clientId) {
-    return c.json({ error: 'JOBBER_CLIENT_ID is not configured' }, 500);
+  const clientSecret = c.env.JOBBER_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    return c.json({ error: 'JOBBER_CLIENT_ID and JOBBER_CLIENT_SECRET must be configured' }, 500);
   }
 
   // Callback URL must match Jobber app redirect URIs exactly
@@ -63,6 +98,7 @@ app.get('/authorize', (c) => {
   authUrl.searchParams.set('redirect_uri', redirectUri);
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set('scope', 'read:account read:clients read:quotes');
+  authUrl.searchParams.set('state', await signOAuthState(clientSecret));
 
   return c.redirect(authUrl.toString());
 });
@@ -88,6 +124,7 @@ app.get('/callback', async (c) => {
   }
 
   const code = c.req.query('code');
+  const state = c.req.query('state');
   if (!code) {
     return c.redirect(frontendUrl + returnPath + '?oauth_error=' + encodeURIComponent('Missing authorization code'));
   }
@@ -97,6 +134,10 @@ app.get('/callback', async (c) => {
 
   if (!clientId || !clientSecret) {
     return c.redirect(frontendUrl + returnPath + '?oauth_error=' + encodeURIComponent('Server configuration error'));
+  }
+
+  if (!state || !(await verifyOAuthState(state, clientSecret))) {
+    return c.redirect(frontendUrl + returnPath + '?oauth_error=' + encodeURIComponent('Invalid OAuth state'));
   }
 
   const redirectUri = oauthRedirectUri(c);

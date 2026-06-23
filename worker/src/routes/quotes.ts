@@ -338,12 +338,14 @@ app.get('/manual-requests', async (c) => {
   const manualRequestService = new ManualRequestService(db);
   let rows = await manualRequestService.list({ userId, sortBy, includeDeathclock });
 
-  try {
-    const { jobberIntegration } = await createJobberIntegration(db, c.env);
-    rows = await enrichSparseQueueRows(db, rows, jobberIntegration, 5, 8_000);
-  } catch {
-    // Enrichment is best-effort — never block the queue list
-  }
+  void (async () => {
+    try {
+      const { jobberIntegration } = await createJobberIntegration(db, c.env);
+      await enrichSparseQueueRows(db, rows, jobberIntegration, 3, 2_000);
+    } catch {
+      // Best-effort background enrichment — never block the queue list
+    }
+  })();
 
   if (includeDeathclock) {
     const items = rows.map(row => ({
@@ -759,6 +761,16 @@ app.post('/generate', async (c) => {
   const trimmedCustomerTextForValidation = (body.customerText ?? '').trim();
   const trimmedJobberRequestId = (body.jobberRequestId ?? '').trim();
   const trimmedManualRequestId = (body.manualRequestId ?? '').trim();
+  if (trimmedJobberRequestId) {
+    body.jobberRequestId = trimmedJobberRequestId;
+  } else {
+    body.jobberRequestId = undefined;
+  }
+  if (trimmedManualRequestId) {
+    body.manualRequestId = trimmedManualRequestId;
+  } else {
+    body.manualRequestId = undefined;
+  }
   if (!trimmedCustomerTextForValidation && (!body.mediaItemIds || body.mediaItemIds.length === 0) && !trimmedJobberRequestId && !trimmedManualRequestId) {
     throw new PlatformError({
       severity: 'error',
@@ -986,9 +998,7 @@ app.post('/generate', async (c) => {
           body.customerText = emailContext + '\n\n' + (body.customerText ?? '');
         } else {
           console.warn(
-            '[quotes/generate] Email enrichment empty for',
-            customerEmail,
-            'after',
+            '[quotes/generate] Email enrichment empty after',
             Date.now() - enrichmentStarted,
             'ms',
           );
@@ -1147,7 +1157,10 @@ app.get('/drafts/:id/email-context', async (c) => {
   }
 
   if (!customerEmail && draft.clientName?.trim()) {
-    customerEmail = await emailService.findCustomerEmailByName(draft.clientName.trim());
+    customerEmail = await Promise.race<string | null>([
+      emailService.findCustomerEmailByName(draft.clientName.trim()),
+      new Promise<string | null>((resolve) => setTimeout(() => resolve(null), 8_000)),
+    ]);
   }
 
   if (!customerEmail) {

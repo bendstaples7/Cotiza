@@ -143,7 +143,7 @@ const FETCH_QUOTE_BY_ID_QUERY = `
 const REQUEST_QUOTES_QUERY = `
   query RequestQuotes($id: EncodedId!) {
     request(id: $id) {
-      quotes(first: 10) {
+      quotes(first: 50) {
         nodes {
           id
           quoteNumber
@@ -249,7 +249,8 @@ export class JobberQuoteImportService {
   /**
    * Import a single Jobber quote as a Cotiza quote draft.
    *
-   * Validates: status must be 'draft' or 'sent', must not already be imported.
+   * Validates: quote must not already be imported.
+   * Status handling: in-progress statuses are preferred; non-active statuses are imported with a warning.
    * Transforms: creates a quote draft with line items, customer text, and
    * links back to the original Jobber quote.
    */
@@ -382,7 +383,7 @@ export class JobberQuoteImportService {
     }
 
     // Warnings for empty line items
-    if (lineItems.length === 0) {
+    if (lineItems.length === 0 && unresolvedItems.length === 0) {
       warnings.push('Quote has no line items. An empty draft will be created.');
     }
 

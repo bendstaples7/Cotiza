@@ -106,5 +106,6 @@ describe('JobberQuoteImportService import scoring hook', () => {
     expect(savedPayload.lineItems).toHaveLength(0);
     expect(savedPayload.unresolvedItems).toHaveLength(1);
     expect(result.warnings.some((w) => /below confidence threshold/i.test(w))).toBe(true);
+    expect(result.warnings.some((w) => /empty draft/i.test(w))).toBe(false);
   });
 });
