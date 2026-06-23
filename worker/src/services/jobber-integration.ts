@@ -1,6 +1,7 @@
 import { ActivityLogService } from './activity-log-service.js';
 import type { JobberTokenStore } from './jobber-token-store.js';
 import type { ProductCatalogEntry, JobberCustomerRequest } from 'shared';
+import { abortableDelay, combineAbortSignals } from '../utils/abort.js';
 
 const DEFAULT_CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes
 const API_TIMEOUT_MS = 10_000;
@@ -458,18 +459,33 @@ export class JobberIntegration {
    * Automatically refreshes the access token on 401 and retries once.
    * Retries on throttle errors with exponential backoff.
    */
-  async graphqlRequest<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
+  async graphqlRequest<T>(
+    query: string,
+    variables?: Record<string, unknown>,
+    options?: { signal?: AbortSignal },
+  ): Promise<T> {
+    const signal = options?.signal;
     const MAX_RETRIES = 3;
     const BASE_DELAY_MS = 2000;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      const result = await this.executeGraphql<T>(query, variables);
+      if (signal?.aborted) {
+        throw signal.reason ?? new Error('Aborted');
+      }
+
+      const result = await this.executeGraphql<T>(query, variables, signal);
 
       // If we got a 401 and have a refresh token, try refreshing and retry once
       if (result.status === 401 && this.refreshToken) {
+        if (signal?.aborted) {
+          throw signal.reason ?? new Error('Aborted');
+        }
         const refreshed = await this.refreshAccessToken();
         if (refreshed) {
-          const retry = await this.executeGraphql<T>(query, variables);
+          if (signal?.aborted) {
+            throw signal.reason ?? new Error('Aborted');
+          }
+          const retry = await this.executeGraphql<T>(query, variables, signal);
           if (retry.status !== undefined) {
             throw new Error(`Jobber API error (${retry.status}): ${retry.errorText}`);
           }
@@ -487,7 +503,7 @@ export class JobberIntegration {
       if (result.throttled && attempt < MAX_RETRIES) {
         const delay = BASE_DELAY_MS * Math.pow(2, attempt);
         console.log(`[JobberIntegration] Throttled, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        await abortableDelay(delay, signal);
         continue;
       }
 
@@ -501,7 +517,11 @@ export class JobberIntegration {
     throw new Error('Jobber API: unexpected retry loop exit');
   }
 
-  private async executeGraphql<T>(query: string, variables?: Record<string, unknown>): Promise<{
+  private async executeGraphql<T>(
+    query: string,
+    variables?: Record<string, unknown>,
+    externalSignal?: AbortSignal,
+  ): Promise<{
     data?: T;
     status?: number;
     errorText?: string;
@@ -518,8 +538,12 @@ export class JobberIntegration {
     console.log(`[DEBUG] executeGraphql token_checksum=${tokenSum} len=${this.accessToken.length}`);
     console.log(`[DEBUG] query hint: ${query.substring(0, 60).replace(/\n/g, ' ')}`);
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+    const timeoutController = new AbortController();
+    const timeout = setTimeout(
+      () => timeoutController.abort(new Error('Jobber API request timed out')),
+      API_TIMEOUT_MS,
+    );
+    const signal = combineAbortSignals(timeoutController.signal, externalSignal);
 
     try {
       const response = await fetch(this.apiUrl, {
@@ -530,7 +554,7 @@ export class JobberIntegration {
           'X-JOBBER-GRAPHQL-VERSION': '2025-04-16',
         },
         body: JSON.stringify({ query, variables }),
-        signal: controller.signal,
+        signal,
       });
 
       if (!response.ok) {
@@ -556,6 +580,13 @@ export class JobberIntegration {
 
       console.log(`[DEBUG] Jobber success, data keys: ${Object.keys(json.data as object).join(',')}`);
       return { data: json.data };
+    } catch (err) {
+      if (signal?.aborted) {
+        throw externalSignal?.aborted
+          ? (externalSignal.reason ?? new Error('Aborted'))
+          : new Error('Jobber API request timed out');
+      }
+      throw err;
     } finally {
       clearTimeout(timeout);
     }

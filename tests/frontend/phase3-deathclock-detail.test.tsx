@@ -71,6 +71,12 @@ const mockFetchDeathclock = vi.fn<(...args: unknown[]) => Promise<DeathclockStat
 const mockFetchDeathclockStats = vi.fn<(...args: unknown[]) => Promise<Record<string, number>>>();
 const mockFetchTrends = vi.fn<(...args: unknown[]) => Promise<Record<string, unknown>>>();
 const mockMarkRequestSent = vi.fn<(...args: unknown[]) => Promise<Record<string, unknown>>>();
+const mockFetchDraftEmailContext = vi.fn().mockResolvedValue({
+  status: 'unavailable' as const,
+  customerEmail: null,
+  messages: [],
+  gmailConfigured: false,
+});
 
 vi.mock('../../client/src/api', () => ({
   fetchDraft: mockFetchDraft,
@@ -78,6 +84,7 @@ vi.mock('../../client/src/api', () => ({
   fetchDeathclockStats: mockFetchDeathclockStats,
   fetchTrends: mockFetchTrends,
   markRequestSent: mockMarkRequestSent,
+  fetchDraftEmailContext: mockFetchDraftEmailContext,
   fetchRules: vi.fn().mockResolvedValue([]),
   fetchJobberRequestDetail: vi.fn().mockRejectedValue(new Error('not found')),
   fetchCatalog: vi.fn().mockResolvedValue([]),

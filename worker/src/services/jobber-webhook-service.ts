@@ -1,6 +1,7 @@
 import { ActivityLogService } from './activity-log-service.js';
 import type { JobberTokenStore } from './jobber-token-store.js';
 import type { JobberCustomerRequest } from 'shared';
+import { isPlaceholderJobberClientName } from 'shared';
 
 const JOBBER_GRAPHQL_URL = 'https://api.getjobber.com/api/graphql';
 
@@ -196,10 +197,17 @@ export class JobberWebhookService {
       .join('\n\n');
 
     const clientDetail = detail.client;
-    const clientName = detail.companyName
-      || detail.contactName
-      || (clientDetail ? `${clientDetail.firstName || ''} ${clientDetail.lastName || ''}`.trim() || clientDetail.companyName : null)
-      || null;
+    const fromClient = clientDetail
+      ? `${clientDetail.firstName || ''} ${clientDetail.lastName || ''}`.trim() || clientDetail.companyName
+      : null;
+    let clientName: string | null = null;
+    for (const candidate of [detail.contactName, fromClient, detail.companyName]) {
+      const trimmed = candidate?.trim();
+      if (trimmed && !isPlaceholderJobberClientName(trimmed)) {
+        clientName = trimmed;
+        break;
+      }
+    }
 
     return { imageUrls, description, clientName };
   }

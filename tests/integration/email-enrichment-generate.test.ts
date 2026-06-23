@@ -28,6 +28,7 @@ vi.mock('../../worker/src/services/auth-service.js', () => ({
 
 vi.mock('../../worker/src/services/email-context-service.js', () => ({
   EmailContextService: vi.fn().mockImplementation(() => ({
+    isAvailable: () => true,
     fetchContext: mockFetchContext,
   })),
 }));
@@ -188,7 +189,21 @@ describe('POST /api/quotes/generate email enrichment', () => {
         first: vi.fn().mockImplementation(async () => {
           if (sql.includes('jobber_webhook_requests')) {
             return {
-              request_body: JSON.stringify({ email: 'client@example.com', title: 'Kitchen job' }),
+              title: 'Kitchen job',
+              description: 'Replace cabinets',
+              request_body: JSON.stringify({
+                email: 'client@example.com',
+                title: 'Kitchen job',
+                notes: {
+                  edges: [{
+                    node: {
+                      message: 'Replace cabinets',
+                      createdAt: '2025-06-01T12:00:00Z',
+                      createdBy: { __typename: 'Client' },
+                    },
+                  }],
+                },
+              }),
             };
           }
           return null;
@@ -220,5 +235,7 @@ describe('POST /api/quotes/generate email enrichment', () => {
       expect.anything(),
       expect.anything(),
     );
+    const input = mockGenerateQuote.mock.calls[0][0];
+    expect(input.customerText).toContain('[Client] Replace cabinets');
   });
 });

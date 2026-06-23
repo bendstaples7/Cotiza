@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { MediaItem, JobberCustomerRequest } from 'shared';
+import { buildJobberCustomerText } from 'shared';
 import { uploadMedia, generateQuote, checkJobberStatus, fetchJobberRequestFormData } from '../api';
 import RequestSelector from './RequestSelector';
 import ManualRequestForm from './ManualRequestForm';
@@ -25,33 +26,13 @@ const MAX_IMAGES = 10;
 
 /**
  * Build customer text directly from the request object.
- * Single source of truth — no separate API call needed.
  */
 function buildCustomerText(request: JobberCustomerRequest): string {
-  const parts: string[] = [];
-
-  // Use description if it adds content beyond what's in the notes
-  if (request.description) {
-    const trimmedDesc = request.description.trim();
-    if (trimmedDesc) {
-      // Only skip description if it's exactly the notes joined together
-      const noteTexts = request.structuredNotes.map((n) => n.message.trim());
-      const notesJoined = noteTexts.join('\n\n');
-      if (trimmedDesc !== notesJoined) {
-        parts.push(trimmedDesc);
-      }
-    }
-  }
-
-  // Add structured notes with author labels
-  for (const note of request.structuredNotes) {
-    const trimmed = note.message.trim();
-    if (!trimmed) continue;
-    const label = note.createdBy === 'team' ? '[Team Note]' : note.createdBy === 'client' ? '[Client]' : '[System]';
-    parts.push(`${label} ${trimmed}`);
-  }
-
-  return parts.join('\n\n') || request.title?.trim() || '';
+  return buildJobberCustomerText({
+    title: request.title,
+    description: request.description,
+    structuredNotes: request.structuredNotes,
+  });
 }
 
 export default function QuoteInputPage() {

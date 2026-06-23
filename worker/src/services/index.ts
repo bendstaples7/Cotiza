@@ -12,8 +12,8 @@ export { InstagramChannel } from './instagram-channel.js';
 export { CrossPoster } from './cross-poster.js';
 export { ContentIdeasService } from './content-ideas-service.js';
 export { JobberIntegration } from './jobber-integration.js';
-export { QuoteEngine } from './quote-engine.js';
-export type { QuoteEngineInput, QuoteEngineOutput } from './quote-engine.js';
+export { QuoteEngine, CONFIDENCE_THRESHOLD, detectRequestScopes, applyCatalogMatchingToLineItems } from './quote-engine.js';
+export type { QuoteEngineInput, QuoteEngineOutput, ScoreLineItemsInput, ScoreLineItemsOutput, CatalogMatchingOptions } from './quote-engine.js';
 export { QuoteDraftService } from './quote-draft-service.js';
 export { JobberWebhookService } from './jobber-webhook-service.js';
 export type { JobberWebhookPayload } from './jobber-webhook-service.js';
@@ -57,4 +57,15 @@ export type { SnapshotPayload } from './review-snapshot-service.js';
 export { ReviewService } from './review-service.js';
 export type { ReviewDiff, ReviewQueueItem, ReviewDetail } from './review-service.js';
 export { JobberQuoteImportService } from './jobber-quote-importer.js';
+export { buildJobberImportCustomerContext } from './jobber-import-context.js';
+export type { JobberImportEmailConfig } from './jobber-import-context.js';
 export type { ImportableQuote, ImportableQuoteLineItem, ImportableQuoteClient, ImportableQuoteProperty, ImportQuoteResult } from './jobber-quote-importer.js';
+export {
+  enrichJobberRequest,
+  enrichSparseQueueRows,
+  resolveJobberRequestForGenerate,
+  queueRowNeedsEnrichment,
+  applyEnrichmentToListRow,
+  loadBestWebhookRow,
+} from './jobber-request-enrichment.js';
+export type { EnrichedJobberRow } from './jobber-request-enrichment.js';

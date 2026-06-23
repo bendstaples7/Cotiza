@@ -50,14 +50,14 @@ export class EmailContextService {
   private tokenExpiresAt: number = 0;
 
   constructor(
-    clientId: string,
-    clientSecret: string,
-    refreshToken: string,
+    clientId: string | undefined,
+    clientSecret: string | undefined,
+    refreshToken: string | undefined,
     activityLog?: ActivityLogService,
   ) {
-    this.clientId = clientId;
-    this.clientSecret = clientSecret;
-    this.refreshToken = refreshToken;
+    this.clientId = clientId ?? '';
+    this.clientSecret = clientSecret ?? '';
+    this.refreshToken = refreshToken ?? '';
     this.activityLog = activityLog;
   }
 
@@ -212,17 +212,18 @@ export class EmailContextService {
     const parts: string[] = [];
 
     for (const msg of messages) {
-      const from = this.getHeader(msg.payload.headers, 'From');
-      const to = this.getHeader(msg.payload.headers, 'To');
-      const subject = this.getHeader(msg.payload.headers, 'Subject');
-      const date = this.getHeader(msg.payload.headers, 'Date');
+      const headers = msg.payload?.headers ?? [];
+      const from = this.getHeader(headers, 'From');
+      const to = this.getHeader(headers, 'To');
+      const subject = this.getHeader(headers, 'Subject');
+      const date = this.getHeader(headers, 'Date');
 
       // Try to get body text
       let body = msg.snippet || '';
-      if (msg.payload.parts) {
+      if (msg.payload?.parts) {
         const extractedText = this.extractTextFromParts(msg.payload.parts);
         if (extractedText) body = extractedText;
-      } else if (msg.payload.body?.data) {
+      } else if (msg.payload?.body?.data) {
         body = this.decodeBase64(msg.payload.body.data);
       }
 
@@ -258,6 +259,70 @@ export class EmailContextService {
   }
 
   // ── Public API ─────────────────────────────────────────────────
+
+  /**
+   * When Jobber does not provide an email, search Gmail for threads mentioning
+   * the client name and extract a customer address from message snippets/headers.
+   */
+  async findCustomerEmailByName(clientName: string): Promise<string | null> {
+    const normalizedName = clientName.trim();
+    if (!this.isAvailable() || !normalizedName) return null;
+
+    const accessToken = await this.getAccessToken();
+    if (!accessToken) return null;
+
+    const lastName = normalizedName.split(/\s+/).pop();
+    const queries = [normalizedName];
+    if (lastName && lastName !== normalizedName) {
+      queries.push(lastName);
+    }
+    const seenIds = new Set<string>();
+    const nameParts = normalizedName.toLowerCase().split(/\s+/).filter((part) => part.length > 2);
+    let bestEmail: string | null = null;
+    let bestScore = -1;
+
+    for (const rawQuery of queries) {
+      const query = encodeURIComponent(rawQuery.includes(' ') ? `"${rawQuery}"` : rawQuery);
+      const listResult = await this.apiFetch<GmailListResponse>(
+        accessToken,
+        `/messages?q=${query}&maxResults=5`,
+      );
+      if (!listResult?.messages?.length) continue;
+
+      const newRefs = listResult.messages.filter((msgRef) => !seenIds.has(msgRef.id));
+      for (const msgRef of newRefs) {
+        seenIds.add(msgRef.id);
+      }
+
+      const messageDetails = await Promise.all(
+        newRefs.map((msgRef) => this.apiFetch<GmailMessage & { snippet?: string }>(
+          accessToken,
+          `/messages/${msgRef.id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject`,
+        )),
+      );
+
+      for (const msg of messageDetails) {
+        if (!msg) continue;
+
+        const headerText = (msg.payload?.headers ?? [])
+          .filter((h) => ['From', 'To', 'Subject'].includes(h.name))
+          .map((h) => h.value)
+          .join(' ');
+        const candidate = pickCustomerEmail(
+          `${headerText}\n${msg.snippet ?? ''}`,
+          normalizedName,
+        );
+        if (!candidate) continue;
+        const score = scoreCustomerEmail(candidate, nameParts);
+        if (score > bestScore) {
+          bestScore = score;
+          bestEmail = candidate;
+        }
+      }
+    }
+
+    return bestEmail;
+  }
 
   /**
    * Fetch email conversation context for a customer email address.
@@ -304,4 +369,41 @@ export class EmailContextService {
 function extractEmail(header: string): string {
   const match = header.match(/<([^>]+)>/);
   return match ? match[1] : header.trim();
+}
+
+function isCompanyEmail(email: string): boolean {
+  const lower = email.toLowerCase();
+  return lower.endsWith('@chicago-reno.com') || lower.endsWith('@chicagoreno.com');
+}
+
+function isAutomatedEmail(email: string): boolean {
+  const lower = email.toLowerCase();
+  return lower.includes('noreply')
+    || lower.includes('no-reply')
+    || lower.includes('getjobber.com')
+    || lower.includes('xsmtpapi')
+    || lower.includes('@em9688.')
+    || /\.ip-\d/i.test(lower);
+}
+
+/** Pick the best customer email from message text (Jobber notifications include email in snippet). */
+function pickCustomerEmail(text: string, clientName: string): string | null {
+  const matches = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) ?? [];
+  const nameParts = clientName.toLowerCase().split(/\s+/).filter((part) => part.length > 2);
+  const candidates = [...new Set(matches)]
+    .filter((email) => !isCompanyEmail(email) && !isAutomatedEmail(email))
+    .sort((a, b) => scoreCustomerEmail(b, nameParts) - scoreCustomerEmail(a, nameParts));
+  return candidates[0] ?? null;
+}
+
+function scoreCustomerEmail(email: string, nameParts: string[]): number {
+  const lower = email.toLowerCase();
+  let score = 0;
+  for (const part of nameParts) {
+    if (lower.includes(part)) score += 2;
+  }
+  if (lower.endsWith('@gmail.com') || lower.endsWith('@yahoo.com') || lower.endsWith('@hotmail.com')) {
+    score += 1;
+  }
+  return score;
 }

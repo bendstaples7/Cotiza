@@ -64,7 +64,19 @@ try {
     process.exit(0);
   }
 
-  // Always overwrite local with production tokens
+  const force = process.argv.includes('--force');
+  const local = queryTokens('--local');
+
+  if (local && !force) {
+    const localTime = Date.parse(String(local.updated_at).replace(' ', 'T') + 'Z') || 0;
+    const remoteTime = Date.parse(String(remote.updated_at).replace(' ', 'T') + 'Z') || 0;
+    if (localTime >= remoteTime) {
+      console.log('[sync-tokens] Local tokens are at least as recent as production — keeping local.');
+      process.exit(0);
+    }
+    console.log('[sync-tokens] Production tokens are newer — updating local.');
+  }
+
   upsertTokens('--local', remote.access_token, remote.refresh_token);
   console.log('[sync-tokens] Pulled tokens from production → local.');
 

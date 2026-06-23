@@ -14,6 +14,94 @@ const app = new Hono<{ Bindings: Bindings }>();
 
 const JOBBER_AUTHORIZE_URL = 'https://api.getjobber.com/api/oauth/authorize';
 const JOBBER_TOKEN_URL = 'https://api.getjobber.com/api/oauth/token';
+const OAUTH_STATE_TTL_MINUTES = 15;
+
+function toBase64Url(bytes: ArrayBuffer): string {
+  const binary = String.fromCharCode(...new Uint8Array(bytes));
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+async function signOAuthState(secret: string): Promise<string> {
+  const nonce = crypto.randomUUID();
+  const issuedAt = String(Math.floor(Date.now() / 1000));
+  const payload = `${nonce}.${issuedAt}`;
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
+  return `${payload}.${toBase64Url(signature)}`;
+}
+
+async function verifyOAuthState(state: string, secret: string): Promise<boolean> {
+  const parts = state.split('.');
+  if (parts.length !== 3) return false;
+  const [nonce, issuedAtStr, sig] = parts;
+  if (!nonce || !issuedAtStr || !sig) return false;
+
+  const issuedAt = Number(issuedAtStr);
+  if (!Number.isFinite(issuedAt)) return false;
+  if (Date.now() / 1000 - issuedAt > OAUTH_STATE_TTL_MINUTES * 60) return false;
+
+  const payload = `${nonce}.${issuedAtStr}`;
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
+  return sig === toBase64Url(signature);
+}
+
+async function createJobberOAuthState(db: D1Database, clientSecret: string): Promise<string> {
+  const userRow = await db.prepare('SELECT id FROM users ORDER BY created_at ASC LIMIT 1').first<{ id: string }>();
+  if (!userRow?.id) {
+    return signOAuthState(clientSecret);
+  }
+
+  const state = crypto.randomUUID();
+  await db.prepare(
+    "INSERT INTO oauth_states (id, user_id, created_at) VALUES (?, ?, datetime('now'))",
+  ).bind(state, userRow.id).run();
+  return state;
+}
+
+async function consumeJobberOAuthState(
+  db: D1Database,
+  state: string,
+  clientSecret: string,
+): Promise<boolean> {
+  const consumed = await db.prepare(
+    `DELETE FROM oauth_states
+     WHERE id = ?
+       AND datetime(created_at) > datetime('now', '-${OAUTH_STATE_TTL_MINUTES} minutes')
+     RETURNING id`,
+  ).bind(state).first<{ id: string }>();
+
+  if (consumed) return true;
+
+  return verifyOAuthState(state, clientSecret);
+}
+
+/** Stable OAuth callback URL — must match a redirect URI registered in the Jobber app. */
+function oauthRedirectUri(c: { req: { url: string }; env: Bindings }): string {
+  const frontend = c.env.FRONTEND_URL || '';
+  if (frontend.includes('localhost')) {
+    return 'http://localhost:8787/api/jobber-auth/callback';
+  }
+  return new URL('/api/jobber-auth/callback', c.req.url).toString();
+}
+
+function appReturnPath(c: { env: Bindings }): string {
+  return c.env.FRONTEND_URL?.includes('localhost') ? '/quotes/requests' : '/social/dashboard';
+}
 
 /**
  * Middleware: redirect to a simple message page if Jobber is not configured.
@@ -36,20 +124,30 @@ app.use('*', async (c, next) => {
  * GET /authorize
  * Redirects the user to Jobber's OAuth authorization page.
  */
-app.get('/authorize', (c) => {
+app.get('/authorize', async (c) => {
   const clientId = c.env.JOBBER_CLIENT_ID;
-  if (!clientId) {
-    return c.json({ error: 'JOBBER_CLIENT_ID is not configured' }, 500);
+  const clientSecret = c.env.JOBBER_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    return c.json({ error: 'JOBBER_CLIENT_ID and JOBBER_CLIENT_SECRET must be configured' }, 500);
   }
 
-  // Callback URL points back to this worker
-  const redirectUri = new URL('/api/jobber-auth/callback', c.req.url).toString();
+  let state: string;
+  try {
+    state = await createJobberOAuthState(c.env.DB, clientSecret);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Failed to initialize OAuth flow';
+    return c.json({ error: msg }, 500);
+  }
+
+  // Callback URL must match Jobber app redirect URIs exactly
+  const redirectUri = oauthRedirectUri(c);
 
   const authUrl = new URL(JOBBER_AUTHORIZE_URL);
   authUrl.searchParams.set('client_id', clientId);
   authUrl.searchParams.set('redirect_uri', redirectUri);
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set('scope', 'read:account read:clients read:quotes');
+  authUrl.searchParams.set('state', state);
 
   return c.redirect(authUrl.toString());
 });
@@ -65,27 +163,33 @@ app.get('/callback', async (c) => {
     console.error('[jobber-auth] FRONTEND_URL is not configured. OAuth callback cannot redirect.');
     return c.json({ error: 'FRONTEND_URL is not configured. Set it via wrangler secret or wrangler.toml vars.' }, 500);
   }
+  const returnPath = appReturnPath(c);
 
   // Jobber may redirect back with an error parameter instead of a code
   const jobberError = c.req.query('error');
   if (jobberError) {
     const desc = c.req.query('error_description') || jobberError;
-    return c.redirect(frontendUrl + '/social/dashboard?oauth_error=' + encodeURIComponent(desc));
+    return c.redirect(frontendUrl + returnPath + '?oauth_error=' + encodeURIComponent(desc));
   }
 
   const code = c.req.query('code');
+  const state = c.req.query('state');
   if (!code) {
-    return c.redirect(frontendUrl + '/social/dashboard?oauth_error=' + encodeURIComponent('Missing authorization code'));
+    return c.redirect(frontendUrl + returnPath + '?oauth_error=' + encodeURIComponent('Missing authorization code'));
   }
 
   const clientId = c.env.JOBBER_CLIENT_ID;
   const clientSecret = c.env.JOBBER_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
-    return c.redirect(frontendUrl + '/social/dashboard?oauth_error=' + encodeURIComponent('Server configuration error'));
+    return c.redirect(frontendUrl + returnPath + '?oauth_error=' + encodeURIComponent('Server configuration error'));
   }
 
-  const redirectUri = new URL('/api/jobber-auth/callback', c.req.url).toString();
+  if (!state || !(await consumeJobberOAuthState(c.env.DB, state, clientSecret))) {
+    return c.redirect(frontendUrl + returnPath + '?oauth_error=' + encodeURIComponent('Invalid OAuth state'));
+  }
+
+  const redirectUri = oauthRedirectUri(c);
 
   // Exchange authorization code for tokens
   const body = new URLSearchParams({
@@ -104,7 +208,7 @@ app.get('/callback', async (c) => {
 
   if (!response.ok) {
     const errorMsg = `Token exchange failed (${response.status})`;
-    return c.redirect(frontendUrl + '/social/dashboard?oauth_error=' + encodeURIComponent(errorMsg));
+    return c.redirect(frontendUrl + returnPath + '?oauth_error=' + encodeURIComponent(errorMsg));
   }
 
   const data = (await response.json()) as {
@@ -115,7 +219,7 @@ app.get('/callback', async (c) => {
   };
 
   if (!data.access_token || !data.refresh_token) {
-    return c.redirect(frontendUrl + '/social/dashboard?oauth_error=' + encodeURIComponent('Token response missing required fields'));
+    return c.redirect(frontendUrl + returnPath + '?oauth_error=' + encodeURIComponent('Token response missing required fields'));
   }
 
   // Persist to D1 so the worker picks them up on next request
@@ -124,10 +228,10 @@ app.get('/callback', async (c) => {
     await tokenStore.save(data.access_token, data.refresh_token);
   } catch (saveErr) {
     const msg = saveErr instanceof Error ? saveErr.message : 'Unknown error saving tokens';
-    return c.redirect(frontendUrl + '/social/dashboard?oauth_error=' + encodeURIComponent('Failed to save tokens: ' + msg));
+    return c.redirect(frontendUrl + returnPath + '?oauth_error=' + encodeURIComponent('Failed to save tokens: ' + msg));
   }
 
-  return c.redirect(frontendUrl + '/social/dashboard');
+  return c.redirect(frontendUrl + returnPath);
 });
 
 /**

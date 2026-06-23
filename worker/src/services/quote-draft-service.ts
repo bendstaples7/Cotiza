@@ -1,4 +1,5 @@
 import { PlatformError } from '../errors/index.js';
+import { splitEmailContextFromCustomerText } from 'shared';
 import type { ActionItem, DepositSchedule, GenerationTrace, LineItemRationale, QuoteDraft, QuoteDraftUpdate, QuoteLineItem, SpaceContext, SqftResolutionResult } from 'shared';
 
 export class QuoteDraftService {
@@ -347,6 +348,34 @@ export class QuoteDraftService {
     const { lineItems, unresolvedItems } = await this.fetchLineItems(draftId);
     const actionItems = await this.fetchActionItems(draftId);
     return this.mapDraftRow(row, lineItems, unresolvedItems, actionItems);
+  }
+
+  /**
+   * Prepend a Gmail context block to customer_request_text when not already present.
+   */
+  async prependEmailContext(draftId: string, userId: string, emailContext: string): Promise<QuoteDraft> {
+    const draft = await this.getById(draftId, userId);
+    const trimmedContext = emailContext.trim();
+    if (!trimmedContext) return draft;
+
+    const { emailContext: existing, requestText } = splitEmailContextFromCustomerText(
+      draft.customerRequestText || '',
+    );
+    if (existing) return draft;
+
+    if (draft.reviewStatus === 'pending_review') {
+      return draft;
+    }
+
+    const updatedText = requestText
+      ? `${trimmedContext}\n\n${requestText}`
+      : trimmedContext;
+
+    await this.db.prepare(
+      "UPDATE quote_drafts SET customer_request_text = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?"
+    ).bind(updatedText, draftId, userId).run();
+
+    return this.getById(draftId, userId);
   }
 
   /**
