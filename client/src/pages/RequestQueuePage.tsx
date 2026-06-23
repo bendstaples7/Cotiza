@@ -44,6 +44,23 @@ function isSparseDraft(draft: {
   return !hasText && itemCount === 0;
 }
 
+const MAX_BACKGROUND_QUEUE_IDS = 30;
+const BACKGROUND_BATCH_SIZE = 10;
+
+async function enrichInBatches(
+  ids: string[],
+  batchSize: number,
+  fn: (chunk: string[]) => Promise<void>,
+): Promise<void> {
+  for (let i = 0; i < ids.length; i += batchSize) {
+    try {
+      await fn(ids.slice(i, i + batchSize));
+    } catch {
+      // Best-effort — continue with remaining batches
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -95,14 +112,10 @@ export default function RequestQueuePage() {
           && r.jobberRequestId
           && isPlaceholderJobberClientName(r.customerName),
         )
-        .map((r) => r.jobberRequestId as string);
-      const enrichInBatches = async (ids: string[], batchSize: number, fn: (chunk: string[]) => Promise<void>) => {
-        for (let i = 0; i < ids.length; i += batchSize) {
-          await fn(ids.slice(i, i + batchSize));
-        }
-      };
+        .map((r) => r.jobberRequestId as string)
+        .slice(0, MAX_BACKGROUND_QUEUE_IDS);
       if (sparseJobberIds.length > 0) {
-        void enrichInBatches(sparseJobberIds, 10, async (chunk) => {
+        void enrichInBatches(sparseJobberIds, BACKGROUND_BATCH_SIZE, async (chunk) => {
           const enriched = await enrichManualRequests(chunk);
           if (enriched.length === 0) return;
           setRequests((prev) => prev.map((req) => {
@@ -117,14 +130,15 @@ export default function RequestQueuePage() {
               serviceDescription: hit.serviceDescription,
             };
           }));
-        }).catch(() => { /* best-effort background enrich */ });
+        });
       }
 
       const jobberIdsForBadges = result
         .filter((r) => r.jobberRequestId)
-        .map((r) => r.jobberRequestId as string);
+        .map((r) => r.jobberRequestId as string)
+        .slice(0, MAX_BACKGROUND_QUEUE_IDS);
       if (jobberIdsForBadges.length > 0) {
-        void enrichInBatches(jobberIdsForBadges, 10, async (chunk) => {
+        void enrichInBatches(jobberIdsForBadges, BACKGROUND_BATCH_SIZE, async (chunk) => {
           const quotesByRequest = await fetchRequestJobberQuotes(chunk);
           setJobberQuoteBadges((prev) => {
             const next = { ...prev };
@@ -137,7 +151,7 @@ export default function RequestQueuePage() {
             }
             return next;
           });
-        }).catch(() => { /* best-effort badge fetch */ });
+        });
       }
     } catch (err) {
       setError((err as ErrorResponse).message ?? 'Failed to load request queue.');

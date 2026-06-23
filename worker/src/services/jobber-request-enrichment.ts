@@ -183,9 +183,12 @@ export function applyEnrichmentToListRow(
   enriched: EnrichedJobberRow,
 ): ManualRequestListRow {
   const { resolved } = enriched;
+  const enrichedName = resolved.customerName;
+  const keepExistingName = !isPlaceholderJobberClientName(row.customerName)
+    && isPlaceholderJobberClientName(enrichedName);
   return {
     ...row,
-    customerName: resolved.customerName,
+    customerName: keepExistingName ? row.customerName : enrichedName,
     requestTitle: resolved.requestTitle,
     requestBodyText: resolved.requestBodyText,
     serviceDescription: resolved.serviceDescription,

@@ -338,14 +338,16 @@ app.get('/manual-requests', async (c) => {
   const manualRequestService = new ManualRequestService(db);
   let rows = await manualRequestService.list({ userId, sortBy, includeDeathclock });
 
-  void (async () => {
-    try {
-      const { jobberIntegration } = await createJobberIntegration(db, c.env);
-      await enrichSparseQueueRows(db, rows, jobberIntegration, 3, 2_000);
-    } catch {
-      // Best-effort background enrichment — never block the queue list
-    }
-  })();
+  if (c.executionCtx?.waitUntil) {
+    c.executionCtx.waitUntil((async () => {
+      try {
+        const { jobberIntegration } = await createJobberIntegration(db, c.env);
+        await enrichSparseQueueRows(db, rows, jobberIntegration, 3, 2_000);
+      } catch {
+        // Best-effort background enrichment — never block the queue list
+      }
+    })());
+  }
 
   if (includeDeathclock) {
     const items = rows.map(row => ({

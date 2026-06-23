@@ -277,6 +277,9 @@ export class EmailContextService {
       queries.push(lastName);
     }
     const seenIds = new Set<string>();
+    const nameParts = normalizedName.toLowerCase().split(/\s+/).filter((part) => part.length > 2);
+    let bestEmail: string | null = null;
+    let bestScore = -1;
 
     for (const rawQuery of queries) {
       const query = encodeURIComponent(rawQuery.includes(' ') ? `"${rawQuery}"` : rawQuery);
@@ -309,11 +312,16 @@ export class EmailContextService {
           `${headerText}\n${msg.snippet ?? ''}`,
           normalizedName,
         );
-        if (candidate) return candidate;
+        if (!candidate) continue;
+        const score = scoreCustomerEmail(candidate, nameParts);
+        if (score > bestScore) {
+          bestScore = score;
+          bestEmail = candidate;
+        }
       }
     }
 
-    return null;
+    return bestEmail;
   }
 
   /**

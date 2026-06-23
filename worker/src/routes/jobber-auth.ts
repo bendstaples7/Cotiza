@@ -14,39 +14,32 @@ const app = new Hono<{ Bindings: Bindings }>();
 
 const JOBBER_AUTHORIZE_URL = 'https://api.getjobber.com/api/oauth/authorize';
 const JOBBER_TOKEN_URL = 'https://api.getjobber.com/api/oauth/token';
+const OAUTH_STATE_TTL_MINUTES = 15;
 
-function toBase64Url(bytes: ArrayBuffer): string {
-  const binary = String.fromCharCode(...new Uint8Array(bytes));
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+async function createJobberOAuthState(db: D1Database): Promise<string> {
+  const userRow = await db.prepare('SELECT id FROM users ORDER BY created_at ASC LIMIT 1').first<{ id: string }>();
+  if (!userRow?.id) {
+    throw new Error('No users found — cannot start Jobber OAuth flow');
+  }
+
+  const state = crypto.randomUUID();
+  await db.prepare(
+    "INSERT INTO oauth_states (id, user_id, created_at) VALUES (?, ?, datetime('now'))",
+  ).bind(state, userRow.id).run();
+  return state;
 }
 
-async function signOAuthState(secret: string): Promise<string> {
-  const nonce = crypto.randomUUID();
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(nonce));
-  return `${nonce}.${toBase64Url(signature)}`;
-}
+async function consumeJobberOAuthState(db: D1Database, state: string): Promise<boolean> {
+  const row = await db.prepare(
+    `SELECT id FROM oauth_states
+     WHERE id = ?
+       AND datetime(created_at) > datetime('now', '-${OAUTH_STATE_TTL_MINUTES} minutes')`,
+  ).bind(state).first<{ id: string }>();
 
-async function verifyOAuthState(state: string, secret: string): Promise<boolean> {
-  const [nonce, sig] = state.split('.');
-  if (!nonce || !sig) return false;
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(nonce));
-  return sig === toBase64Url(signature);
+  if (!row) return false;
+
+  await db.prepare('DELETE FROM oauth_states WHERE id = ?').bind(state).run();
+  return true;
 }
 
 /** Stable OAuth callback URL — must match a redirect URI registered in the Jobber app. */
@@ -90,6 +83,14 @@ app.get('/authorize', async (c) => {
     return c.json({ error: 'JOBBER_CLIENT_ID and JOBBER_CLIENT_SECRET must be configured' }, 500);
   }
 
+  let state: string;
+  try {
+    state = await createJobberOAuthState(c.env.DB);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Failed to initialize OAuth flow';
+    return c.json({ error: msg }, 500);
+  }
+
   // Callback URL must match Jobber app redirect URIs exactly
   const redirectUri = oauthRedirectUri(c);
 
@@ -98,7 +99,7 @@ app.get('/authorize', async (c) => {
   authUrl.searchParams.set('redirect_uri', redirectUri);
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set('scope', 'read:account read:clients read:quotes');
-  authUrl.searchParams.set('state', await signOAuthState(clientSecret));
+  authUrl.searchParams.set('state', state);
 
   return c.redirect(authUrl.toString());
 });
@@ -136,7 +137,7 @@ app.get('/callback', async (c) => {
     return c.redirect(frontendUrl + returnPath + '?oauth_error=' + encodeURIComponent('Server configuration error'));
   }
 
-  if (!state || !(await verifyOAuthState(state, clientSecret))) {
+  if (!state || !(await consumeJobberOAuthState(c.env.DB, state))) {
     return c.redirect(frontendUrl + returnPath + '?oauth_error=' + encodeURIComponent('Invalid OAuth state'));
   }
 

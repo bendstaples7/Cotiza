@@ -134,7 +134,11 @@ describe('resolveJobberRequestFields', () => {
       clientName: 'Fiona Duncan',
       title: 'Bathroom Renovation',
       description: null,
-      requestBody: { title: 'Bathroom Renovation', notes: { edges: [] } },
+      requestBody: {
+        title: 'Bathroom Renovation',
+        description: 'Bathroom Renovation',
+        notes: { edges: [] },
+      },
     });
     expect(fields.requestTitle).toBe('Bathroom Renovation');
     expect(fields.requestBodyText).toBe('');

@@ -82,4 +82,25 @@ describe('applyEnrichmentToListRow', () => {
     expect(updated.requestTitle).toBe('Bathroom Renovation');
     expect(updated.requestBodyText).toContain('Replace vanity');
   });
+
+  it('keeps an existing real customer name when enrichment returns a placeholder', () => {
+    const row = jobberRow({ jobberRequestId: 'jid-5', customerName: 'Linda Clark' });
+    const updated = applyEnrichmentToListRow(row, {
+      title: null,
+      clientName: 'Home Owner',
+      description: null,
+      requestBody: null,
+      formText: null,
+      resolved: {
+        customerName: 'Home Owner',
+        requestTitle: 'Kitchen remodel',
+        requestBodyText: 'Need cabinets',
+        serviceDescription: 'Kitchen remodel',
+        noteHighlights: [],
+      },
+    });
+
+    expect(updated.customerName).toBe('Linda Clark');
+    expect(updated.requestTitle).toBe('Kitchen remodel');
+  });
 });

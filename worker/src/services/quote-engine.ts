@@ -1723,7 +1723,7 @@ export function detectRequestScopes(customerText: string): Set<string> {
   }
 
   // Electrical work
-  if (/\belectri(?:c|cal|cian)\b|\bwiring\b|\bwire\b|\boutlet\b|\bswitch\b|\bbreaker\b|\bpanel\b|\blight(?:ing)?\b|\brecessed\b/.test(text)) {
+  if (/\belectri(?:c|cal|cian)\b|\bwiring\b|\boutlet\b|\bswitch\b|\bbreaker\b|\bpanel\b|\blighting\b|\brecessed lights?\b/.test(text)) {
     scopes.add('electrical');
   }
 
