@@ -220,31 +220,10 @@ export function buildJobberCustomerText(input: {
   description?: string | null;
   structuredNotes?: JobberRequestNote[];
 }): string {
-  const parts: string[] = [];
-  const structuredNotes = substantiveNotes(input.structuredNotes ?? []);
-
-  if (input.description) {
-    const trimmedDesc = input.description.trim();
-    if (trimmedDesc && !isBoilerplateJobberNote(trimmedDesc)) {
-      const noteTexts = structuredNotes.map((n) => n.message.trim());
-      const notesJoined = noteTexts.join('\n\n');
-      if (trimmedDesc !== notesJoined) {
-        parts.push(trimmedDesc);
-      }
-    }
-  }
-
-  for (const note of structuredNotes) {
-    const trimmed = note.message.trim();
-    if (!trimmed) continue;
-    const label =
-      note.createdBy === 'team' ? '[Team Note]' :
-      note.createdBy === 'client' ? '[Client]' :
-      '[System]';
-    parts.push(`${label} ${trimmed}`);
-  }
-
-  const body = parts.join('\n\n');
+  const body = buildRequestBodyText({
+    description: input.description,
+    structuredNotes: input.structuredNotes,
+  });
   const title = input.title?.trim() ?? '';
 
   if (!body) return title;

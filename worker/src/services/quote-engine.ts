@@ -1722,8 +1722,10 @@ export function detectRequestScopes(customerText: string): Set<string> {
     scopes.add('plumbing');
   }
 
-  // Electrical work
-  if (/\belectri(?:c|cal|cian)\b|\bwiring\b|\boutlet\b|\bswitch\b|\bbreaker\b|\bpanel\b|\blighting\b|\brecessed lights?\b/.test(text)) {
+  // Electrical work — match fixture/lighting terms but not cosmetic damage phrases ("light scratch")
+  if (
+    /\belectri(?:c|cal|cian)\b|\bwiring\b|\boutlet\b|\bswitch\b|\bbreaker\b|\bpanel\b|\blighting\b|\brecessed lights?\b|\blight\b(?!\s+(?:damage|scratch|scratches|marks?|wear|ding|dent|chip|stain|fade|spot)s?\b)/.test(text)
+  ) {
     scopes.add('electrical');
   }
 

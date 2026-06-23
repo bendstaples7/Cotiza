@@ -103,4 +103,44 @@ describe('applyEnrichmentToListRow', () => {
     expect(updated.customerName).toBe('Linda Clark');
     expect(updated.requestTitle).toBe('Kitchen remodel');
   });
+
+  it('replaces literal null customer name with enriched placeholder when no real name available', () => {
+    const row = jobberRow({ jobberRequestId: 'jid-null-name', customerName: 'null' });
+    const updated = applyEnrichmentToListRow(row, {
+      title: 'Bathroom update',
+      clientName: 'Home Owner',
+      description: null,
+      requestBody: null,
+      formText: null,
+      resolved: {
+        customerName: 'Home Owner',
+        requestTitle: 'Bathroom update',
+        requestBodyText: 'Replace tub',
+        serviceDescription: 'Bathroom update',
+        noteHighlights: [],
+      },
+    });
+
+    expect(updated.customerName).toBe('Home Owner');
+  });
+
+  it('replaces literal null customer name with enriched real name', () => {
+    const row = jobberRow({ jobberRequestId: 'jid-null-replace', customerName: 'null' });
+    const updated = applyEnrichmentToListRow(row, {
+      title: 'Bathroom update',
+      clientName: 'Fiona Duncan',
+      description: null,
+      requestBody: null,
+      formText: null,
+      resolved: {
+        customerName: 'Fiona Duncan',
+        requestTitle: 'Bathroom update',
+        requestBodyText: 'Replace tub',
+        serviceDescription: 'Bathroom update',
+        noteHighlights: [],
+      },
+    });
+
+    expect(updated.customerName).toBe('Fiona Duncan');
+  });
 });

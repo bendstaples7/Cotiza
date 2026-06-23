@@ -26,6 +26,11 @@ import {
   enrichSparseQueueRows,
   loadBestWebhookRow,
 } from '../services/index.js';
+import {
+  fetchEmailContextForCustomerEmail,
+  fetchEmailContextForJobberRequest,
+  prependEmailContextToCustomerText,
+} from '../services/email-context-enrichment.js';
 import { JobberWebhookService } from '../services/jobber-webhook-service.js';
 import { JobberTokenStore } from '../services/jobber-token-store.js';
 import { RulesSyncService } from '../services/rules-sync.js';
@@ -972,42 +977,25 @@ app.post('/generate', async (c) => {
   }
 
   // Email context enrichment: fetch recent Gmail conversations with the customer (graceful degradation)
-  let emailContext = '';
   try {
-    let customerEmail: string | null = null;
+    const emailConfig = {
+      gmailClientId: c.env.GMAIL_CLIENT_ID,
+      gmailClientSecret: c.env.GMAIL_CLIENT_SECRET,
+      gmailRefreshToken: c.env.GMAIL_REFRESH_TOKEN,
+    };
+
+    let emailContext = '';
     if (body.jobberRequestId) {
-      const jobberRow = await loadBestWebhookRow(db, body.jobberRequestId);
-      if (jobberRow?.request_body) {
-        customerEmail = extractCustomerEmailFromRequestBody(jobberRow.request_body);
-      }
+      emailContext = await fetchEmailContextForJobberRequest(db, body.jobberRequestId, emailConfig);
     } else if (body.manualRequestId && cachedManualRequest) {
-      customerEmail = (cachedManualRequest as any).customerEmail ?? null;
+      const customerEmail = (cachedManualRequest as { customerEmail?: string | null }).customerEmail ?? null;
+      if (customerEmail) {
+        emailContext = await fetchEmailContextForCustomerEmail(customerEmail, emailConfig);
+      }
     }
 
-    if (customerEmail) {
-      const emailService = new EmailContextService(
-        c.env.GMAIL_CLIENT_ID,
-        c.env.GMAIL_CLIENT_SECRET,
-        c.env.GMAIL_REFRESH_TOKEN,
-      );
-      if (emailService.isAvailable()) {
-        const enrichmentStarted = Date.now();
-        emailContext = await Promise.race<string>([
-          emailService.fetchContext(customerEmail),
-          new Promise<string>((resolve) => setTimeout(() => resolve(''), 6000)),
-        ]);
-        if (emailContext) {
-          body.customerText = emailContext + '\n\n' + (body.customerText ?? '');
-        } else {
-          console.warn(
-            '[quotes/generate] Email enrichment empty after',
-            Date.now() - enrichmentStarted,
-            'ms',
-          );
-        }
-      } else {
-        console.warn('[quotes/generate] Gmail credentials not configured — skipping email enrichment');
-      }
+    if (emailContext) {
+      body.customerText = prependEmailContextToCustomerText(body.customerText ?? '', emailContext);
     }
   } catch {
     // Graceful degradation — email context failure must not block quote generation

@@ -36,23 +36,44 @@ export default function RequestJobberQuoteModal({
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const mountedRef = useRef(true);
+  const cancelledRef = useRef(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
+    cancelledRef.current = false;
+    previousFocusRef.current = document.activeElement as HTMLElement;
+    dialogRef.current?.focus();
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !importing) {
+        cancelledRef.current = true;
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+
+    return () => {
+      mountedRef.current = false;
+      cancelledRef.current = true;
+      document.removeEventListener('keydown', onKeyDown);
+      previousFocusRef.current?.focus();
+    };
+  }, [importing, onClose]);
 
   const handleImport = async () => {
     if (!primaryQuote || primaryQuote.importedDraftId) return;
+    cancelledRef.current = false;
     setImporting(true);
     setImportError(null);
     try {
       const result = await importJobberQuote(primaryQuote.id);
-      if (mountedRef.current) {
+      if (mountedRef.current && !cancelledRef.current) {
         onOpenCotiza(result.draft.id);
       }
     } catch (err) {
-      if (mountedRef.current) {
+      if (mountedRef.current && !cancelledRef.current) {
         setImportError((err as { message?: string }).message ?? 'Failed to import Jobber quote.');
       }
     } finally {
@@ -62,11 +83,17 @@ export default function RequestJobberQuoteModal({
     }
   };
 
+  const handleDismiss = () => {
+    if (importing) return;
+    cancelledRef.current = true;
+    onClose();
+  };
+
   const cotizaDraftId = resolution.cotizaDraft?.id;
 
   return (
     <div style={overlayStyle} role="dialog" aria-modal="true" aria-labelledby="jobber-quote-modal-title">
-      <div style={modalStyle}>
+      <div ref={dialogRef} tabIndex={-1} style={modalStyle}>
         <h2 id="jobber-quote-modal-title" style={titleStyle}>
           Jobber quote found
         </h2>
@@ -130,7 +157,7 @@ export default function RequestJobberQuoteModal({
               Open existing Cotiza draft (D-{resolution.cotizaDraft!.draftNumber})
             </button>
           )}
-          <button type="button" style={ghostBtnStyle} onClick={onClose} disabled={importing}>
+          <button type="button" style={ghostBtnStyle} onClick={handleDismiss} disabled={importing}>
             Cancel
           </button>
         </div>

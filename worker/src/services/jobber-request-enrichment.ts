@@ -178,14 +178,19 @@ export async function enrichJobberRequest(
 }
 
 /** Apply resolved enrichment fields onto a queue list row. */
+function isUsableCustomerName(name: string | null | undefined): boolean {
+  const trimmed = name?.trim();
+  return !!trimmed && !isPlaceholderJobberClientName(trimmed) && !isAbsentStoredValue(trimmed);
+}
+
 export function applyEnrichmentToListRow(
   row: ManualRequestListRow,
   enriched: EnrichedJobberRow,
 ): ManualRequestListRow {
   const { resolved } = enriched;
   const enrichedName = resolved.customerName;
-  const keepExistingName = !isPlaceholderJobberClientName(row.customerName)
-    && isPlaceholderJobberClientName(enrichedName);
+  const keepExistingName = isUsableCustomerName(row.customerName)
+    && !isUsableCustomerName(enrichedName);
   return {
     ...row,
     customerName: keepExistingName ? row.customerName : enrichedName,

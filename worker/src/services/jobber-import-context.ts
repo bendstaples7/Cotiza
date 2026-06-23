@@ -1,13 +1,12 @@
-import { extractCustomerEmailFromRequestBody } from 'shared';
-import { EmailContextService } from './email-context-service.js';
-import { loadBestWebhookRow, resolveJobberRequestForGenerate } from './jobber-request-enrichment.js';
+import { resolveJobberRequestForGenerate } from './jobber-request-enrichment.js';
 import type { JobberIntegration } from './jobber-integration.js';
+import {
+  fetchEmailContextForJobberRequest,
+  prependEmailContextToCustomerText,
+  type EmailEnrichmentConfig,
+} from './email-context-enrichment.js';
 
-export interface JobberImportEmailConfig {
-  gmailClientId?: string;
-  gmailClientSecret?: string;
-  gmailRefreshToken?: string;
-}
+export type JobberImportEmailConfig = EmailEnrichmentConfig;
 
 /**
  * Build enriched customer context for import scoring — mirrors the generate-quote
@@ -31,26 +30,9 @@ export async function buildJobberImportCustomerContext(
 
   try {
     if (linkedRequestId && emailConfig) {
-      const jobberRow = await loadBestWebhookRow(db, linkedRequestId);
-      const customerEmail = jobberRow?.request_body
-        ? extractCustomerEmailFromRequestBody(jobberRow.request_body)
-        : null;
-
-      if (customerEmail) {
-        const emailService = new EmailContextService(
-          emailConfig.gmailClientId,
-          emailConfig.gmailClientSecret,
-          emailConfig.gmailRefreshToken,
-        );
-        if (emailService.isAvailable()) {
-          const emailContext = await Promise.race<string>([
-            emailService.fetchContext(customerEmail),
-            new Promise<string>((resolve) => setTimeout(() => resolve(''), 6000)),
-          ]);
-          if (emailContext) {
-            customerText = emailContext + '\n\n' + customerText;
-          }
-        }
+      const emailContext = await fetchEmailContextForJobberRequest(db, linkedRequestId, emailConfig);
+      if (emailContext) {
+        customerText = prependEmailContextToCustomerText(customerText, emailContext);
       }
     }
   } catch (err) {

@@ -143,4 +143,15 @@ describe('detectRequestScopes', () => {
     expect(scopes.has('electrical')).toBe(true);
     expect(scopes.has('plumbing')).toBe(false);
   });
+
+  it('detects electrical scope for fixture/light install phrasing', () => {
+    const scopes = detectRequestScopes('Install a new light fixture in the kitchen');
+    expect(scopes.has('electrical')).toBe(true);
+  });
+
+  it('does not treat cosmetic light damage as electrical scope', () => {
+    const scopes = detectRequestScopes('Fix light scratches on the ceiling drywall');
+    expect(scopes.has('electrical')).toBe(false);
+    expect(scopes.has('ceiling')).toBe(true);
+  });
 });
