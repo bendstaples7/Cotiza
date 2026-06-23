@@ -189,11 +189,19 @@ export function applyEnrichmentToListRow(
 ): ManualRequestListRow {
   const { resolved } = enriched;
   const enrichedName = resolved.customerName;
-  const keepExistingName = isUsableCustomerName(row.customerName)
-    && !isUsableCustomerName(enrichedName);
+  let customerName: string;
+  if (isUsableCustomerName(row.customerName) && !isUsableCustomerName(enrichedName)) {
+    customerName = row.customerName;
+  } else if (isUsableCustomerName(enrichedName)) {
+    customerName = enrichedName;
+  } else if (isUsableCustomerName(row.customerName)) {
+    customerName = row.customerName;
+  } else {
+    customerName = 'Unknown';
+  }
   return {
     ...row,
-    customerName: keepExistingName ? row.customerName : enrichedName,
+    customerName,
     requestTitle: resolved.requestTitle,
     requestBodyText: resolved.requestBodyText,
     serviceDescription: resolved.serviceDescription,

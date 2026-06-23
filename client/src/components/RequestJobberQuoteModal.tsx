@@ -94,13 +94,14 @@ export default function RequestJobberQuoteModal({
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       const active = document.activeElement;
+      const activeIndex = focusable.indexOf(active as HTMLElement);
 
       if (e.shiftKey) {
-        if (active === first || active === dialogRef.current) {
+        if (activeIndex <= 0) {
           e.preventDefault();
           last.focus();
         }
-      } else if (active === last) {
+      } else if (activeIndex === -1 || activeIndex === focusable.length - 1 || active === dialogRef.current) {
         e.preventDefault();
         first.focus();
       }

@@ -23,6 +23,8 @@ function toBase64Url(bytes: ArrayBuffer): string {
 
 async function signOAuthState(secret: string): Promise<string> {
   const nonce = crypto.randomUUID();
+  const issuedAt = String(Math.floor(Date.now() / 1000));
+  const payload = `${nonce}.${issuedAt}`;
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
     'raw',
@@ -31,13 +33,21 @@ async function signOAuthState(secret: string): Promise<string> {
     false,
     ['sign'],
   );
-  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(nonce));
-  return `${nonce}.${toBase64Url(signature)}`;
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
+  return `${payload}.${toBase64Url(signature)}`;
 }
 
 async function verifyOAuthState(state: string, secret: string): Promise<boolean> {
-  const [nonce, sig] = state.split('.');
-  if (!nonce || !sig) return false;
+  const parts = state.split('.');
+  if (parts.length !== 3) return false;
+  const [nonce, issuedAtStr, sig] = parts;
+  if (!nonce || !issuedAtStr || !sig) return false;
+
+  const issuedAt = Number(issuedAtStr);
+  if (!Number.isFinite(issuedAt)) return false;
+  if (Date.now() / 1000 - issuedAt > OAUTH_STATE_TTL_MINUTES * 60) return false;
+
+  const payload = `${nonce}.${issuedAtStr}`;
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
     'raw',
@@ -46,7 +56,7 @@ async function verifyOAuthState(state: string, secret: string): Promise<boolean>
     false,
     ['sign'],
   );
-  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(nonce));
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
   return sig === toBase64Url(signature);
 }
 

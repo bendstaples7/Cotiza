@@ -104,7 +104,7 @@ describe('applyEnrichmentToListRow', () => {
     expect(updated.requestTitle).toBe('Kitchen remodel');
   });
 
-  it('replaces literal null customer name with enriched placeholder when no real name available', () => {
+  it('falls back to Unknown when row and enrichment only have placeholder names', () => {
     const row = jobberRow({ jobberRequestId: 'jid-null-name', customerName: 'null' });
     const updated = applyEnrichmentToListRow(row, {
       title: 'Bathroom update',
@@ -121,7 +121,7 @@ describe('applyEnrichmentToListRow', () => {
       },
     });
 
-    expect(updated.customerName).toBe('Home Owner');
+    expect(updated.customerName).toBe('Unknown');
   });
 
   it('replaces literal null customer name with enriched real name', () => {

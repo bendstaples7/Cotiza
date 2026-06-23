@@ -65,6 +65,22 @@ export interface ImportQuoteOptions {
   }>;
 }
 
+interface RequestQuotesPageInfo {
+  hasNextPage: boolean;
+  endCursor: string | null;
+}
+
+interface RequestQuotesConnection {
+  nodes?: ImportableQuote[];
+  pageInfo?: RequestQuotesPageInfo;
+}
+
+interface RequestQuotesResponse {
+  request?: {
+    quotes?: RequestQuotesConnection;
+  };
+}
+
 // ── GraphQL queries ─────────────────────────────────────────────────────
 
 const IMPORTABLE_QUOTES_QUERY = `
@@ -241,22 +257,18 @@ export class JobberQuoteImportService {
         throw signal.reason ?? new Error('Aborted');
       }
 
-      const data = await this.jobberIntegration.graphqlRequest<Record<string, unknown>>(
+      const data: RequestQuotesResponse = await this.jobberIntegration.graphqlRequest<RequestQuotesResponse>(
         REQUEST_QUOTES_QUERY,
         { id: jobberRequestId, after },
         { signal },
       );
 
-      const quotesConnection = (data?.request as {
-        quotes?: {
-          nodes?: ImportableQuote[];
-          pageInfo?: { hasNextPage: boolean; endCursor: string | null };
-        };
-      } | undefined)?.quotes;
+      const quotesConnection: RequestQuotesConnection | undefined = data.request?.quotes;
 
       const nodes = quotesConnection?.nodes ?? [];
 
       for (const node of nodes) {
+        if (activeQuotes.length >= MAX_QUOTES) break;
         if (isActiveJobberQuoteStatus(node.quoteStatus)) {
           activeQuotes.push({
             ...node,
@@ -270,7 +282,7 @@ export class JobberQuoteImportService {
 
       if (activeQuotes.length >= MAX_QUOTES) break;
 
-      const pageInfo = quotesConnection?.pageInfo;
+      const pageInfo: RequestQuotesPageInfo | undefined = quotesConnection?.pageInfo;
       if (pageInfo?.hasNextPage && pageInfo.endCursor) {
         after = pageInfo.endCursor;
       } else {

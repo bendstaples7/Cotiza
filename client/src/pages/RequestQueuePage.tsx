@@ -150,20 +150,31 @@ export default function RequestQueuePage() {
         .filter((r) => r.jobberRequestId)
         .map((r) => r.jobberRequestId as string)
         .slice(0, MAX_BACKGROUND_QUEUE_IDS);
+      const activeBadgeIds = new Set(jobberIdsForBadges);
       if (jobberIdsForBadges.length > 0) {
-        void (async () => {
-          const merged: Record<string, Array<{ quoteNumber: string; quoteStatus: string }>> = {};
-          await enrichInBatches(jobberIdsForBadges, BACKGROUND_BATCH_SIZE, async (chunk) => {
+        setJobberQuoteBadges((prev) => {
+          const pruned = { ...prev };
+          for (const id of Object.keys(pruned)) {
+            if (!activeBadgeIds.has(id)) delete pruned[id];
+          }
+          return pruned;
+        });
+        void enrichInBatches(jobberIdsForBadges, BACKGROUND_BATCH_SIZE, async (chunk) => {
+          try {
             const quotesByRequest = await fetchRequestJobberQuotes(chunk);
-            for (const id of chunk) {
-              const badges = quotesByRequest[id];
-              if (badges?.length) {
-                merged[id] = badges;
+            setJobberQuoteBadges((prev) => {
+              const next = { ...prev };
+              for (const id of chunk) {
+                const badges = quotesByRequest[id];
+                if (badges?.length) next[id] = badges;
+                else delete next[id];
               }
-            }
-          });
-          setJobberQuoteBadges(merged);
-        })();
+              return next;
+            });
+          } catch {
+            // Keep prior badges for this chunk when the fetch fails
+          }
+        });
       } else {
         setJobberQuoteBadges({});
       }

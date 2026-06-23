@@ -160,33 +160,36 @@ describe('resolveRequestQuote', () => {
 
   it('fails open when Jobber lookup times out', async () => {
     vi.useFakeTimers();
-    const db = createMockD1();
-    configurePrepareResults(db, [
-      {
-        first: {
-          id: 'draft-1',
-          draft_number: 87,
-          jobber_quote_id: null,
-          customer_request_text: 'Existing request text',
-          line_item_count: 0,
+    try {
+      const db = createMockD1();
+      configurePrepareResults(db, [
+        {
+          first: {
+            id: 'draft-1',
+            draft_number: 87,
+            jobber_quote_id: null,
+            customer_request_text: 'Existing request text',
+            line_item_count: 0,
+          },
         },
-      },
-    ]);
+      ]);
 
-    const fetchRequestQuotes = vi.fn((_id: string, signal?: AbortSignal) =>
-      new Promise<ImportableQuote[]>((resolve, reject) => {
-        signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
-      }),
-    );
+      const fetchRequestQuotes = vi.fn((_id: string, signal?: AbortSignal) =>
+        new Promise<ImportableQuote[]>((resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+        }),
+      );
 
-    const resultPromise = resolveRequestQuote(db, 'user-1', 'req-1', fetchRequestQuotes);
-    await vi.advanceTimersByTimeAsync(5_001);
-    const result = await resultPromise;
-    vi.useRealTimers();
+      const resultPromise = resolveRequestQuote(db, 'user-1', 'req-1', fetchRequestQuotes);
+      await vi.advanceTimersByTimeAsync(5_001);
+      const result = await resultPromise;
 
-    expect(result.jobberLookupFailed).toBe(true);
-    expect(result.jobberQuotes).toEqual([]);
-    expect(result.recommendedAction).toBe('open_cotiza');
-    expect(fetchRequestQuotes).toHaveBeenCalledWith('req-1', expect.any(AbortSignal));
+      expect(result.jobberLookupFailed).toBe(true);
+      expect(result.jobberQuotes).toEqual([]);
+      expect(result.recommendedAction).toBe('open_cotiza');
+      expect(fetchRequestQuotes).toHaveBeenCalledWith('req-1', expect.any(AbortSignal));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
