@@ -24,10 +24,12 @@ FRONTEND_URL=
 CLOUDFLARE_ACCOUNT_ID=
 CLOUDFLARE_API_TOKEN=
 
-# Enable local-to-remote D1 sync (rules, cookies). Only set in .dev.vars, never in production.
+# Enable local-to-remote D1 sync (rules, cookies, tokens). Only set in .dev.vars, never in production.
+# Does not bypass Jobber OAuth or session checks — reconnect via the app when tokens expire.
 ENABLE_LOCAL_SYNC=true
 
 # Gmail API credentials for email context enrichment (attach recent email conversations to quote generation)
-# GMAIL_CLIENT_ID=your-google-oauth-client-id
-# GMAIL_CLIENT_SECRET=your-google-oauth-client-secret
-# GMAIL_REFRESH_TOKEN=your-google-oauth-refresh-token
+# Required for email history on quote drafts. Copy values from production secrets or Google Cloud Console.
+GMAIL_CLIENT_ID=
+GMAIL_CLIENT_SECRET=
+GMAIL_REFRESH_TOKEN=

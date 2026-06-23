@@ -65,6 +65,9 @@ app.get('/health', async (c) => {
     console.warn(`[health] Missing env vars: ${missing.join(', ')}`);
   }
   checks.env = missing.length > 0 ? 'degraded' : 'ok';
+  checks.gmail = (c.env.GMAIL_CLIENT_ID && c.env.GMAIL_CLIENT_SECRET && c.env.GMAIL_REFRESH_TOKEN)
+    ? 'ok'
+    : 'missing';
 
   // Check DB connectivity
   try {
@@ -110,6 +113,32 @@ app.post('/api/admin/backfill-deathclock', async (c) => {
     console.error(`[backfill] Failed: ${err instanceof Error ? err.message : String(err)}`);
     return c.json({ success: false, error: 'Backfill failed. See server logs.' }, 500);
   }
+});
+
+/**
+ * GET /api/admin/dev-secrets/gmail
+ * Export Gmail OAuth credentials for local .dev.vars setup.
+ * Protected by Authorization: Bearer <CLOUDFLARE_API_TOKEN> (same token used for CF API).
+ */
+app.get('/api/admin/dev-secrets/gmail', async (c) => {
+  const authHeader = c.req.header('Authorization') || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  const expected = (c.env.CLOUDFLARE_API_TOKEN || '').trim();
+
+  if (!expected || token !== expected) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  const { GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN } = c.env;
+  if (!GMAIL_CLIENT_ID?.trim() || !GMAIL_CLIENT_SECRET?.trim() || !GMAIL_REFRESH_TOKEN?.trim()) {
+    return c.json({ error: 'Gmail secrets not configured on this worker' }, 404);
+  }
+
+  return c.json({
+    GMAIL_CLIENT_ID,
+    GMAIL_CLIENT_SECRET,
+    GMAIL_REFRESH_TOKEN,
+  });
 });
 
 // API routes

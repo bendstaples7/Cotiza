@@ -284,6 +284,12 @@ async function main() {
 main().then(() => {
   process.exit(0);
 }).catch((err) => {
-  console.error(`[sync-cookies] FATAL: ${err.message}`);
+  const msg = err.message || String(err);
+  const target = parseTarget(process.argv);
+  if (target === 'local' && /Could not find Chrome/i.test(msg)) {
+    console.warn('[sync-cookies] Chrome not available — skipping cookie login for local dev.');
+    process.exit(0);
+  }
+  console.error(`[sync-cookies] FATAL: ${msg}`);
   process.exit(1);
 });

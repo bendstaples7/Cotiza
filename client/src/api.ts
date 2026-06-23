@@ -18,6 +18,9 @@ export interface ManualRequestWithDeathclock extends ManualRequest {
   quoteSentAt: string | null;
   deathclock: DeathclockState;
   jobberRequestId: string | null;
+  requestTitle?: string | null;
+  requestBodyText?: string;
+  noteHighlights?: Array<{ label: string; message: string }>;
 }
 
 const TOKEN_KEY = 'session_token';
@@ -105,10 +108,17 @@ export async function logout(): Promise<void> {
 // ── Systems Status ──
 
 export async function fetchSystemsStatus(): Promise<SystemsStatusResponse> {
-  const res = await fetch(API_BASE + '/api/systems/status', {
-    headers: { ...authHeaders() },
-  });
-  return handleResponse(res);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const res = await fetch(API_BASE + '/api/systems/status', {
+      headers: { ...authHeaders() },
+      signal: controller.signal,
+    });
+    return handleResponse(res);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function triggerCookieRefresh(): Promise<{ triggered: boolean; message?: string; error?: string }> {
@@ -482,6 +492,13 @@ export async function fetchDraft(id: string, params?: Record<string, string>): P
   return handleResponse(res);
 }
 
+export async function fetchDraftEmailContext(draftId: string): Promise<import('shared').DraftEmailContextResponse> {
+  const res = await fetch(API_BASE + '/api/quotes/drafts/' + draftId + '/email-context', {
+    headers: { ...authHeaders() },
+  });
+  return handleResponse(res);
+}
+
 export async function updateDraft(id: string, updates: QuoteDraftUpdate): Promise<QuoteDraft> {
   const res = await fetch(API_BASE + '/api/quotes/drafts/' + id, {
     method: 'PUT',
@@ -703,6 +720,29 @@ export async function fetchManualRequests(sortBy?: 'age_asc' | 'age_desc'): Prom
   });
   const data = await handleResponse<{ requests: ManualRequestWithDeathclock[] }>(res);
   return data.requests;
+}
+
+export interface EnrichedManualRequestFields {
+  jobberRequestId: string;
+  customerName: string;
+  requestTitle: string | null;
+  requestBodyText: string;
+  noteHighlights: Array<{ label: string; message: string }>;
+  serviceDescription: string;
+}
+
+/** Backfill sparse Jobber rows (customer names, notes) after the list loads. */
+export async function enrichManualRequests(
+  jobberRequestIds: string[],
+): Promise<EnrichedManualRequestFields[]> {
+  if (jobberRequestIds.length === 0) return [];
+  const res = await fetch(API_BASE + '/api/quotes/manual-requests/enrich', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ jobberRequestIds }),
+  });
+  const data = await handleResponse<{ enriched: EnrichedManualRequestFields[] }>(res);
+  return data.enriched;
 }
 
 export async function fetchDraftManualRequest(draftId: string): Promise<ManualRequest | null> {
@@ -1164,4 +1204,46 @@ export async function importJobberQuote(jobberQuoteId: string): Promise<ImportQu
     headers: { ...authHeaders() },
   });
   return handleResponseWithToast(res);
+}
+
+export type RequestQuoteRecommendedAction = 'import_jobber' | 'open_cotiza' | 'generate';
+
+export interface ResolvedJobberQuote {
+  id: string;
+  quoteNumber: string;
+  quoteStatus: string;
+  jobberWebUri: string | null;
+  title: string | null;
+  createdAt: string;
+  importedDraftId: string | null;
+}
+
+export interface ResolveRequestQuoteResult {
+  jobberQuotes: ResolvedJobberQuote[];
+  cotizaDraft: { id: string; draftNumber: number; jobberQuoteId: string | null } | null;
+  recommendedAction: RequestQuoteRecommendedAction;
+  jobberLookupFailed?: boolean;
+}
+
+/** Resolve Jobber vs Cotiza quote action for a request queue click. */
+export async function resolveRequestQuote(jobberRequestId: string): Promise<ResolveRequestQuoteResult> {
+  const res = await fetch(API_BASE + '/api/quotes/manual-requests/resolve-quote', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ jobberRequestId }),
+  });
+  return handleResponse(res);
+}
+
+/** Batch fetch active Jobber quotes for queue card badges. */
+export async function fetchRequestJobberQuotes(
+  jobberRequestIds: string[],
+): Promise<Record<string, Array<{ quoteNumber: string; quoteStatus: string }>>> {
+  const res = await fetch(API_BASE + '/api/quotes/manual-requests/jobber-quotes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ jobberRequestIds }),
+  });
+  const data = await handleResponse<{ quotesByRequest: Record<string, Array<{ quoteNumber: string; quoteStatus: string }>> }>(res);
+  return data.quotesByRequest;
 }

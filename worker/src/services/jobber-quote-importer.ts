@@ -3,6 +3,7 @@ import type { QuoteDraft, QuoteLineItem } from 'shared';
 import { QuoteDraftService } from './quote-draft-service.js';
 import type { JobberIntegration } from './jobber-integration.js';
 import { ActivityLogService } from './activity-log-service.js';
+import { isActiveJobberQuoteStatus } from './jobber-quote-status.js';
 
 // ── Exported types ──────────────────────────────────────────────────────
 
@@ -25,6 +26,10 @@ export interface ImportableQuoteProperty {
   address?: string;
 }
 
+export interface ImportableQuoteRequest {
+  id: string;
+}
+
 export interface ImportableQuote {
   id: string;
   quoteNumber: string;
@@ -36,11 +41,28 @@ export interface ImportableQuote {
   lineItems: ImportableQuoteLineItem[];
   client: ImportableQuoteClient | null;
   property: ImportableQuoteProperty | null;
+  request?: ImportableQuoteRequest | null;
 }
 
 export interface ImportQuoteResult {
   draft: QuoteDraft;
   warnings: string[];
+}
+
+export interface ImportQuoteScoringContext {
+  lineItems: QuoteLineItem[];
+  customerRequestText: string;
+  linkedRequestId: string | null;
+}
+
+export interface ImportQuoteOptions {
+  scoreImportedLineItems?: (
+    ctx: ImportQuoteScoringContext,
+  ) => Promise<{
+    lineItems: QuoteLineItem[];
+    unresolvedItems: QuoteLineItem[];
+    lowConfidenceCount: number;
+  }>;
 }
 
 // ── GraphQL queries ─────────────────────────────────────────────────────
@@ -107,9 +129,29 @@ const FETCH_QUOTE_BY_ID_QUERY = `
           postalCode
         }
       }
+      request {
+        id
+      }
       amounts {
         depositAmount
         total
+      }
+    }
+  }
+`;
+
+const REQUEST_QUOTES_QUERY = `
+  query RequestQuotes($id: EncodedId!) {
+    request(id: $id) {
+      quotes(first: 10) {
+        nodes {
+          id
+          quoteNumber
+          title
+          quoteStatus
+          jobberWebUri
+          createdAt
+        }
       }
     }
   }
@@ -164,7 +206,7 @@ export class JobberQuoteImportService {
           ...rawNode,
           lineItems: rawNode.lineItems?.nodes ?? [],
         };
-        if (node.quoteStatus === 'draft' || node.quoteStatus === 'sent') {
+        if (isActiveJobberQuoteStatus(node.quoteStatus)) {
           allQuotes.push(node);
         }
       }
@@ -182,13 +224,40 @@ export class JobberQuoteImportService {
   }
 
   /**
+   * Fetch active in-progress quotes linked to a Jobber request (lightweight, no line items).
+   */
+  async fetchQuotesForRequest(jobberRequestId: string): Promise<ImportableQuote[]> {
+    const data = await this.jobberIntegration.graphqlRequest<Record<string, unknown>>(
+      REQUEST_QUOTES_QUERY,
+      { id: jobberRequestId },
+    );
+
+    const nodes = (data?.request as { quotes?: { nodes?: ImportableQuote[] } } | undefined)
+      ?.quotes?.nodes ?? [];
+
+    return nodes
+      .filter((node) => isActiveJobberQuoteStatus(node.quoteStatus))
+      .map((node) => ({
+        ...node,
+        message: null,
+        lineItems: [],
+        client: null,
+        property: null,
+      }));
+  }
+
+  /**
    * Import a single Jobber quote as a Cotiza quote draft.
    *
    * Validates: status must be 'draft' or 'sent', must not already be imported.
    * Transforms: creates a quote draft with line items, customer text, and
    * links back to the original Jobber quote.
    */
-  async importQuote(jobberQuoteId: string, userId: string): Promise<ImportQuoteResult> {
+  async importQuote(
+    jobberQuoteId: string,
+    userId: string,
+    options?: ImportQuoteOptions,
+  ): Promise<ImportQuoteResult> {
     const warnings: string[] = [];
 
     // 1. Check if already imported
@@ -220,6 +289,7 @@ export class JobberQuoteImportService {
     const quote = rawQuote ? {
       ...rawQuote,
       lineItems: (rawQuote.lineItems?.nodes ?? []) as ImportableQuoteLineItem[],
+      request: rawQuote.request ?? null,
     } as ImportableQuote : null;
     if (!quote) {
       throw new PlatformError({
@@ -233,11 +303,13 @@ export class JobberQuoteImportService {
     }
 
     // 3. Validate status
-    if (quote.quoteStatus !== 'draft' && quote.quoteStatus !== 'sent') {
+    if (!isActiveJobberQuoteStatus(quote.quoteStatus)) {
       warnings.push(
-        `Quote status is "${quote.quoteStatus}". Only "draft" and "sent" quotes are importable. The draft will be created but may need manual review.`
+        `Quote status is "${quote.quoteStatus}". Only in-progress quotes are importable. The draft will be created but may need manual review.`,
       );
     }
+
+    const linkedRequestId = quote.request?.id?.trim() || null;
 
     // 4. Build customer request text from title + message
     const titleText = quote.title?.trim() || '';
@@ -272,8 +344,8 @@ export class JobberQuoteImportService {
       }
     }
 
-    // 6. Build line items from Jobber line items
-    const lineItems: QuoteLineItem[] = (quote.lineItems || []).map((item, index) => ({
+    // 6. Build line items from Jobber line items (confidence scored below when configured)
+    let lineItems: QuoteLineItem[] = (quote.lineItems || []).map((item) => ({
       id: crypto.randomUUID(),
       jobberLineItemId: item.id || null,
       productCatalogEntryId: null,
@@ -281,10 +353,33 @@ export class JobberQuoteImportService {
       description: item.description || '',
       quantity: item.quantity,
       unitPrice: item.unitPrice,
-      confidenceScore: 1.0, // These are exact from Jobber
+      confidenceScore: 0,
       originalText: item.name,
-      resolved: true,
+      resolved: false,
     }));
+
+    let unresolvedItems: QuoteLineItem[] = [];
+
+    if (options?.scoreImportedLineItems && lineItems.length > 0) {
+      const scored = await options.scoreImportedLineItems({
+        lineItems,
+        customerRequestText,
+        linkedRequestId,
+      });
+      lineItems = scored.lineItems;
+      unresolvedItems = scored.unresolvedItems;
+      if (scored.lowConfidenceCount > 0) {
+        warnings.push(
+          `${scored.lowConfidenceCount} line item(s) scored below confidence threshold and were moved to review.`,
+        );
+      }
+    } else if (lineItems.length > 0) {
+      lineItems = lineItems.map((item) => ({
+        ...item,
+        confidenceScore: 100,
+        resolved: true,
+      }));
+    }
 
     // Warnings for empty line items
     if (lineItems.length === 0) {
@@ -330,8 +425,8 @@ export class JobberQuoteImportService {
       selectedTemplateId: null,
       selectedTemplateName: null,
       lineItems,
-      unresolvedItems: [],
-      jobberRequestId: null,
+      unresolvedItems,
+      jobberRequestId: linkedRequestId,
       manualRequestId: null,
       clientName,
       propertyAddress,

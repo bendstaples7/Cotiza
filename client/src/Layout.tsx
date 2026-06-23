@@ -267,16 +267,29 @@ export default function Layout() {
           Jobber is required for quote generation and customer request management.
           Connect your Jobber account to continue.
         </p>
-        <a
-          href={`${API_BASE}/api/jobber-auth/authorize`}
-          style={{
-            display: 'inline-block', background: '#00a89d', color: '#fff',
-            padding: '0.65rem 1.5rem', borderRadius: 6, textDecoration: 'none',
-            fontWeight: 600, fontSize: '0.95rem',
-          }}
-        >
-          Connect Jobber
-        </a>
+        <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+          <a
+            href={`${API_BASE}/api/jobber-auth/authorize`}
+            style={{
+              display: 'inline-block', background: '#00a89d', color: '#fff',
+              padding: '0.65rem 1.5rem', borderRadius: 6, textDecoration: 'none',
+              fontWeight: 600, fontSize: '0.95rem',
+            }}
+          >
+            Connect Jobber
+          </a>
+          <button
+            type="button"
+            onClick={recheckSystems}
+            style={{
+              background: '#fff', color: '#333', border: '1px solid #ccc',
+              padding: '0.65rem 1.5rem', borderRadius: 6, cursor: 'pointer',
+              fontWeight: 600, fontSize: '0.95rem',
+            }}
+          >
+            I already connected — retry
+          </button>
+        </div>
       </SystemsCheckOverlay>
     );
   }

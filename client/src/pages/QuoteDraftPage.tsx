@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import type { QuoteDraft, QuoteLineItem, LineItemRationale, GenerationTrace, ErrorResponse, RuleGroupWithRules, Rule, ProductCatalogEntry, ActionItem, QuantityPredictionMeta, QuantitySource, ResolutionConfidence, ResolutionTier, DeathclockState } from 'shared';
-import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber, pushDraftUpdateToJobber, fetchDeathclock, markRequestSent, submitForReview, reSubmitForReview, getPendingReviews, getReview, addFeedback, completeReview, pushToJobber as pushReviewToJobber } from '../api';
+import type { QuoteDraft, QuoteLineItem, LineItemRationale, GenerationTrace, ErrorResponse, RuleGroupWithRules, Rule, ProductCatalogEntry, ActionItem, QuantityPredictionMeta, QuantitySource, ResolutionConfidence, ResolutionTier, DeathclockState, DraftEmailContextResponse } from 'shared';
+import { splitEmailContextFromCustomerText, parseEmailMessages } from 'shared';
+import { fetchDraft, reviseDraft, fetchRules, fetchJobberRequestDetail, saveTemplateFromDraft, updateDraft, patchDraftSqft, fetchCatalog, updateCatalogEntry, pushDraftToJobber, pushDraftUpdateToJobber, fetchDeathclock, markRequestSent, submitForReview, reSubmitForReview, getPendingReviews, getReview, addFeedback, completeReview, pushToJobber as pushReviewToJobber, fetchDraftEmailContext } from '../api';
 import type { JobberRequestDetail } from '../api';
 import SimilarQuotesPanel from './SimilarQuotesPanel';
 import DeathclockBadge, { getLabel } from '../components/DeathclockBadge';
@@ -47,6 +48,9 @@ export default function QuoteDraftPage() {
   const [ruleCreatedMsg, setRuleCreatedMsg] = useState<string | null>(null);
   const [ruleCreationWarning, setRuleCreationWarning] = useState<string | null>(null);
   const [requestDetail, setRequestDetail] = useState<JobberRequestDetail | null>(null);
+  const [emailExpanded, setEmailExpanded] = useState(false);
+  const [emailContextInfo, setEmailContextInfo] = useState<DraftEmailContextResponse | null>(null);
+  const [emailContextLoading, setEmailContextLoading] = useState(false);
   const [deathclock, setDeathclock] = useState<DeathclockState | null>(null);
   const [deathclockLoading, setDeathclockLoading] = useState(false);
   const [showMarkSentDialog, setShowMarkSentDialog] = useState(false);
@@ -146,6 +150,42 @@ export default function QuoteDraftPage() {
   }, [id, cameFromReview]);
 
   useEffect(() => { loadDraft(); }, [loadDraft]);
+
+  // Lazy-load Gmail history when not already embedded in customerRequestText
+  useEffect(() => {
+    if (!draft?.id || cameFromReview) return;
+
+    const { emailContext } = splitEmailContextFromCustomerText(draft.customerRequestText || '');
+    if (emailContext) {
+      setEmailContextInfo({
+        status: 'cached',
+        customerEmail: null,
+        messages: parseEmailMessages(emailContext),
+        gmailConfigured: true,
+      });
+      return;
+    }
+
+    let cancelled = false;
+    setEmailContextLoading(true);
+    fetchDraftEmailContext(draft.id)
+      .then(async (info) => {
+        if (cancelled) return;
+        setEmailContextInfo(info);
+        if (info.status === 'found' && info.messages.length > 0) {
+          const refreshed = await fetchDraft(draft.id);
+          if (!cancelled) setDraft(refreshed);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setEmailContextInfo(null);
+      })
+      .finally(() => {
+        if (!cancelled) setEmailContextLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [draft?.id, draft?.customerRequestText, cameFromReview]);
 
   // Reset reviewer state when draft ID changes
   useEffect(() => {
@@ -742,6 +782,28 @@ export default function QuoteDraftPage() {
   const showSidePanel = !!(draft.customerRequestText || requestDetail || draft.jobberQuoteId);
   const isReadOnly = draft.reviewStatus === 'pending_review';
   const isReviewerMode = cameFromReview && isReadOnly;
+
+  const { emailContext, requestText } = splitEmailContextFromCustomerText(draft.customerRequestText || '');
+  const parsedEmails = emailContext
+    ? parseEmailMessages(emailContext)
+    : (emailContextInfo?.messages ?? []);
+  const showEmailSection = emailContextLoading
+    || parsedEmails.length > 0
+    || emailContextInfo?.status === 'not_configured'
+    || emailContextInfo?.status === 'not_found'
+    || emailContextInfo?.status === 'no_customer_email';
+  const notesJoined = requestDetail?.notes.map((n) => n.message.trim()).join('\n\n') ?? '';
+  const trimmedRequestText = requestText.trim();
+  const showDescription = !!(
+    requestDetail?.description?.trim()
+    && requestDetail.description.trim() !== notesJoined
+    && requestDetail.description.trim() !== trimmedRequestText
+  );
+  const showRequestSummary = !!(
+    trimmedRequestText
+    && trimmedRequestText !== notesJoined
+    && trimmedRequestText !== requestDetail?.description?.trim()
+  );
 
   return (
     <div style={{ display: 'flex', gap: '1.5rem', maxWidth: showSidePanel ? 1200 : 800, margin: '0 auto' }}>
@@ -1862,17 +1924,95 @@ export default function QuoteDraftPage() {
             </div>
           )}
 
-          {draft.customerRequestText && (
+          {showEmailSection && (
             <div style={{ marginBottom: '0.75rem' }}>
-              <h3 style={sidePanelLabelStyle}>{requestDetail ? 'Request Body' : 'Customer Request'}</h3>
-              <p style={{ ...sidePanelTextStyle, whiteSpace: 'pre-wrap' }}>{draft.customerRequestText}</p>
+              {emailContextLoading && (
+                <p style={{ margin: 0, fontSize: '0.8rem', color: '#666' }}>Checking Gmail for customer emails…</p>
+              )}
+              {!emailContextLoading && emailContextInfo?.status === 'not_configured' && (
+                <p style={{ margin: 0, fontSize: '0.8rem', color: '#666' }}>
+                  Gmail is not configured in this environment — email history cannot be loaded.
+                  {emailContextInfo.customerEmail ? ` (Customer: ${emailContextInfo.customerEmail})` : ''}
+                </p>
+              )}
+              {!emailContextLoading && emailContextInfo?.status === 'no_customer_email' && (
+                <p style={{ margin: 0, fontSize: '0.8rem', color: '#666' }}>
+                  No customer email on file for this request.
+                </p>
+              )}
+              {!emailContextLoading && emailContextInfo?.status === 'not_found' && emailContextInfo.customerEmail && (
+                <p style={{ margin: 0, fontSize: '0.8rem', color: '#666' }}>
+                  No Gmail threads found for {emailContextInfo.customerEmail}.
+                </p>
+              )}
+              {parsedEmails.length > 0 && (
+                <>
+              <button
+                type="button"
+                onClick={() => setEmailExpanded((prev) => !prev)}
+                style={sidePanelToggleStyle}
+                aria-expanded={emailExpanded}
+              >
+                <span>{emailExpanded ? '▼' : '▶'}</span>
+                <span>Email History ({parsedEmails.length})</span>
+              </button>
+              {!emailExpanded && (
+                <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                  {parsedEmails.slice(0, 2).map((email, i) => (
+                    <div key={i} style={sidePanelNoteStyle}>
+                      <p style={{ margin: 0, fontSize: '0.85rem', fontWeight: 500 }}>
+                        {email.direction === 'Incoming' ? '↓' : '↑'} {email.subject || '(No subject)'}
+                      </p>
+                      <span style={{ fontSize: '0.7rem', color: '#999' }}>{email.date}</span>
+                      {email.body && (
+                        <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#555' }}>
+                          {email.body.length > 120 ? email.body.slice(0, 120) + '…' : email.body}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {emailExpanded && (
+                <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {parsedEmails.map((email, i) => (
+                    <div key={i} style={sidePanelNoteStyle}>
+                      <p style={{ margin: 0, fontSize: '0.85rem', fontWeight: 500 }}>
+                        {email.direction === 'Incoming' ? '↓ Incoming' : '↑ Outgoing'} · {email.subject || '(No subject)'}
+                      </p>
+                      <span style={{ fontSize: '0.7rem', color: '#999', display: 'block', marginTop: '0.15rem' }}>
+                        {email.from} → {email.to} · {email.date}
+                      </span>
+                      {email.body && (
+                        <p style={{ margin: '0.35rem 0 0', fontSize: '0.8rem', whiteSpace: 'pre-wrap' }}>{email.body}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+                </>
+              )}
             </div>
           )}
 
-          {requestDetail && requestDetail.description && requestDetail.description !== draft.customerRequestText && (
+          {showRequestSummary && (
+            <div style={{ marginBottom: '0.75rem' }}>
+              <h3 style={sidePanelLabelStyle}>Request Summary</h3>
+              <p style={{ ...sidePanelTextStyle, whiteSpace: 'pre-wrap' }}>{trimmedRequestText}</p>
+            </div>
+          )}
+
+          {showDescription && requestDetail && (
             <div style={{ marginBottom: '0.75rem' }}>
               <h3 style={sidePanelLabelStyle}>Description</h3>
               <p style={{ ...sidePanelTextStyle, whiteSpace: 'pre-wrap' }}>{requestDetail.description}</p>
+            </div>
+          )}
+
+          {!requestDetail && trimmedRequestText && (
+            <div style={{ marginBottom: '0.75rem' }}>
+              <h3 style={sidePanelLabelStyle}>Customer Request</h3>
+              <p style={{ ...sidePanelTextStyle, whiteSpace: 'pre-wrap' }}>{trimmedRequestText}</p>
             </div>
           )}
 
@@ -1921,13 +2061,6 @@ export default function QuoteDraftPage() {
             <div style={{ marginBottom: '0.75rem' }}>
               <h3 style={sidePanelLabelStyle}>Property Address</h3>
               <p style={{ ...sidePanelTextStyle, fontWeight: 500 }}>📍 {draft.propertyAddress}</p>
-            </div>
-          )}
-
-          {!requestDetail && draft.customerRequestText && (
-            <div style={{ marginBottom: '0.75rem' }}>
-              <h3 style={sidePanelLabelStyle}>Customer Request</h3>
-              <p style={{ ...sidePanelTextStyle, whiteSpace: 'pre-wrap' }}>{draft.customerRequestText}</p>
             </div>
           )}
         </aside>
@@ -2680,6 +2813,24 @@ const sidePanelNoteStyle: React.CSSProperties = {
   background: '#fff',
   borderRadius: 6,
   border: '1px solid #eee',
+};
+
+const sidePanelToggleStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '0.4rem',
+  width: '100%',
+  padding: '0.35rem 0',
+  border: 'none',
+  background: 'none',
+  cursor: 'pointer',
+  fontSize: '0.8rem',
+  fontWeight: 600,
+  color: '#888',
+  textTransform: 'uppercase',
+  letterSpacing: '0.5px',
+  fontFamily: 'inherit',
+  textAlign: 'left',
 };
 
 // ── Inline Editing Styles ──

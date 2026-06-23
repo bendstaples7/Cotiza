@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Bindings } from '../bindings.js';
-import type { User, ProductCatalogEntry, QuoteTemplate, JobberCustomerRequest, SimilarQuote, StructuredRule, RuleCondition, RuleAction, TriggerMode, ActionItem, CreateManualRequestPayload, UpdateProductivityRatePayload, DepositSchedule } from 'shared';
+import type { User, ProductCatalogEntry, QuoteTemplate, JobberCustomerRequest, SimilarQuote, StructuredRule, RuleCondition, RuleAction, TriggerMode, ActionItem, CreateManualRequestPayload, UpdateProductivityRatePayload, DepositSchedule, DraftEmailContextResponse } from 'shared';
+import { extractCustomerEmailFromRequestBody, splitEmailContextFromCustomerText, parseEmailMessages } from 'shared';
 import { sessionMiddleware } from '../middleware/session.js';
 import { PlatformError } from '../errors/index.js';
 import { JobberWebSession } from '../services/jobber-web-session.js';
@@ -20,12 +21,18 @@ import {
   ProductivityRatesService,
   UserSettingsService,
   EmailContextService,
+  resolveJobberRequestForGenerate,
+  enrichJobberRequest,
+  enrichSparseQueueRows,
+  loadBestWebhookRow,
 } from '../services/index.js';
 import { JobberWebhookService } from '../services/jobber-webhook-service.js';
 import { JobberTokenStore } from '../services/jobber-token-store.js';
 import { RulesSyncService } from '../services/rules-sync.js';
 import { JobberQuoteImportService } from '../services/jobber-quote-importer.js';
+import { buildJobberImportCustomerContext } from '../services/jobber-import-context.js';
 import type { ImportableQuote } from '../services/jobber-quote-importer.js';
+import { resolveRequestQuote, fetchJobberQuotesForRequests } from '../services/request-quote-resolve-service.js';
 import { invalidateDeathclockCache, invalidateTrendsCache } from './dashboard.js';
 import { computeDeathclock } from '../services/deathclock-service.js';
 
@@ -329,7 +336,14 @@ app.get('/manual-requests', async (c) => {
   }
 
   const manualRequestService = new ManualRequestService(db);
-  const rows = await manualRequestService.list({ userId, sortBy, includeDeathclock });
+  let rows = await manualRequestService.list({ userId, sortBy, includeDeathclock });
+
+  try {
+    const { jobberIntegration } = await createJobberIntegration(db, c.env);
+    rows = await enrichSparseQueueRows(db, rows, jobberIntegration, 5, 8_000);
+  } catch {
+    // Enrichment is best-effort — never block the queue list
+  }
 
   if (includeDeathclock) {
     const items = rows.map(row => ({
@@ -343,6 +357,119 @@ app.get('/manual-requests', async (c) => {
   }
 
   return c.json({ requests: rows });
+});
+
+/**
+ * POST /manual-requests/enrich
+ * Backfill sparse Jobber queue rows (names/notes) without blocking the full list.
+ */
+app.post('/manual-requests/enrich', async (c) => {
+  const db = c.env.DB;
+  const body = await c.req.json() as { jobberRequestIds?: string[] };
+  const ids = (body.jobberRequestIds ?? []).filter((id) => typeof id === 'string' && id.trim()).slice(0, 10);
+  if (ids.length === 0) {
+    return c.json({ enriched: [] });
+  }
+
+  const { jobberIntegration } = await createJobberIntegration(db, c.env);
+  const enriched: Array<{
+    jobberRequestId: string;
+    customerName: string;
+    requestTitle: string | null;
+    requestBodyText: string;
+    noteHighlights: Array<{ label: string; message: string }>;
+    serviceDescription: string;
+  }> = [];
+
+  await Promise.allSettled(ids.map(async (jobberRequestId) => {
+    try {
+      const result = await Promise.race([
+        enrichJobberRequest(db, jobberRequestId, jobberIntegration),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 6_000)),
+      ]);
+      if (!result) return;
+      enriched.push({
+        jobberRequestId,
+        customerName: result.resolved.customerName,
+        requestTitle: result.resolved.requestTitle,
+        requestBodyText: result.resolved.requestBodyText,
+        noteHighlights: result.resolved.noteHighlights,
+        serviceDescription: result.resolved.serviceDescription,
+      });
+    } catch {
+      // Skip failed row
+    }
+  }));
+
+  return c.json({ enriched });
+});
+
+/**
+ * POST /manual-requests/resolve-quote
+ * Resolve whether to import a Jobber quote, open a Cotiza draft, or generate new.
+ */
+app.post('/manual-requests/resolve-quote', async (c) => {
+  const userId = c.get('user').id;
+  const db = c.env.DB;
+  const body = await c.req.json() as { jobberRequestId?: string };
+  const jobberRequestId = body.jobberRequestId?.trim();
+
+  if (!jobberRequestId) {
+    throw new PlatformError({
+      severity: 'error',
+      component: 'QuoteRoutes',
+      operation: 'resolveRequestQuote',
+      description: 'jobberRequestId is required.',
+      recommendedActions: ['Provide a valid Jobber request ID.'],
+      statusCode: 400,
+    });
+  }
+
+  const { jobberIntegration, activityLog } = await createJobberIntegration(db, c.env);
+  const quoteDraftService = new QuoteDraftService(db);
+  const importer = new JobberQuoteImportService(db, quoteDraftService, jobberIntegration, activityLog);
+  const fetchRequestQuotes = (id: string) => importer.fetchQuotesForRequest(id);
+
+  const result = await resolveRequestQuote(db, userId, jobberRequestId, fetchRequestQuotes);
+
+  const cotizaDraft = result.cotizaDraft
+    ? {
+        id: result.cotizaDraft.id,
+        draftNumber: result.cotizaDraft.draftNumber,
+        jobberQuoteId: result.cotizaDraft.jobberQuoteId,
+      }
+    : null;
+
+  return c.json({
+    jobberQuotes: result.jobberQuotes,
+    cotizaDraft,
+    recommendedAction: result.recommendedAction,
+    ...(result.jobberLookupFailed ? { jobberLookupFailed: true } : {}),
+  });
+});
+
+/**
+ * POST /manual-requests/jobber-quotes
+ * Batch fetch active Jobber quotes for queue card badges (max 10 IDs).
+ */
+app.post('/manual-requests/jobber-quotes', async (c) => {
+  const db = c.env.DB;
+  const body = await c.req.json() as { jobberRequestIds?: string[] };
+  const ids = (body.jobberRequestIds ?? [])
+    .filter((id) => typeof id === 'string' && id.trim())
+    .slice(0, 10);
+
+  if (ids.length === 0) {
+    return c.json({ quotesByRequest: {} });
+  }
+
+  const { jobberIntegration, activityLog } = await createJobberIntegration(db, c.env);
+  const quoteDraftService = new QuoteDraftService(db);
+  const importer = new JobberQuoteImportService(db, quoteDraftService, jobberIntegration, activityLog);
+  const fetchRequestQuotes = (id: string) => importer.fetchQuotesForRequest(id);
+
+  const quotesByRequest = await fetchJobberQuotesForRequests(ids, fetchRequestQuotes);
+  return c.json({ quotesByRequest });
 });
 
 /**
@@ -659,6 +786,61 @@ app.post('/generate', async (c) => {
     structuredRules = [];
   }
 
+  // Fetch manual request once and cache for reuse across address/email/clientName
+  let cachedManualRequest: any = null;
+  let manualRequestAddress: string | null = null;
+  if (body.manualRequestId) {
+    try {
+      const manualRequestService = new ManualRequestService(db);
+      cachedManualRequest = await manualRequestService.getById(body.manualRequestId, userId);
+      manualRequestAddress = (cachedManualRequest as any).customerAddress ?? null;
+      if (!(body.customerText ?? '').trim()) {
+        body.customerText = (cachedManualRequest as any).serviceDescription ?? '';
+      }
+    } catch {
+      // Graceful degradation
+    }
+  }
+
+  // Fetch user settings to check material price mode (graceful degradation)
+  let materialPriceMode = false;
+  try {
+    const userSettingsService = new UserSettingsService(db);
+    const userSettings = await userSettingsService.getSettings(userId);
+    materialPriceMode = userSettings.materialPriceMode;
+  } catch {
+    // Graceful degradation — settings fetch failure must not block quote generation
+  }
+
+  // Populate customerText from Jobber request notes when not provided (queue flow).
+  let resolvedJobberFields: Awaited<ReturnType<typeof resolveJobberRequestForGenerate>> = null;
+  if (body.jobberRequestId && !(body.customerText ?? '').trim()) {
+    try {
+      const { jobberIntegration } = await createJobberIntegration(db, c.env);
+      resolvedJobberFields = await resolveJobberRequestForGenerate(
+        db,
+        body.jobberRequestId,
+        jobberIntegration,
+      );
+      if (resolvedJobberFields) {
+        body.customerText = resolvedJobberFields.serviceDescription;
+      }
+    } catch {
+      // Graceful degradation — missing notes must not block quote generation
+    }
+  }
+
+  if (body.jobberRequestId && !(body.customerText ?? '').trim()) {
+    throw new PlatformError({
+      severity: 'error',
+      component: 'QuoteRoutes',
+      operation: 'generate',
+      description: 'Could not load Jobber request details for this quote. The request may still be syncing — try again in a moment.',
+      recommendedActions: ['Wait a few seconds and try again', 'Open the request in Jobber to confirm it has notes or a description'],
+      statusCode: 422,
+    });
+  }
+
   // Find similar past quotes from the corpus (graceful degradation)
   let similarQuotes: SimilarQuote[] = [];
   const trimmedCustomerText = (body.customerText ?? '').trim();
@@ -681,19 +863,14 @@ app.post('/generate', async (c) => {
 
   // Resolve property address and Jobber image URLs for sqft pipeline (graceful degradation)
   let jobberPropertyAddress: string | null = null;
-  let manualRequestAddress: string | null = null;
   let jobberImageUrls: string[] = [];
 
   if (body.jobberRequestId) {
     try {
-      // Attempt to extract property address from stored Jobber request data
-      const jobberRow = await db.prepare(
-        `SELECT request_body FROM jobber_webhook_requests WHERE jobber_request_id = ? ORDER BY processed_at DESC LIMIT 1`
-      ).bind(body.jobberRequestId).first() as Record<string, unknown> | null;
+      const jobberRow = await loadBestWebhookRow(db, body.jobberRequestId);
 
       if (jobberRow?.request_body) {
         const detail = JSON.parse(jobberRow.request_body as string);
-        // Jobber property address is on the client's property record
         const property = detail?.property;
         if (property) {
           const parts = [
@@ -736,8 +913,6 @@ app.post('/generate', async (c) => {
           { id: body.jobberRequestId },
         );
 
-        // Prefer request.property.address (the job-site address on the request) over
-        // client.clientProperties (the client's billing/home address on their account).
         const requestPropertyAddress = (liveData as any)?.request?.property?.address;
         const clientPropertyAddress = (liveData as any)?.request?.client?.clientProperties?.nodes?.[0]?.address;
         const liveAddress = requestPropertyAddress ?? clientPropertyAddress;
@@ -751,11 +926,8 @@ app.post('/generate', async (c) => {
           ].filter((p): p is string => typeof p === 'string' && p.trim().length > 0);
           if (parts.length > 0) {
             jobberPropertyAddress = parts.join(', ');
-            // Write back to webhook row so future calls don't need a live fetch
             try {
-              const existingRow = await db.prepare(
-                `SELECT id, request_body FROM jobber_webhook_requests WHERE jobber_request_id = ? ORDER BY processed_at DESC LIMIT 1`
-              ).bind(body.jobberRequestId).first() as Record<string, unknown> | null;
+              const existingRow = await loadBestWebhookRow(db, body.jobberRequestId);
               if (existingRow?.request_body) {
                 const parsed = JSON.parse(existingRow.request_body as string);
                 parsed.property = {
@@ -775,7 +947,6 @@ app.post('/generate', async (c) => {
           }
         }
 
-        // Collect image URLs for Tier 2 vision analysis
         const attachmentEdges = (liveData as any)?.request?.noteAttachments?.edges ?? [];
         jobberImageUrls = attachmentEdges
           .filter((e: any) => e.node?.contentType?.startsWith('image/'))
@@ -786,42 +957,14 @@ app.post('/generate', async (c) => {
     }
   }
 
-  // Fetch manual request once and cache for reuse across address/email/clientName
-  let cachedManualRequest: any = null;
-  if (body.manualRequestId) {
-    try {
-      const manualRequestService = new ManualRequestService(db);
-      cachedManualRequest = await manualRequestService.getById(body.manualRequestId, userId);
-      manualRequestAddress = (cachedManualRequest as any).customerAddress ?? null;
-      if (!(body.customerText ?? '').trim()) {
-        body.customerText = (cachedManualRequest as any).serviceDescription ?? '';
-      }
-    } catch {
-      // Graceful degradation
-    }
-  }
-
-  // Fetch user settings to check material price mode (graceful degradation)
-  let materialPriceMode = false;
-  try {
-    const userSettingsService = new UserSettingsService(db);
-    const userSettings = await userSettingsService.getSettings(userId);
-    materialPriceMode = userSettings.materialPriceMode;
-  } catch {
-    // Graceful degradation — settings fetch failure must not block quote generation
-  }
-
   // Email context enrichment: fetch recent Gmail conversations with the customer (graceful degradation)
   let emailContext = '';
   try {
     let customerEmail: string | null = null;
     if (body.jobberRequestId) {
-      const jobberRow = await db.prepare(
-        `SELECT request_body FROM jobber_webhook_requests WHERE jobber_request_id = ? ORDER BY processed_at DESC LIMIT 1`
-      ).bind(body.jobberRequestId).first() as Record<string, unknown> | null;
+      const jobberRow = await loadBestWebhookRow(db, body.jobberRequestId);
       if (jobberRow?.request_body) {
-        const detail = JSON.parse(jobberRow.request_body as string);
-        customerEmail = detail?.email || detail?.request?.email || detail?.client?.email || null;
+        customerEmail = extractCustomerEmailFromRequestBody(jobberRow.request_body);
       }
     } else if (body.manualRequestId && cachedManualRequest) {
       customerEmail = (cachedManualRequest as any).customerEmail ?? null;
@@ -833,21 +976,25 @@ app.post('/generate', async (c) => {
         c.env.GMAIL_CLIENT_SECRET,
         c.env.GMAIL_REFRESH_TOKEN,
       );
-      const enrichmentStarted = Date.now();
-      emailContext = await Promise.race<string>([
-        emailService.fetchContext(customerEmail),
-        new Promise<string>((resolve) => setTimeout(() => resolve(''), 6000)),
-      ]);
-      if (emailContext) {
-        body.customerText = emailContext + '\n\n' + (body.customerText ?? '');
+      if (emailService.isAvailable()) {
+        const enrichmentStarted = Date.now();
+        emailContext = await Promise.race<string>([
+          emailService.fetchContext(customerEmail),
+          new Promise<string>((resolve) => setTimeout(() => resolve(''), 6000)),
+        ]);
+        if (emailContext) {
+          body.customerText = emailContext + '\n\n' + (body.customerText ?? '');
+        } else {
+          console.warn(
+            '[quotes/generate] Email enrichment empty for',
+            customerEmail,
+            'after',
+            Date.now() - enrichmentStarted,
+            'ms',
+          );
+        }
       } else {
-        console.warn(
-          '[quotes/generate] Email enrichment empty for',
-          customerEmail,
-          'after',
-          Date.now() - enrichmentStarted,
-          'ms',
-        );
+        console.warn('[quotes/generate] Gmail credentials not configured — skipping email enrichment');
       }
     }
   } catch {
@@ -874,6 +1021,25 @@ app.post('/generate', async (c) => {
 
   if (body.jobberRequestId) {
     result.draft.jobberRequestId = body.jobberRequestId;
+    if (!result.draft.clientName && resolvedJobberFields) {
+      result.draft.clientName = resolvedJobberFields.customerName !== 'Unknown'
+        ? resolvedJobberFields.customerName
+        : null;
+    } else if (!result.draft.clientName) {
+      try {
+        const { jobberIntegration } = await createJobberIntegration(db, c.env);
+        const resolved = await resolveJobberRequestForGenerate(
+          db,
+          body.jobberRequestId,
+          jobberIntegration,
+        );
+        if (resolved) {
+          result.draft.clientName = resolved.customerName !== 'Unknown' ? resolved.customerName : null;
+        }
+      } catch {
+        // Graceful degradation
+      }
+    }
   }
 
   if (body.manualRequestId) {
@@ -911,6 +1077,116 @@ app.get('/drafts/:id', async (c) => {
     ? await quoteDraftService.getByIdForReview(id)
     : await quoteDraftService.getById(id, c.get('user').id);
   return c.json(draft);
+});
+
+/**
+ * GET /drafts/:id/email-context
+ * Fetch Gmail conversation history for the draft's customer (lazy load + optional persist).
+ */
+app.get('/drafts/:id/email-context', async (c) => {
+  const userId = c.get('user').id;
+  const db = c.env.DB;
+  const draftId = c.req.param('id');
+  const quoteDraftService = new QuoteDraftService(db);
+  const draft = await quoteDraftService.getById(draftId, userId);
+
+  const { emailContext: cachedContext } = splitEmailContextFromCustomerText(draft.customerRequestText || '');
+  if (cachedContext) {
+    const response: DraftEmailContextResponse = {
+      status: 'cached',
+      customerEmail: null,
+      messages: parseEmailMessages(cachedContext),
+      gmailConfigured: true,
+    };
+    return c.json(response);
+  }
+
+  let customerEmail: string | null = null;
+  if (draft.jobberRequestId) {
+    let jobberRow = await loadBestWebhookRow(db, draft.jobberRequestId);
+    if (jobberRow?.request_body) {
+      customerEmail = extractCustomerEmailFromRequestBody(jobberRow.request_body);
+    }
+    if (!customerEmail) {
+      try {
+        const { jobberIntegration } = await createJobberIntegration(db, c.env);
+        await enrichJobberRequest(db, draft.jobberRequestId, jobberIntegration);
+        jobberRow = await loadBestWebhookRow(db, draft.jobberRequestId);
+        if (jobberRow?.request_body) {
+          customerEmail = extractCustomerEmailFromRequestBody(jobberRow.request_body);
+        }
+      } catch {
+        // Graceful degradation
+      }
+    }
+  } else if (draft.manualRequestId) {
+    try {
+      const manualRequestService = new ManualRequestService(db);
+      const manualRequest = await manualRequestService.getById(draft.manualRequestId, userId);
+      customerEmail = (manualRequest as { customerEmail?: string | null }).customerEmail ?? null;
+    } catch {
+      customerEmail = null;
+    }
+  }
+
+  const emailService = new EmailContextService(
+    c.env.GMAIL_CLIENT_ID,
+    c.env.GMAIL_CLIENT_SECRET,
+    c.env.GMAIL_REFRESH_TOKEN,
+  );
+  const gmailConfigured = emailService.isAvailable();
+
+  if (!gmailConfigured) {
+    const response: DraftEmailContextResponse = {
+      status: 'not_configured',
+      customerEmail,
+      messages: [],
+      gmailConfigured: false,
+    };
+    return c.json(response);
+  }
+
+  if (!customerEmail && draft.clientName?.trim()) {
+    customerEmail = await emailService.findCustomerEmailByName(draft.clientName.trim());
+  }
+
+  if (!customerEmail) {
+    const response: DraftEmailContextResponse = {
+      status: 'no_customer_email',
+      customerEmail: null,
+      messages: [],
+      gmailConfigured: true,
+    };
+    return c.json(response);
+  }
+
+  const fetchedContext = await Promise.race<string>([
+    emailService.fetchContext(customerEmail),
+    new Promise<string>((resolve) => setTimeout(() => resolve(''), 8_000)),
+  ]);
+
+  if (!fetchedContext.trim()) {
+    const response: DraftEmailContextResponse = {
+      status: 'not_found',
+      customerEmail,
+      messages: [],
+      gmailConfigured: true,
+    };
+    return c.json(response);
+  }
+
+  const messages = parseEmailMessages(fetchedContext);
+  if (messages.length > 0) {
+    await quoteDraftService.prependEmailContext(draftId, userId, fetchedContext);
+  }
+
+  const response: DraftEmailContextResponse = {
+    status: 'found',
+    customerEmail,
+    messages,
+    gmailConfigured: true,
+  };
+  return c.json(response);
 });
 
 /**
@@ -2492,8 +2768,31 @@ app.post('/jobber/quotes/:jobberQuoteId/import', async (c) => {
   }
 
   const quoteDraftService = new QuoteDraftService(db);
+  const catalog = await fetchCatalog(db, userId);
+  const quoteEngine = new QuoteEngine(c.env.AI_TEXT_API_KEY, c.env.AI_TEXT_API_URL);
   const importer = new JobberQuoteImportService(db, quoteDraftService, jobberIntegration, activityLog);
-  const result = await importer.importQuote(jobberQuoteId, userId);
+  const result = await importer.importQuote(jobberQuoteId, userId, {
+    scoreImportedLineItems: async (ctx) => {
+      const customerText = await buildJobberImportCustomerContext(
+        db,
+        ctx.linkedRequestId,
+        ctx.customerRequestText,
+        jobberIntegration,
+        {
+          gmailClientId: c.env.GMAIL_CLIENT_ID,
+          gmailClientSecret: c.env.GMAIL_CLIENT_SECRET,
+          gmailRefreshToken: c.env.GMAIL_REFRESH_TOKEN,
+        },
+      );
+      return quoteEngine.scoreLineItemsAgainstRequest({
+        customerText,
+        lineItems: ctx.lineItems,
+        catalog,
+        preserveSourceFields: true,
+        requireCatalogForResolved: false,
+      });
+    },
+  });
 
   return c.json(result, 201);
 });

@@ -11,7 +11,37 @@ import { CompletedWorkService, filterCompletedWork } from './completed-work-serv
 import type { ProductCatalogEntry, QuoteTemplate, QuoteDraft, QuoteLineItem, LineItemRationale, SimilarQuote, StructuredRule, AuditEntry, EngineLineItem, ActionItem, QuantityPredictionMeta, RuleCondition, DepositSchedule } from 'shared';
 
 const GENERATION_TIMEOUT_MS = 120_000;
-const CONFIDENCE_THRESHOLD = 70;
+export const CONFIDENCE_THRESHOLD = 70;
+
+export interface ScoreLineItemsInput {
+  customerText: string;
+  lineItems: QuoteLineItem[];
+  catalog: ProductCatalogEntry[];
+  /** Keep Jobber product names/prices when linking catalog entries (import path). */
+  preserveSourceFields?: boolean;
+  /** When false, resolved items need confidence >= threshold only (imports). */
+  requireCatalogForResolved?: boolean;
+}
+
+export interface ScoreLineItemsOutput {
+  lineItems: QuoteLineItem[];
+  unresolvedItems: QuoteLineItem[];
+  lowConfidenceCount: number;
+}
+
+interface AILineItem {
+  id?: string;
+  productCatalogEntryId: string | null;
+  productName: string;
+  description?: string;
+  quantity: number;
+  unitPrice: number;
+  confidenceScore: number;
+  originalText: string;
+  unmatchedReason?: string;
+  ruleIdsApplied?: string[];
+  quantityPrediction?: QuantityPredictionMeta;
+}
 
 export interface QuoteEngineInput {
   customerText: string;
@@ -35,20 +65,6 @@ export interface QuoteEngineOutput {
   draft: QuoteDraft;
   similarQuotes?: SimilarQuote[];
   rulesEngineAuditTrail?: AuditEntry[];
-}
-
-interface AILineItem {
-  id?: string;
-  productCatalogEntryId: string | null;
-  productName: string;
-  description?: string;
-  quantity: number;
-  unitPrice: number;
-  confidenceScore: number;
-  originalText: string;
-  unmatchedReason?: string;
-  ruleIdsApplied?: string[];
-  quantityPrediction?: QuantityPredictionMeta;
 }
 
 interface AIActionItem {
@@ -935,80 +951,10 @@ export class QuoteEngine {
   }
 
   private validateAIResponse(parsed: AIResponse, catalog: ProductCatalogEntry[]): AIResponse {
-    // Build a name-based lookup (case-insensitive) for catalog matching.
-    // Skip empty/whitespace names; on duplicate keys keep the first entry.
-    const catalogByName = new Map<string, ProductCatalogEntry>();
-    for (const c of catalog) {
-      const key = c.name.trim().toLowerCase();
-      if (key && !catalogByName.has(key)) {
-        catalogByName.set(key, c);
-      }
-    }
-
-    const validatedItems: AILineItem[] = (parsed.lineItems ?? []).map((item) => {
-      const score = Math.max(0, Math.min(100, Math.round(item.confidenceScore ?? 0)));
-      const nameLower = (item.productName ?? '').trim().toLowerCase();
-
-      // Skip fuzzy matching for empty/blank product names
-      if (!nameLower) {
-        return {
-          ...item,
-          productCatalogEntryId: null,
-          description: item.description ?? '',
-          confidenceScore: Math.min(score, CONFIDENCE_THRESHOLD - 1),
-          unmatchedReason: item.unmatchedReason || 'Empty product name',
-        };
-      }
-
-      // Try exact name match first
-      let catalogEntry = catalogByName.get(nameLower);
-
-      // Fuzzy fallback: find the closest catalog entry by substring match.
-      if (!catalogEntry) {
-        let bestMatch: ProductCatalogEntry | undefined;
-        let bestDiff = Infinity;
-        for (const [key, entry] of catalogByName) {
-          if (key.includes(nameLower) || nameLower.includes(key)) {
-            const diff = Math.abs(key.length - nameLower.length);
-            if (diff < bestDiff) {
-              bestMatch = entry;
-              bestDiff = diff;
-            }
-          }
-        }
-        catalogEntry = bestMatch;
-      }
-
-      if (catalogEntry) {
-        return {
-          ...item,
-          productCatalogEntryId: catalogEntry.id,
-          productName: catalogEntry.name,
-          description: catalogEntry.description ?? '',
-          quantity: item.quantity ?? 1,
-          unitPrice: catalogEntry.unitPrice,
-          confidenceScore: score,
-        };
-      }
-
-      // No catalog match — mark as unmatched
-      return {
-        ...item,
-        productCatalogEntryId: null,
-        description: item.description ?? '',
-        confidenceScore: Math.min(score, CONFIDENCE_THRESHOLD - 1),
-        unmatchedReason: item.unmatchedReason || 'No matching product found in catalog',
-      };
-    });
-
-    // Deduplicate: merge items that share the same product name.
-    // The AI sometimes returns the same product twice despite prompt instructions.
-    // NOTE: Deduplication is now handled in generateQuote() after the rules engine runs.
-
     return {
       selectedTemplateId: parsed.selectedTemplateId ?? null,
       selectedTemplateName: parsed.selectedTemplateName ?? null,
-      lineItems: validatedItems,
+      lineItems: applyCatalogMatchingToLineItems(parsed.lineItems ?? [], catalog),
       actionItems: this.validateAIActionItems(parsed.actionItems),
     };
   }
@@ -1179,7 +1125,346 @@ export class QuoteEngine {
     };
   }
 
+  /**
+   * Score existing line items (e.g. Jobber import) against customer request text
+   * using the same catalog matching, scope filter, completed-work reviewer, and
+   * alignment pass as generateQuote — without generating new items.
+   */
+  async scoreLineItemsAgainstRequest(input: ScoreLineItemsInput): Promise<ScoreLineItemsOutput> {
+    const preserveSourceFields = input.preserveSourceFields ?? false;
+    const requireCatalogForResolved = input.requireCatalogForResolved ?? true;
+
+    let aiItems: AILineItem[] = input.lineItems.map((li) => ({
+      id: li.id,
+      productCatalogEntryId: li.productCatalogEntryId,
+      productName: li.productName,
+      description: li.description ?? '',
+      quantity: li.quantity,
+      unitPrice: li.unitPrice,
+      confidenceScore: 85,
+      originalText: li.originalText || li.productName,
+      unmatchedReason: undefined,
+    }));
+
+    if (this.apiKey) {
+      try {
+        const alignmentScores = await scoreLineItemsRequestAlignment(
+          this.apiKey,
+          this.apiUrl,
+          aiItems,
+          input.customerText,
+        );
+        for (const item of aiItems) {
+          const alignment = alignmentScores.get(item.id ?? '');
+          if (alignment !== undefined) {
+            item.confidenceScore = alignment.score;
+            if (alignment.reason) {
+              item.unmatchedReason = alignment.reason;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(
+          '[QuoteEngine] Request alignment scoring failed:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
+    aiItems = applyCatalogMatchingToLineItems(aiItems, input.catalog, { preserveSourceFields });
+    aiItems = applyScopeMismatchPenalties(aiItems, input.catalog, input.customerText);
+
+    if (this.apiKey) {
+      const completedWorkService = new CompletedWorkService(this.apiKey, this.apiUrl);
+      const completedWorkContext = await completedWorkService.extract(input.customerText);
+      const filteredContext = {
+        ...completedWorkContext,
+        completedWork: filterCompletedWork(completedWorkContext.completedWork),
+      };
+
+      if (filteredContext.completedWork.length > 0) {
+        try {
+          const flagged = await reviewLineItemsAgainstCompletedWork(
+            this.apiKey,
+            this.apiUrl,
+            aiItems,
+            filteredContext.completedWork,
+            input.customerText,
+          );
+          for (const item of aiItems) {
+            const reason = flagged.get(item.id ?? '');
+            if (reason) {
+              item.confidenceScore = 0;
+              item.unmatchedReason = reason;
+            }
+          }
+        } catch (err) {
+          console.warn(
+            '[QuoteEngine] Completed-work review failed during import scoring:',
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+    }
+
+    return partitionScoredLineItems(aiItems, input.lineItems, { requireCatalogForResolved });
+  }
+
   // ── Rules section builder ─────────────────────────────────────────
+}
+
+// ---------------------------------------------------------------------------
+// Shared line-item confidence helpers (used by generateQuote and import scoring)
+// ---------------------------------------------------------------------------
+
+export interface CatalogMatchingOptions {
+  preserveSourceFields?: boolean;
+}
+
+export function applyCatalogMatchingToLineItems(
+  items: AILineItem[],
+  catalog: ProductCatalogEntry[],
+  options?: CatalogMatchingOptions,
+): AILineItem[] {
+  const preserveSourceFields = options?.preserveSourceFields ?? false;
+
+  const catalogByName = new Map<string, ProductCatalogEntry>();
+  for (const c of catalog) {
+    const key = c.name.trim().toLowerCase();
+    if (key && !catalogByName.has(key)) {
+      catalogByName.set(key, c);
+    }
+  }
+
+  return items.map((item) => {
+    const score = Math.max(0, Math.min(100, Math.round(item.confidenceScore ?? 0)));
+    const nameLower = (item.productName ?? '').trim().toLowerCase();
+
+    if (!nameLower) {
+      return {
+        ...item,
+        productCatalogEntryId: null,
+        description: item.description ?? '',
+        confidenceScore: Math.min(score, CONFIDENCE_THRESHOLD - 1),
+        unmatchedReason: item.unmatchedReason || 'Empty product name',
+      };
+    }
+
+    let catalogEntry = catalogByName.get(nameLower);
+
+    if (!catalogEntry) {
+      let bestMatch: ProductCatalogEntry | undefined;
+      let bestDiff = Infinity;
+      for (const [key, entry] of catalogByName) {
+        if (key.includes(nameLower) || nameLower.includes(key)) {
+          const diff = Math.abs(key.length - nameLower.length);
+          if (diff < bestDiff) {
+            bestMatch = entry;
+            bestDiff = diff;
+          }
+        }
+      }
+      catalogEntry = bestMatch;
+    }
+
+    if (catalogEntry) {
+      if (preserveSourceFields) {
+        return {
+          ...item,
+          productCatalogEntryId: catalogEntry.id,
+          confidenceScore: score,
+        };
+      }
+      return {
+        ...item,
+        productCatalogEntryId: catalogEntry.id,
+        productName: catalogEntry.name,
+        description: catalogEntry.description ?? '',
+        quantity: item.quantity ?? 1,
+        unitPrice: catalogEntry.unitPrice,
+        confidenceScore: score,
+      };
+    }
+
+    return {
+      ...item,
+      productCatalogEntryId: null,
+      description: item.description ?? '',
+      confidenceScore: Math.min(score, CONFIDENCE_THRESHOLD - 1),
+      unmatchedReason: item.unmatchedReason || 'No matching product found in catalog',
+    };
+  });
+}
+
+function applyScopeMismatchPenalties(
+  items: AILineItem[],
+  catalog: ProductCatalogEntry[],
+  customerText: string,
+): AILineItem[] {
+  const detectedScopes = detectRequestScopes(customerText);
+  if (detectedScopes.size === 0) {
+    return items;
+  }
+
+  const catalogById = new Map(catalog.map((p) => [p.id, p]));
+  const fullCatalogByName = new Map(
+    catalog.map((p) => [p.name.trim().toLowerCase(), p]),
+  );
+
+  return items.map((item) => {
+    const catalogEntry = item.productCatalogEntryId
+      ? catalogById.get(item.productCatalogEntryId)
+      : fullCatalogByName.get(item.productName.trim().toLowerCase());
+    const itemScope = catalogEntry?.scope;
+    if (itemScope && itemScope !== 'any' && !detectedScopes.has(itemScope)) {
+      return {
+        ...item,
+        confidenceScore: 0,
+        unmatchedReason: `Scope mismatch: "${itemScope}" work not mentioned in customer request`,
+      };
+    }
+    return item;
+  });
+}
+
+async function scoreLineItemsRequestAlignment(
+  apiKey: string,
+  apiUrl: string,
+  lineItems: AILineItem[],
+  customerText: string,
+): Promise<Map<string, { score: number; reason?: string }>> {
+  const scores = new Map<string, { score: number; reason?: string }>();
+
+  if (!apiKey || lineItems.length === 0 || !customerText.trim()) {
+    return scores;
+  }
+
+  const itemList = lineItems
+    .filter((li) => li.id)
+    .map((li) => `- id: ${li.id} | product: ${li.productName} | description: ${li.description || ''}`)
+    .join('\n');
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+
+  let response: Response;
+  try {
+    response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + apiKey,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: [
+              'You score imported quote line items against the customer request text.',
+              'For each line item, assign confidenceScore 0-100 for how well that work is requested or clearly implied.',
+              '90-100: explicitly requested or clearly required for the described work',
+              '70-89: reasonably implied or related to the request',
+              '40-69: tangential or uncertain relevance',
+              '0-39: not mentioned and not reasonably implied — likely wrong quote scope',
+              '',
+              'Return ONLY valid JSON array:',
+              '[{ "id": "item-id", "confidenceScore": 85, "reason": "brief explanation when score < 70" }]',
+              'Include every line item id. No markdown.',
+            ].join('\n'),
+          },
+          {
+            role: 'user',
+            content: [
+              'CUSTOMER REQUEST:',
+              customerText,
+              '',
+              'LINE ITEMS TO SCORE:',
+              itemList,
+            ].join('\n'),
+          },
+        ],
+        temperature: 0.1,
+        max_tokens: 800,
+      }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!response.ok) {
+    throw new Error(`Alignment scorer API returned ${response.status}`);
+  }
+
+  const data = (await response.json()) as {
+    choices: Array<{ message: { content: string } }>;
+  };
+
+  const raw = data.choices?.[0]?.message?.content?.trim() ?? '';
+  const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    throw new Error('Alignment scorer: invalid JSON response');
+  }
+
+  if (!Array.isArray(parsed)) {
+    return scores;
+  }
+
+  for (const entry of parsed as Array<unknown>) {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.id !== 'string' || !e.id) continue;
+    const score = Math.max(0, Math.min(100, Math.round(Number(e.confidenceScore ?? 0))));
+    scores.set(e.id, {
+      score,
+      reason: typeof e.reason === 'string' && e.reason.trim() ? e.reason.trim() : undefined,
+    });
+  }
+
+  return scores;
+}
+
+function partitionScoredLineItems(
+  aiItems: AILineItem[],
+  sourceItems: QuoteLineItem[],
+  options: { requireCatalogForResolved: boolean },
+): ScoreLineItemsOutput {
+  const sourceById = new Map(sourceItems.map((li) => [li.id, li]));
+  let lowConfidenceCount = 0;
+
+  const allItems: QuoteLineItem[] = aiItems.map((item) => {
+    const source = sourceById.get(item.id ?? '');
+    const resolved = item.confidenceScore >= CONFIDENCE_THRESHOLD
+      && (!options.requireCatalogForResolved || item.productCatalogEntryId !== null);
+    if (!resolved) {
+      lowConfidenceCount++;
+    }
+
+    return {
+      id: item.id ?? crypto.randomUUID(),
+      jobberLineItemId: source?.jobberLineItemId ?? null,
+      productCatalogEntryId: item.productCatalogEntryId,
+      productName: item.productName,
+      description: item.description ?? '',
+      quantity: Math.max(0, source?.quantity ?? item.quantity ?? 1),
+      unitPrice: Math.max(0, source?.unitPrice ?? item.unitPrice ?? 0),
+      confidenceScore: item.confidenceScore,
+      originalText: item.originalText ?? source?.originalText ?? '',
+      resolved,
+      unmatchedReason: resolved ? undefined : (item.unmatchedReason || 'Low confidence match'),
+    };
+  });
+
+  return {
+    lineItems: allItems.filter((i) => i.resolved),
+    unresolvedItems: allItems.filter((i) => !i.resolved),
+    lowConfidenceCount,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1375,7 +1660,7 @@ async function reviewLineItemsAgainstCompletedWork(
  *
  * 'any' and null are always included (no constraint).
  */
-function detectRequestScopes(customerText: string): Set<string> {
+export function detectRequestScopes(customerText: string): Set<string> {
   const text = customerText.toLowerCase();
   const scopes = new Set<string>();
 

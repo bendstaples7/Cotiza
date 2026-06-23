@@ -1,9 +1,19 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import DeathclockBadge from '../components/DeathclockBadge';
+import RequestJobberQuoteModal from '../components/RequestJobberQuoteModal';
 import type { ErrorResponse } from 'shared';
-import { fetchManualRequests } from '../api';
-import type { ManualRequestWithDeathclock } from '../api';
+import { isPlaceholderJobberClientName } from 'shared';
+import {
+  fetchManualRequests,
+  enrichManualRequests,
+  generateQuote,
+  fetchDrafts,
+  deleteDraft,
+  resolveRequestQuote,
+  fetchRequestJobberQuotes,
+} from '../api';
+import type { ManualRequestWithDeathclock, ResolveRequestQuoteResult } from '../api';
 
 // ---------------------------------------------------------------------------
 // Deathclock color → hex map (mirrors DeathclockBadge component)
@@ -23,6 +33,17 @@ const hexToRgb = (hex: string): string => {
   return `${r}, ${g}, ${b}`;
 };
 
+/** Draft created before Jobber/email enrichment finished — should be regenerated. */
+function isSparseDraft(draft: {
+  customerRequestText?: string;
+  lineItems?: unknown[];
+  unresolvedItems?: unknown[];
+}): boolean {
+  const hasText = (draft.customerRequestText ?? '').trim().length > 0;
+  const itemCount = (draft.lineItems?.length ?? 0) + (draft.unresolvedItems?.length ?? 0);
+  return !hasText && itemCount === 0;
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -34,6 +55,15 @@ export default function RequestQueuePage() {
   const [requests, setRequests] = useState<ManualRequestWithDeathclock[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [generatingForId, setGeneratingForId] = useState<string | null>(null);
+  const [generateError, setGenerateError] = useState<string | null>(null);
+  const [jobberQuoteBadges, setJobberQuoteBadges] = useState<
+    Record<string, Array<{ quoteNumber: string; quoteStatus: string }>>
+  >({});
+  const [quoteModal, setQuoteModal] = useState<{
+    req: ManualRequestWithDeathclock;
+    resolution: ResolveRequestQuoteResult;
+  } | null>(null);
 
   // Tick counter to trigger re-renders every second for live deathclock age
   const [tick, setTick] = useState(0);
@@ -45,26 +75,74 @@ export default function RequestQueuePage() {
     return () => clearInterval(interval);
   }, []);
 
-  // Read sort from URL query param, default to 'age_asc'
+  // Default to newest first unless sort=age_asc is explicitly set
   const sortParam = searchParams.get('sort');
   const currentSort: 'age_asc' | 'age_desc' =
-    sortParam === 'age_desc' ? 'age_desc' : 'age_asc';
+    sortParam === 'age_asc' ? 'age_asc' : 'age_desc';
 
-  const loadRequests = useCallback(async () => {
+  const loadRequests = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent ?? false;
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       setError(null);
       const result = await fetchManualRequests(currentSort);
       setRequests(result);
       lastFetchedAtRef.current = Date.now();
+
+      const sparseJobberIds = result
+        .filter((r) =>
+          r.requestSource === 'jobber'
+          && r.jobberRequestId
+          && isPlaceholderJobberClientName(r.customerName),
+        )
+        .map((r) => r.jobberRequestId as string)
+        .slice(0, 10);
+      if (sparseJobberIds.length > 0) {
+        enrichManualRequests(sparseJobberIds)
+          .then((enriched) => {
+            if (enriched.length === 0) return;
+            setRequests((prev) => prev.map((req) => {
+              const hit = enriched.find((e) => e.jobberRequestId === req.jobberRequestId);
+              if (!hit) return req;
+              return {
+                ...req,
+                customerName: hit.customerName,
+                requestTitle: hit.requestTitle,
+                requestBodyText: hit.requestBodyText,
+                noteHighlights: hit.noteHighlights,
+                serviceDescription: hit.serviceDescription,
+              };
+            }));
+          })
+          .catch(() => { /* best-effort background enrich */ });
+      }
+
+      const jobberIdsForBadges = result
+        .filter((r) => r.jobberRequestId)
+        .map((r) => r.jobberRequestId as string)
+        .slice(0, 10);
+      if (jobberIdsForBadges.length > 0) {
+        fetchRequestJobberQuotes(jobberIdsForBadges)
+          .then((quotesByRequest) => {
+            if (Object.keys(quotesByRequest).length > 0) {
+              setJobberQuoteBadges((prev) => ({ ...prev, ...quotesByRequest }));
+            }
+          })
+          .catch(() => { /* best-effort badge fetch */ });
+      }
     } catch (err) {
       setError((err as ErrorResponse).message ?? 'Failed to load request queue.');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [currentSort]);
 
   useEffect(() => { loadRequests(); }, [loadRequests]);
+
+  const quoteModalOpenRef = useRef(false);
+  useEffect(() => {
+    quoteModalOpenRef.current = quoteModal !== null;
+  }, [quoteModal]);
 
   // 60-second polling with visibility detection and immediate poll on focus
   useEffect(() => {
@@ -74,7 +152,10 @@ export default function RequestQueuePage() {
 
     function startPolling() {
       stopPolling();
-      pollInterval = setInterval(loadRequests, POLL_INTERVAL_MS);
+      pollInterval = setInterval(() => {
+        if (quoteModalOpenRef.current) return;
+        loadRequests({ silent: true });
+      }, POLL_INTERVAL_MS);
     }
 
     function stopPolling() {
@@ -93,7 +174,8 @@ export default function RequestQueuePage() {
     }
 
     function handleWindowFocus() {
-      loadRequests();
+      if (quoteModalOpenRef.current) return;
+      loadRequests({ silent: true });
     }
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -117,8 +199,80 @@ export default function RequestQueuePage() {
     navigate('?' + params.toString(), { replace: false });
   };
 
-  // ── Loading state ──
-  if (loading) {
+  const runGenerateQuote = async (req: ManualRequestWithDeathclock) => {
+    const cardKey = req.jobberRequestId ?? req.id;
+    setGenerateError(null);
+
+    try {
+      const drafts = await fetchDrafts();
+      const existingDraft = drafts
+        .filter((d) => d.status !== 'finalized')
+        .find((d) =>
+          req.jobberRequestId
+            ? d.jobberRequestId === req.jobberRequestId
+            : d.manualRequestId === req.id,
+        );
+
+      if (existingDraft) {
+        if (!isSparseDraft(existingDraft)) {
+          navigate('/quotes/drafts/' + existingDraft.id);
+          return;
+        }
+        await deleteDraft(existingDraft.id);
+      }
+
+      setGeneratingForId(cardKey);
+      const payload = req.jobberRequestId
+        ? { jobberRequestId: req.jobberRequestId }
+        : { manualRequestId: req.id, customerText: '' };
+      const draft = await generateQuote(payload);
+      navigate('/quotes/drafts/' + draft.id);
+    } catch (err) {
+      setGenerateError((err as ErrorResponse).message ?? 'Failed to create quote draft.');
+    } finally {
+      setGeneratingForId(null);
+    }
+  };
+
+  const handleRequestClick = async (req: ManualRequestWithDeathclock) => {
+    if (generatingForId) return;
+
+    if (!req.jobberRequestId) {
+      await runGenerateQuote(req);
+      return;
+    }
+
+    const cardKey = req.jobberRequestId;
+    setGenerateError(null);
+    setGeneratingForId(cardKey);
+
+    try {
+      const resolution = await resolveRequestQuote(req.jobberRequestId);
+
+      if (resolution.recommendedAction === 'import_jobber') {
+        setQuoteModal({ req, resolution });
+        return;
+      }
+
+      if (resolution.recommendedAction === 'open_cotiza') {
+        const importedDraftId = resolution.jobberQuotes.find((q) => q.importedDraftId)?.importedDraftId;
+        const draftId = importedDraftId ?? resolution.cotizaDraft?.id;
+        if (draftId) {
+          navigate('/quotes/drafts/' + draftId);
+          return;
+        }
+      }
+
+      await runGenerateQuote(req);
+    } catch (err) {
+      setGenerateError((err as ErrorResponse).message ?? 'Failed to resolve quote for this request.');
+    } finally {
+      setGeneratingForId(null);
+    }
+  };
+
+  // ── Loading state (initial load only — keep list + modal visible during background refresh) ──
+  if (loading && requests.length === 0) {
     return (
       <div style={containerStyle}>
         <div style={loadingContainerStyle}>
@@ -136,6 +290,40 @@ export default function RequestQueuePage() {
 
   return (
     <div style={containerStyle}>
+      {quoteModal && (
+        <RequestJobberQuoteModal
+          resolution={quoteModal.resolution}
+          customerName={quoteModal.req.customerName}
+          onClose={() => setQuoteModal(null)}
+          onOpenCotiza={(draftId) => {
+            setQuoteModal(null);
+            navigate('/quotes/drafts/' + draftId);
+          }}
+          onGenerateNew={() => {
+            const req = quoteModal.req;
+            setQuoteModal(null);
+            void runGenerateQuote(req);
+          }}
+        />
+      )}
+      {generatingForId && (
+        <>
+          <style>{`
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+`}</style>
+          <div style={generatingOverlayStyle} role="status" aria-live="polite">
+            <span style={overlaySpinnerStyle} />
+            <p style={{ margin: '1rem 0 0', color: '#061216', fontWeight: 500 }}>
+              Creating quote draft…
+            </p>
+            <p style={{ margin: '0.35rem 0 0', color: '#666', fontSize: '0.85rem' }}>
+              Pulling request details and generating line items
+            </p>
+          </div>
+        </>
+      )}
       {anyShouldPulse && (
         <style>{`
 @keyframes dc-card-glow {
@@ -170,6 +358,10 @@ export default function RequestQueuePage() {
         <div role="alert" style={alertStyle}>{error}</div>
       )}
 
+      {generateError && (
+        <div role="alert" style={alertStyle}>{generateError}</div>
+      )}
+
       {requests.length === 0 ? (
         <div style={emptyStyle}>
           <p style={{ margin: 0, color: '#888' }}>No pending requests in the queue.</p>
@@ -177,34 +369,41 @@ export default function RequestQueuePage() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
           {requests.map((req) => {
+            const cardKey = req.jobberRequestId ?? req.id;
             const colorHex = DEATHCLOCK_COLORS[req.deathclock.color] ?? '#10b981';
             const liveAge = req.deathclock.ageSeconds + Math.floor((Date.now() - lastFetchedAtRef.current) / 1000);
             const shouldPulse = !req.deathclock.frozen && !req.deathclock.isComplete &&
               (req.deathclock.color === 'yellow' || req.deathclock.color === 'orange' || req.deathclock.color === 'red');
+            const isGenerating = generatingForId === cardKey;
+            const linkedQuotes = req.jobberRequestId ? jobberQuoteBadges[req.jobberRequestId] : undefined;
+            const bodyText = (req.requestBodyText ?? '').trim();
+            const noteHighlights = req.noteHighlights ?? [];
+            const titleDuplicatesBody = !!(
+              req.requestTitle?.trim()
+              && bodyText
+              && req.requestTitle.trim() === bodyText
+            );
             return (
               <div
-                key={req.id}
+                key={cardKey}
                 style={{
                   ...cardStyle,
                   borderLeft: `4px solid ${colorHex}`,
+                  opacity: generatingForId && !isGenerating ? 0.6 : 1,
+                  pointerEvents: generatingForId ? 'none' : 'auto',
                   ...(shouldPulse ? { '--dc-card-rgb': hexToRgb(colorHex), animation: 'dc-card-glow 2s ease-in-out infinite' } as React.CSSProperties : {}),
                 }}
-                onClick={() => {
-                  const key = req.jobberRequestId ? 'createFromJobberRequestId' : 'createFromManualRequestId';
-                  const val = req.jobberRequestId ? encodeURIComponent(req.jobberRequestId) : encodeURIComponent(req.id);
-                  navigate('/quotes?' + key + '=' + val);
-                }}
+                onClick={() => { handleRequestClick(req); }}
                 role="button"
                 tabIndex={0}
                 onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
-                      const key = req.jobberRequestId ? 'createFromJobberRequestId' : 'createFromManualRequestId';
-                      const val = req.jobberRequestId ? encodeURIComponent(req.jobberRequestId) : encodeURIComponent(req.id);
-                      navigate('/quotes?' + key + '=' + val);
+                      handleRequestClick(req);
                     }
                   }}
                 aria-label={`Request from ${req.customerName}`}
+                aria-busy={isGenerating}
               >
                 <div style={cardInnerStyle}>
                   <div style={cardHeaderStyle}>
@@ -219,11 +418,39 @@ export default function RequestQueuePage() {
                       compact
                     />
                   </div>
-                  <p style={descriptionStyle}>
-                    {req.serviceDescription.length > 120
-                      ? req.serviceDescription.slice(0, 120) + '…'
-                      : req.serviceDescription}
-                  </p>
+                  {req.requestTitle?.trim() && (
+                    <p style={requestTitleStyle}>{req.requestTitle}</p>
+                  )}
+                  {noteHighlights.length > 0 && (
+                    <div style={highlightsContainerStyle}>
+                      {noteHighlights.slice(0, 2).map((note, i) => (
+                        <div
+                          key={i}
+                          style={{
+                            ...highlightBoxStyle,
+                            ...(note.label === 'Client' ? clientHighlightStyle : {}),
+                          }}
+                        >
+                          <span style={highlightLabelStyle}>{note.label}</span>
+                          <p style={highlightTextStyle}>
+                            {note.message.length > 200
+                              ? note.message.slice(0, 200) + '…'
+                              : note.message}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {noteHighlights.length === 0 && bodyText && !titleDuplicatesBody && (
+                    <div style={highlightsContainerStyle}>
+                      <div style={highlightBoxStyle}>
+                        <span style={highlightLabelStyle}>Request</span>
+                        <p style={highlightTextStyle}>
+                          {bodyText.length > 200 ? bodyText.slice(0, 200) + '…' : bodyText}
+                        </p>
+                      </div>
+                    </div>
+                  )}
                   <div style={metaRowStyle}>
                     <span style={metaStyle}>
                       Created {new Date(req.createdAt).toLocaleDateString()}
@@ -231,6 +458,11 @@ export default function RequestQueuePage() {
                     {req.jobberRequestId && (
                       <span style={metaStyle}>
                         Jobber #{decodeJobberId(req.jobberRequestId)}
+                      </span>
+                    )}
+                    {linkedQuotes && linkedQuotes.length > 0 && (
+                      <span style={jobberQuoteBadgeStyle}>
+                        Jobber quote #{linkedQuotes[0].quoteNumber} · {linkedQuotes[0].quoteStatus.replace(/_/g, ' ')}
                       </span>
                     )}
                   </div>
@@ -346,6 +578,51 @@ const customerNameStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
+const requestTitleStyle: React.CSSProperties = {
+  margin: '0 0 0.5rem',
+  fontSize: '0.9rem',
+  fontWeight: 600,
+  color: '#00a89d',
+  lineHeight: 1.35,
+};
+
+const highlightsContainerStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '0.4rem',
+  marginBottom: '0.5rem',
+};
+
+const highlightBoxStyle: React.CSSProperties = {
+  padding: '0.5rem 0.65rem',
+  background: '#f8f9fa',
+  borderLeft: '3px solid #cbd5e1',
+  borderRadius: 4,
+};
+
+const clientHighlightStyle: React.CSSProperties = {
+  background: '#f0fdf9',
+  borderLeftColor: '#00a89d',
+};
+
+const highlightLabelStyle: React.CSSProperties = {
+  display: 'block',
+  fontSize: '0.7rem',
+  fontWeight: 700,
+  textTransform: 'uppercase',
+  letterSpacing: '0.04em',
+  color: '#888',
+  marginBottom: '0.2rem',
+};
+
+const highlightTextStyle: React.CSSProperties = {
+  margin: 0,
+  fontSize: '0.85rem',
+  color: '#333',
+  lineHeight: 1.45,
+  whiteSpace: 'pre-wrap',
+};
+
 const descriptionStyle: React.CSSProperties = {
   margin: '0 0 0.4rem',
   fontSize: '0.9rem',
@@ -365,6 +642,36 @@ const metaRowStyle: React.CSSProperties = {
 const metaStyle: React.CSSProperties = {
   fontSize: '0.8rem',
   color: '#888',
+};
+
+const jobberQuoteBadgeStyle: React.CSSProperties = {
+  fontSize: '0.75rem',
+  fontWeight: 500,
+  color: '#1565c0',
+  background: '#e3f2fd',
+  padding: '0.1rem 0.4rem',
+  borderRadius: 4,
+};
+
+const generatingOverlayStyle: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(255, 255, 255, 0.92)',
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  zIndex: 1000,
+};
+
+const overlaySpinnerStyle: React.CSSProperties = {
+  display: 'inline-block',
+  width: 40,
+  height: 40,
+  border: '4px solid #e0e0e0',
+  borderTopColor: '#00a89d',
+  borderRadius: '50%',
+  animation: 'spin 0.7s linear infinite',
 };
 
 /** Decode a base64 Jobber GraphQL ID and extract the numeric request ID for display. */

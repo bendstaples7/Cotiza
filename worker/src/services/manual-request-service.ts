@@ -1,7 +1,27 @@
 import { PlatformError } from '../errors/index.js';
 import type { ManualRequest, CreateManualRequestPayload, DeathclockState } from 'shared';
+import { resolveJobberRequestFields } from 'shared';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** SQL: treat NULL, blank, and literal "null"/"undefined" as absent. */
+function sqlStoredText(column: string): string {
+  return `NULLIF(NULLIF(NULLIF(TRIM(COALESCE(${column}, '')), ''), 'null'), 'undefined')`;
+}
+
+/**
+ * Queue age anchor for Jobber rows: prefer Jobber's request.createdAt stored in
+ * request_body; fall back to earliest webhook receipt. Using the picked row's
+ * received_at alone makes re-enriched old requests look brand-new.
+ */
+function sqlJobberQueueCreatedAt(alias: string): string {
+  return `COALESCE(
+    NULLIF(json_extract(${alias}.request_body, '$.createdAt'), ''),
+    (SELECT MIN(jwr_age.received_at)
+       FROM jobber_webhook_requests jwr_age
+      WHERE jwr_age.jobber_request_id = ${alias}.jobber_request_id)
+  )`;
+}
 
 /** A manual-request row returned by list(), optionally enriched with deathclock data. */
 export interface ManualRequestListRow extends ManualRequest {
@@ -9,6 +29,12 @@ export interface ManualRequestListRow extends ManualRequest {
   quoteSentAt?: string | null;
   deathclock?: DeathclockState;
   jobberRequestId?: string | null;
+  /** Jobber request title (when distinct from customer name). */
+  requestTitle?: string | null;
+  /** Notes/description/form text for queue display. */
+  requestBodyText?: string;
+  /** Short note excerpts for queue cards. */
+  noteHighlights?: Array<{ label: string; message: string }>;
 }
 
 /** Bucket counts returned by the deathclock stats endpoint. */
@@ -62,17 +88,12 @@ export class ManualRequestService {
     includeDeathclock?: boolean;
   }): Promise<ManualRequestListRow[]> {
     const { userId, sortBy, includeDeathclock } = params;
-
-    // Compute age_seconds in SQL: NOW() - created_at
-    const ageExpr = "CAST((unixepoch('now') - unixepoch(created_at)) AS INTEGER)";
+    const effectiveSort = sortBy ?? 'age_desc';
 
     let orderClause = '';
-    if (sortBy === 'age_asc') {
-      // age_seconds = NOW - created_at, so larger value = older request.
-      // "Oldest first" (most urgent) requires DESC so highest age_seconds comes first.
+    if (effectiveSort === 'age_asc') {
       orderClause = `ORDER BY age_seconds DESC`;
-    } else if (sortBy === 'age_desc') {
-      // "Newest first" = smallest age_seconds first = ASC.
+    } else if (effectiveSort === 'age_desc') {
       orderClause = `ORDER BY age_seconds ASC`;
     }
 
@@ -97,7 +118,8 @@ export class ManualRequestService {
                ,jwr.jobber_request_id AS jobber_request_id` : `, NULL AS quote_sent_at, jwr.jobber_request_id AS jobber_request_id`;
 
     // UNION manual_requests + jobber_webhook_requests so the queue shows all sources.
-    // Wrapped in outer SELECT so ORDER BY can reference the computed age_seconds alias.
+    // Jobber: one row per jobber_request_id; active only (no sent quote). Multiple
+    // quote_drafts for the same request must not multiply cards (use EXISTS, not JOIN).
     const sql = `
       SELECT * FROM (
         SELECT mr.id,
@@ -110,39 +132,81 @@ export class ManualRequestService {
                mr.media_item_ids_json,
                mr.created_at,
                CAST((unixepoch('now') - unixepoch(mr.created_at)) AS INTEGER) AS age_seconds,
-               'manual' AS request_source
+               'manual' AS request_source,
+               NULL AS jobber_title,
+               NULL AS jobber_description,
+               NULL AS jobber_request_body
                ${deathclockManualCols}
         FROM manual_requests mr
         WHERE mr.user_id = ?
+          AND NOT EXISTS (
+            SELECT 1
+              FROM quote_drafts qd_link
+             WHERE qd_link.manual_request_id = mr.id
+               AND qd_link.user_id = ?
+               AND qd_link.jobber_request_id IS NOT NULL
+          )
+          AND NOT EXISTS (
+            SELECT 1
+              FROM quote_drafts qd_sent
+             WHERE qd_sent.manual_request_id = mr.id
+               AND qd_sent.quote_sent_at IS NOT NULL
+          )
 
         UNION ALL
 
         SELECT jwr.id,
                ? AS user_id,
-               COALESCE(jwr.client_name, jwr.title, 'Unknown') AS customer_name,
+               COALESCE(${sqlStoredText('jwr.client_name')}, 'Unknown') AS customer_name,
                NULL AS customer_phone,
                NULL AS customer_email,
                NULL AS customer_address,
-               COALESCE(jwr.description, jwr.title, '') AS service_description,
+               COALESCE(jwr.title, jwr.description, '') AS service_description,
                '[]' AS media_item_ids_json,
-               jwr.received_at AS created_at,
-               CAST((unixepoch('now') - unixepoch(jwr.received_at)) AS INTEGER) AS age_seconds,
-               'jobber' AS request_source
+               ${sqlJobberQueueCreatedAt('jwr')} AS created_at,
+               CAST((unixepoch('now') - unixepoch(${sqlJobberQueueCreatedAt('jwr')})) AS INTEGER) AS age_seconds,
+               'jobber' AS request_source,
+               jwr.title AS jobber_title,
+               jwr.description AS jobber_description,
+               jwr.request_body AS jobber_request_body
                ${deathclockJobberCols}
         FROM jobber_webhook_requests jwr
-        -- Scope to user via quote_drafts: only surface webhook requests that
-        -- this user has already drafted (or is drafting). Without this JOIN,
-        -- ALL webhook requests across all users would be returned.
-        INNER JOIN quote_drafts qd_scope
-          ON qd_scope.jobber_request_id = jwr.jobber_request_id
-         AND qd_scope.user_id = ?
+        INNER JOIN (
+          SELECT jobber_request_id, id AS pick_id
+            FROM (
+              SELECT id,
+                     jobber_request_id,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY jobber_request_id
+                       ORDER BY
+                         CASE WHEN processed_at IS NOT NULL THEN 0 ELSE 1 END,
+                         processed_at DESC,
+                         length(COALESCE(${sqlStoredText('request_body')}, '')) DESC,
+                         length(COALESCE(${sqlStoredText('client_name')}, '')) DESC,
+                         length(COALESCE(${sqlStoredText('description')}, '')) DESC,
+                         received_at DESC,
+                         id DESC
+                     ) AS rn
+                FROM jobber_webhook_requests
+            ) ranked
+           WHERE rn = 1
+        ) picked ON jwr.id = picked.pick_id
+        WHERE NOT EXISTS (
+          SELECT 1
+            FROM quote_drafts qd_sent
+           WHERE qd_sent.jobber_request_id = jwr.jobber_request_id
+             AND qd_sent.quote_sent_at IS NOT NULL
+        )
       )
       ${orderClause}
     `;
 
     const rows = await this.db.prepare(sql).bind(userId, userId, userId).all<Record<string, unknown>>();
 
-    return (rows.results ?? []).map(row => this.mapListRow(row));
+    return this.dedupeListRows(
+      (rows.results ?? []).map(row => this.mapListRow(row)),
+      effectiveSort,
+    );
   }
 
   /**
@@ -520,6 +584,32 @@ export class ManualRequestService {
   }
 
   /**
+   * Collapse duplicate queue rows — one card per Jobber request or manual request.
+   * Re-sorts after dedupe so ORDER BY is preserved when the SQL UNION produced duplicates.
+   */
+  private dedupeListRows(
+    rows: ManualRequestListRow[],
+    sortBy: 'age_asc' | 'age_desc' = 'age_desc',
+  ): ManualRequestListRow[] {
+    const seen = new Map<string, ManualRequestListRow>();
+    for (const row of rows) {
+      const key = row.jobberRequestId
+        ? `jobber:${row.jobberRequestId}`
+        : `manual:${row.id}`;
+      if (!seen.has(key)) {
+        seen.set(key, row);
+      }
+    }
+    const deduped = Array.from(seen.values());
+    if (sortBy === 'age_asc') {
+      deduped.sort((a, b) => b.ageSeconds - a.ageSeconds);
+    } else {
+      deduped.sort((a, b) => a.ageSeconds - b.ageSeconds);
+    }
+    return deduped;
+  }
+
+  /**
    * Map a database row to a ManualRequest object.
    */
   private mapRow(row: Record<string, unknown>): ManualRequest {
@@ -551,11 +641,27 @@ export class ManualRequestService {
    */
   private mapListRow(row: Record<string, unknown>): ManualRequestListRow {
     const base = this.mapRow(row);
-    return {
+    const listRow: ManualRequestListRow = {
       ...base,
       ageSeconds: Number(row.age_seconds),
       ...(row.quote_sent_at !== undefined ? { quoteSentAt: (row.quote_sent_at as string) || null } : {}),
       ...(row.jobber_request_id !== undefined ? { jobberRequestId: (row.jobber_request_id as string) || null } : {}),
     };
+
+    if (base.requestSource === 'jobber') {
+      const resolved = resolveJobberRequestFields({
+        clientName: base.customerName,
+        title: (row.jobber_title as string) ?? null,
+        description: (row.jobber_description as string) ?? null,
+        requestBody: row.jobber_request_body ?? null,
+      });
+      listRow.customerName = resolved.customerName;
+      listRow.serviceDescription = resolved.serviceDescription;
+      listRow.requestTitle = resolved.requestTitle;
+      listRow.requestBodyText = resolved.requestBodyText;
+      listRow.noteHighlights = resolved.noteHighlights;
+    }
+
+    return listRow;
   }
 }

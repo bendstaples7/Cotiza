@@ -10,6 +10,22 @@ const app = new Hono<{ Bindings: Bindings; Variables: { user: User } }>();
 
 app.use('*', sessionMiddleware);
 
+const JOBBER_PING_TIMEOUT_MS = 3_000;
+
+async function pingJobber(jobber: JobberIntegration): Promise<boolean> {
+  try {
+    await Promise.race([
+      jobber.graphqlRequest('{ account { name } }', {}),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Jobber health check timed out')), JOBBER_PING_TIMEOUT_MS);
+      }),
+    ]);
+    return jobber.isAvailable();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * GET /status
  * Returns aggregated status of all external service connections.
@@ -20,39 +36,9 @@ app.use('*', sessionMiddleware);
 app.get('/status', async (c) => {
   const db = c.env.DB;
   const userId = c.get('user').id;
+  const isLocalDev = c.env.ENABLE_LOCAL_SYNC === 'true';
 
-  // ── LOCAL-DEV: Skip session cookie check and Instagram check, ──
-  // but still validate the OAuth token from local D1.
-  if (c.env.ENABLE_LOCAL_SYNC === 'true') {
-    let jobberAvailable = false;
-    try {
-      const tokenStore = new JobberTokenStore(db);
-      const tokens = await tokenStore.load();
-      if (tokens) {
-        const activityLog = new ActivityLogService(db);
-        const jobber = new JobberIntegration(activityLog, {
-          clientId: c.env.JOBBER_CLIENT_ID || '',
-          clientSecret: c.env.JOBBER_CLIENT_SECRET || '',
-          accessToken: tokens.accessToken,
-          refreshToken: tokens.refreshToken,
-          tokenStore,
-        });
-        await jobber.graphqlRequest('{ account { name } }', {});
-        jobberAvailable = jobber.isAvailable();
-      }
-    } catch {
-      jobberAvailable = false;
-    }
-
-    const response: SystemsStatusResponse = {
-      jobber: { available: jobberAvailable },
-      jobberSession: { configured: true, expired: false },
-      instagram: { status: 'not_connected' },
-    };
-    return c.json(response);
-  }
-
-  // ── Jobber OAuth token validity (fail-closed: unavailable on error) ──
+  // ── Jobber OAuth token validity (fail-closed — same in local dev and production) ──
   let jobberAvailable = false;
   try {
     const tokenStore = new JobberTokenStore(db);
@@ -66,16 +52,13 @@ app.get('/status', async (c) => {
         refreshToken: tokens.refreshToken,
         tokenStore,
       });
-      await jobber.graphqlRequest('{ account { name } }', {});
-      jobberAvailable = jobber.isAvailable();
+      jobberAvailable = await pingJobber(jobber);
 
-      if (jobberAvailable) {
-        // Background sync: register with waitUntil so the CF Workers runtime
-        // keeps the isolate alive until the sync completes (or fails).
+      if (jobberAvailable && !isLocalDev) {
         c.executionCtx.waitUntil(
           jobber.syncProductCatalog(db, userId).catch(() => {
             // Sync failure is non-blocking — syncProductCatalog already logs errors internally
-          })
+          }),
         );
       }
     }
@@ -89,11 +72,23 @@ app.get('/status', async (c) => {
   // from Jobber's internal API. The client treats expired/missing cookies as a
   // BLOCKING gate — the user cannot proceed until cookies are refreshed.
   // Do NOT change this to a non-blocking/optional check.
-  // Cookie refresh is handled by the GitHub Actions workflow (triggered on-demand
-  // from the client or on a cron schedule). The worker only checks status here.
   let jobberSession: SystemsStatusResponse['jobberSession'] = { configured: false, expired: false };
   try {
     const webSession = new JobberWebSession(db);
+
+    // Local dev: pull valid session cookies from production when local copy is stale.
+    // Same source-of-truth sync as sync-cookies.mjs on startup — not an auth bypass.
+    if (isLocalDev && c.env.CLOUDFLARE_ACCOUNT_ID && c.env.CLOUDFLARE_API_TOKEN && c.env.D1_DATABASE_ID) {
+      const before = await webSession.getStatus();
+      if (!before.configured || before.expired) {
+        await webSession.syncFromRemote({
+          accountId: c.env.CLOUDFLARE_ACCOUNT_ID,
+          apiToken: c.env.CLOUDFLARE_API_TOKEN,
+          databaseId: c.env.D1_DATABASE_ID,
+        });
+      }
+    }
+
     jobberSession = await webSession.getStatus();
   } catch {
     // D1 error — fail-open, report not configured

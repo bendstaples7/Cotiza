@@ -18,3 +18,27 @@ export interface SystemsStatusResponse {
     accountName?: string;
   };
 }
+
+/** Result of fetching Gmail context for a quote draft side panel. */
+export type DraftEmailContextStatus =
+  | 'cached'
+  | 'found'
+  | 'not_found'
+  | 'not_configured'
+  | 'no_customer_email';
+
+export interface DraftEmailContextMessage {
+  direction: 'Incoming' | 'Outgoing';
+  from: string;
+  to: string;
+  subject: string;
+  date: string;
+  body: string;
+}
+
+export interface DraftEmailContextResponse {
+  status: DraftEmailContextStatus;
+  customerEmail: string | null;
+  messages: DraftEmailContextMessage[];
+  gmailConfigured: boolean;
+}
