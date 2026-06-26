@@ -63,20 +63,24 @@ export function installFetchMock(): FetchMock {
   const handlers: Array<{ match: (url: string, init: RequestInit) => boolean; spec: SpecFactory }> = [];
   const calls: RecordedCall[] = [];
 
-  const impl = async (input: unknown, init: RequestInit = {}): Promise<Response> => {
-    const url = typeof input === 'string' ? input : (input as Request).url;
-    const method = (init.method ?? 'GET').toUpperCase();
+  const impl = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
+    const request = input instanceof Request ? input : new Request(input, init);
     const headers: Record<string, string> = {};
-    if (init.headers && typeof init.headers === 'object' && !Array.isArray(init.headers)) {
-      for (const [k, v] of Object.entries(init.headers as Record<string, string>)) headers[k] = v;
-    }
-    calls.push({ url, method, body: typeof init.body === 'string' ? init.body : undefined, headers });
+    request.headers.forEach((value, key) => {
+      headers[key] = value;
+    });
+    calls.push({
+      url: request.url,
+      method: request.method.toUpperCase(),
+      body: typeof init.body === 'string' ? init.body : undefined,
+      headers,
+    });
 
-    const handler = handlers.find((h) => h.match(url, init));
+    const handler = handlers.find((h) => h.match(request.url, init));
     if (!handler) {
-      throw new Error(`installFetchMock: no handler registered for ${method} ${url}`);
+      throw new Error(`installFetchMock: no handler registered for ${request.method.toUpperCase()} ${request.url}`);
     }
-    const spec = typeof handler.spec === 'function' ? handler.spec(url, init) : handler.spec;
+    const spec = typeof handler.spec === 'function' ? handler.spec(request.url, init) : handler.spec;
     return makeResponse(spec);
   };
 

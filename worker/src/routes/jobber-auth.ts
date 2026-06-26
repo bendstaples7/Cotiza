@@ -303,7 +303,7 @@ app.post('/trigger-cookie-refresh', async (c) => {
     console.error(`[jobber-auth] GitHub workflow dispatch failed (${resp.status}) for repo ${repo}: ${text}`);
     const detail = text.trim().slice(0, 200);
     const hint = resp.status === 404
-      ? ` — verify the repo "${repo}" and workflow "refresh-jobber-cookies.yml" exist and GITHUB_PAT has workflow scope`
+      ? ` — verify the repo "${repo}" and workflow "${EXTERNAL.github.cookieRefreshWorkflow}" exist and GITHUB_PAT has workflow scope`
       : '';
     return c.json(
       { triggered: false, error: `GitHub API returned ${resp.status}${hint}`, ...(detail ? { detail } : {}) },

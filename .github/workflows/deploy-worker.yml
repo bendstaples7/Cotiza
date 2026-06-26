@@ -50,7 +50,7 @@ jobs:
           LAST=""
           for i in 1 2 3 4 5; do
             sleep 5
-            BODY=$(curl -s "$URL")
+            BODY=$(curl -s --max-time 10 "$URL")
             LAST="$BODY"
             STATUS=$(echo "$BODY" | jq -r '.status // "unknown"')
             if [ "$STATUS" = "ok" ]; then
@@ -74,7 +74,7 @@ jobs:
             exit 0
           fi
           URL="https://social-media-cross-poster.chicago-reno.workers.dev/health/pipelines"
-          BODY=$(curl -s -H "X-Health-Key: $HEALTHCHECK_KEY" "$URL")
+          BODY=$(curl -s --max-time 10 -H "X-Health-Key: $HEALTHCHECK_KEY" "$URL")
           STATUS=$(echo "$BODY" | jq -r '.status // "unknown"')
           echo "Pipelines: $BODY"
           if [ "$STATUS" = "ok" ]; then

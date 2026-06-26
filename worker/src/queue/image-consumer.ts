@@ -1,38 +1,15 @@
 import type { Bindings } from '../bindings.js';
 import { ImageGenerator } from '../services/image-generator.js';
 import { MediaService } from '../services/media-service.js';
+import { isPermanentError } from '../utils/permanent-error.js';
 import type { ImageGenerationRequest } from 'shared';
+
+export { isPermanentError } from '../utils/permanent-error.js';
 
 export interface ImageJobMessage {
   jobId: string;
   userId: string;
   request: ImageGenerationRequest;
-}
-
-/**
- * Errors that are permanent and should not be retried.
- *
- * Covers HTTP 4xx client errors embedded in the message as "(4xx)" plus OpenAI
- * configuration / quota / org-verification / content-policy failures. These can
- * never succeed on retry, so they must fail fast — otherwise the job loops
- * through retries until the client poller times out (~3 minutes) and the user
- * sees a generic timeout instead of the real reason.
- *
- * Pure rate-limit 429s are intentionally NOT treated as permanent (they are
- * transient); quota-exhaustion 429s are caught via the "quota"/"insufficient"
- * keywords instead.
- */
-export function isPermanentError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  const msg = err.message.toLowerCase();
-  const keywords = [
-    'invalid', 'unauthorized', 'forbidden', 'bad request', 'not found',
-    'not configured', 'api key', 'quota', 'insufficient', 'billing',
-    'verif', 'content policy', 'safety system',
-  ];
-  if (keywords.some((k) => msg.includes(k))) return true;
-  // OpenAI/HTTP 4xx client errors are embedded as e.g. "API error (403): ...".
-  return /\((400|401|403|404)\)/.test(msg);
 }
 
 export async function handleImageQueue(

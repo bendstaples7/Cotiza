@@ -121,7 +121,7 @@ describe('PostService', () => {
       expect(post.id).toBe('post-1');
     });
 
-    it('coerces an undefined channel to NULL via safeBind (caller backstop)', async () => {
+    it('coerces undefined channel to NULL via ?? null before bind', async () => {
       const row = makePostRow({ channel_connection_id: null });
       db.batch.mockResolvedValueOnce([]);
       configurePrepareResults(db, [{}, { first: row }]);

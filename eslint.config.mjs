@@ -80,6 +80,10 @@ export default [
   },
   {
     files: ['shared/src/media-urls.ts'],
+    languageOptions: {
+      parser: tseslint.parser,
+      parserOptions: { ecmaVersion: 2022, sourceType: 'module' },
+    },
     rules: {
       'no-restricted-syntax': 'off',
     },

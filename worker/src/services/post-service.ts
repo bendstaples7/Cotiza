@@ -243,7 +243,7 @@ export class PostService {
     return {
       id: row.id as string,
       userId: row.user_id as string,
-      channelConnectionId: row.channel_connection_id as string,
+      channelConnectionId: (row.channel_connection_id as string | null) ?? null,
       contentType: row.content_type as ContentType,
       caption: (row.caption as string) ?? '',
       hashtagsJson: (row.hashtags_json as string) ?? '[]',

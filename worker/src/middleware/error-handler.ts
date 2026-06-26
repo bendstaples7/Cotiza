@@ -8,7 +8,7 @@ import type { Bindings } from '../bindings.js';
  * Matches database/driver internals (D1, SQLite, raw bind type errors) that
  * must never be surfaced to end users verbatim.
  */
-const DB_ERROR_PATTERN = /D1_[A-Z_]+|SQLITE_[A-Z_]+|not supported for value/i;
+const DB_ERROR_PATTERN = /D1_[A-Z_]+|SQLITE_[A-Z_]+|not supported for value/;
 
 export const errorHandler: ErrorHandler<{ Bindings: Bindings }> = async (err, c) => {
   let platformError: PlatformError;
@@ -31,7 +31,7 @@ export const errorHandler: ErrorHandler<{ Bindings: Bindings }> = async (err, c)
         severity: 'error',
         component: 'Server',
         operation: 'database',
-        description: "We couldn't save your changes. Please try again.",
+        description: 'Something went wrong while loading data. Please try again.',
         recommendedActions: ['Try again', 'Contact support if the problem persists'],
       });
     } else {

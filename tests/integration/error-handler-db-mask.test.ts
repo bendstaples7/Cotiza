@@ -25,7 +25,7 @@ describe('errorHandler (database error masking)', () => {
     const body = (await res.json()) as { message: string; operation: string };
 
     expect(res.status).toBe(500);
-    expect(body.message).toBe("We couldn't save your changes. Please try again.");
+    expect(body.message).toBe('Something went wrong while loading data. Please try again.');
     expect(body.message).not.toContain('D1_');
     expect(body.message).not.toContain('undefined');
     expect(body.operation).toBe('database');
@@ -38,7 +38,7 @@ describe('errorHandler (database error masking)', () => {
     const body = (await res.json()) as { message: string };
 
     expect(res.status).toBe(500);
-    expect(body.message).toBe("We couldn't save your changes. Please try again.");
+    expect(body.message).toBe('Something went wrong while loading data. Please try again.');
     expect(body.message).not.toContain('SQLITE_');
   });
 

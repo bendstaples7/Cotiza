@@ -24,6 +24,7 @@ app.get(MEDIA_THUMBNAIL_ROUTE, async (c) => {
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set('Cache-Control', 'public, max-age=86400');
+  headers.set('X-Content-Type-Options', 'nosniff');
   return new Response(object.body, { headers });
 });
 

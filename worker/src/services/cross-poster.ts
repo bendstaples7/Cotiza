@@ -1,4 +1,5 @@
 import { PlatformError } from '../errors/index.js';
+import { isPermanentError } from '../utils/permanent-error.js';
 import type {
   ChannelInterface,
   FormattedPost,
@@ -12,21 +13,6 @@ export type DelayFn = (ms: number) => Promise<void>;
 
 const defaultDelay: DelayFn = (ms: number) =>
   new Promise((resolve) => setTimeout(resolve, ms));
-
-/** Errors that should not be retried (permanent failures). */
-function isPermanentError(error?: string): boolean {
-  if (!error) return false;
-  const permanent = [
-    'auth',
-    'unauthorized',
-    'forbidden',
-    'invalid',
-    'permission',
-    'not found',
-  ];
-  const lower = error.toLowerCase();
-  return permanent.some((keyword) => lower.includes(keyword));
-}
 
 export class CrossPoster {
   private readonly db: D1Database;

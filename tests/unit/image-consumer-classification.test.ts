@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isPermanentError } from '../../worker/src/queue/image-consumer.js';
+import { isPermanentError } from '../../worker/src/utils/permanent-error.js';
 
 describe('isPermanentError (image generation retry classification)', () => {
   it('treats missing/invalid OpenAI config as permanent', () => {
@@ -34,10 +34,15 @@ describe('isPermanentError (image generation retry classification)', () => {
     expect(isPermanentError(new Error('Too many requests (429)'))).toBe(false);
   });
 
-  it('returns false for non-Error values', () => {
+  it('returns false for non-Error, non-string values', () => {
     expect(isPermanentError('some string')).toBe(false);
     expect(isPermanentError(null)).toBe(false);
     expect(isPermanentError(undefined)).toBe(false);
     expect(isPermanentError({ message: 'invalid' })).toBe(false);
+  });
+
+  it('classifies permanent failures from plain error strings', () => {
+    expect(isPermanentError('unauthorized')).toBe(true);
+    expect(isPermanentError('permission denied')).toBe(true);
   });
 });
