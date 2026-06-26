@@ -73,7 +73,9 @@ app.get('/health', async (c) => {
     checks.db = 'error';
   }
 
-  const status = Object.values(checks).every(v => v.startsWith('ok')) ? 'ok' : 'degraded';
+  // Only env + db gate deploy readiness; gmail and other optional features are
+  // reported in checks but must not block a healthy production deploy.
+  const status = checks.env === 'ok' && checks.db === 'ok' ? 'ok' : 'degraded';
 
   if (status !== 'ok') {
     console.warn(`[health] ${JSON.stringify(checks)}`);

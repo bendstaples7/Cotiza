@@ -36,15 +36,15 @@ Critical secrets surfaced by `/health` `missingEnv`:
 - `CHANNEL_ENCRYPTION_KEY`
 - `FB_PAGE_ACCESS_TOKEN`
 - `IG_BUSINESS_ACCOUNT_ID`
-- `INSTAGRAM_CLIENT_ID`
-- `INSTAGRAM_CLIENT_SECRET`
 - `JOBBER_CLIENT_ID`
 - `JOBBER_CLIENT_SECRET`
 - `JOBBER_ACCESS_TOKEN`
 - `JOBBER_REFRESH_TOKEN`
 
 Also required (not in the `/health` critical list but needed for specific
-features): `JOBBER_WEB_EMAIL`, `JOBBER_WEB_PASSWORD`, `CLOUDFLARE_ACCOUNT_ID`,
+features): `INSTAGRAM_CLIENT_ID`, `INSTAGRAM_CLIENT_SECRET` (OAuth connect flow
+only — direct-token publishing does not need them), `JOBBER_WEB_EMAIL`,
+`JOBBER_WEB_PASSWORD`, `CLOUDFLARE_ACCOUNT_ID`,
 `CLOUDFLARE_API_TOKEN`, `GITHUB_PAT`, and (optional) `GMAIL_CLIENT_ID`,
 `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`.
 

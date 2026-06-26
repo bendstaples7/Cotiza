@@ -39,8 +39,8 @@ GITHUB_REPO = "bendstaples7/chicago-reno-social-generator"
 # CHANNEL_ENCRYPTION_KEY   — AES key for encrypting stored Instagram tokens
 # FB_PAGE_ACCESS_TOKEN     — Facebook Page access token for Instagram publishing
 # IG_BUSINESS_ACCOUNT_ID   — Instagram Business account ID
-# INSTAGRAM_CLIENT_ID      — Instagram OAuth app client ID
-# INSTAGRAM_CLIENT_SECRET  — Instagram OAuth app client secret
+# INSTAGRAM_CLIENT_ID      — Instagram OAuth app client ID (OAuth connect flow only)
+# INSTAGRAM_CLIENT_SECRET  — Instagram OAuth app client secret (OAuth connect flow only)
 # JOBBER_CLIENT_ID         — Jobber OAuth app client ID (required for token refresh)
 # JOBBER_CLIENT_SECRET     — Jobber OAuth app client secret (required for token refresh)
 # JOBBER_ACCESS_TOKEN      — Jobber API access token (initial; refreshed automatically)

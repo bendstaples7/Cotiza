@@ -40,14 +40,17 @@ export const EXTERNAL = {
 /**
  * Secrets that MUST be present (non-empty) for the worker's core pipelines to
  * function. Surfaced by NAME (never value) via `/health`.
+ *
+ * Instagram OAuth credentials (`INSTAGRAM_CLIENT_ID` / `INSTAGRAM_CLIENT_SECRET`)
+ * are intentionally excluded — production uses direct-token mode
+ * (`FB_PAGE_ACCESS_TOKEN` + `IG_BUSINESS_ACCOUNT_ID`). OAuth vars are only
+ * needed when connecting accounts via the in-app OAuth flow.
  */
 export const CRITICAL_SECRETS = [
   'AI_TEXT_API_KEY',
   'CHANNEL_ENCRYPTION_KEY',
   'FB_PAGE_ACCESS_TOKEN',
   'IG_BUSINESS_ACCOUNT_ID',
-  'INSTAGRAM_CLIENT_ID',
-  'INSTAGRAM_CLIENT_SECRET',
   'JOBBER_CLIENT_ID',
   'JOBBER_CLIENT_SECRET',
   'JOBBER_ACCESS_TOKEN',
