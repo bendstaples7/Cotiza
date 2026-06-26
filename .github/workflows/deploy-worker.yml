@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  deploy:
+  deploy-worker:
     runs-on: ubuntu-latest
-    name: Deploy Worker + Client
+    name: Deploy Worker
     steps:
       - uses: actions/checkout@v4
 
@@ -25,7 +25,9 @@ jobs:
       - name: Run tests
         run: npm test
 
-      # ── Worker deploy ──────────────────────────────────────────
+      - name: Verify deploy health gate (production-like config)
+        run: npm run verify:deploy-health
+
       - name: Apply D1 migrations
         run: npx wrangler d1 migrations apply DB --remote
         working-directory: worker
@@ -44,53 +46,22 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
-      - name: Verify worker health
-        run: |
-          URL="https://social-media-cross-poster.chicago-reno.workers.dev/health"
-          LAST=""
-          for i in 1 2 3 4 5; do
-            sleep 5
-            BODY=$(curl -s --max-time 10 "$URL")
-            LAST="$BODY"
-            STATUS=$(echo "$BODY" | jq -r '.status // "unknown"')
-            if [ "$STATUS" = "ok" ]; then
-              echo "Health OK on attempt $i: $BODY"
-              exit 0
-            fi
-            echo "Attempt $i: status=$STATUS"
-          done
-          # A persistent non-ok status means missing secrets / DB failure. The
-          # missing secret NAMES are listed under .missingEnv in the response.
-          echo "::error::Worker /health is not ok after 5 attempts. Last response: $LAST"
-          exit 1
+  deploy-client:
+    runs-on: ubuntu-latest
+    name: Deploy Client
+    needs: deploy-worker
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Smoke-test external pipelines
-        env:
-          HEALTHCHECK_KEY: ${{ secrets.HEALTHCHECK_KEY }}
-        run: |
-          if [ -z "$HEALTHCHECK_KEY" ]; then
-            echo "HEALTHCHECK_KEY secret not set — skipping pipeline smoke test."
-            echo "To enable: 'wrangler secret put HEALTHCHECK_KEY' on the worker AND add a repo secret of the same name."
-            exit 0
-          fi
-          URL="https://social-media-cross-poster.chicago-reno.workers.dev/health/pipelines"
-          BODY=$(curl -s --max-time 10 -H "X-Health-Key: $HEALTHCHECK_KEY" "$URL")
-          STATUS=$(echo "$BODY" | jq -r '.status // "unknown"')
-          echo "Pipelines: $BODY"
-          if [ "$STATUS" = "ok" ]; then
-            echo "Pipeline smoke test passed."
-            exit 0
-          fi
-          # Probes are read-only; a failure points at OpenAI key/model access,
-          # the GitHub cookie-refresh workflow/PAT, the Instagram Graph token,
-          # or the R2 media thumbnail delivery route (img previews 404).
-          echo "::error::Pipeline smoke test failed: $BODY"
-          exit 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
-      # ── Client deploy (only after worker succeeds) ─────────────
-      # This ensures the client never ships UI for features the
-      # worker can't serve. Disable Cloudflare Pages auto-deploy
-      # (git integration) so this workflow is the sole deploy path.
+      - name: Install dependencies
+        run: npm ci
+
+      # Client ships whenever the worker deploy succeeds, even if the post-deploy
+      # health gate fails — avoids stranding production with a new worker + old UI.
       - name: Build client
         run: npm run build:client
 
@@ -98,3 +69,22 @@ jobs:
         run: npx wrangler pages deploy client/dist --project-name=cotiza --branch=main
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+  verify-production:
+    runs-on: ubuntu-latest
+    name: Verify Production Health
+    needs: [deploy-worker, deploy-client]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Verify worker health
+        run: node scripts/verify-worker-health.mjs
+
+      - name: Smoke-test external pipelines
+        env:
+          HEALTHCHECK_KEY: ${{ secrets.HEALTHCHECK_KEY }}
+        run: node scripts/verify-pipeline-smoke.mjs

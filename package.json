@@ -9,6 +9,7 @@
   "scripts": {
     "test": "vitest --run",
     "test:watch": "vitest",
+    "verify:deploy-health": "vitest --run tests/integration/deploy-health-gate.test.ts tests/unit/config-critical-secrets.test.ts",
     "lint": "eslint worker/src",
     "dev:client": "npm run dev --workspace=client",
     "dev:worker": "npm run dev --workspace=worker",

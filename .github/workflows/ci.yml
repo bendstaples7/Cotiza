@@ -21,6 +21,9 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Verify deploy health gate (production-like config)
+        run: npm run verify:deploy-health
+
       - name: Validate migration patterns
         run: bash worker/scripts/validate-migrations.sh
 

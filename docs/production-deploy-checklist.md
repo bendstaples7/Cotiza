@@ -19,6 +19,7 @@ curl.exe -s https://social-media-cross-poster.chicago-reno.workers.dev/health
 
 - `status: ok` → all critical secrets present.
 - `status: degraded` with `missingEnv: [...]` → set each named secret (step 2).
+- `optionalMissingEnv: [...]` → optional features only; does **not** block deploy.
 - `checks.db: error` → D1 binding/migrations problem (see step 5).
 - `checks.gmail: missing` → Gmail enrichment secrets absent (optional feature).
 
@@ -36,15 +37,15 @@ Critical secrets surfaced by `/health` `missingEnv`:
 - `CHANNEL_ENCRYPTION_KEY`
 - `FB_PAGE_ACCESS_TOKEN`
 - `IG_BUSINESS_ACCOUNT_ID`
-- `INSTAGRAM_CLIENT_ID`
-- `INSTAGRAM_CLIENT_SECRET`
 - `JOBBER_CLIENT_ID`
 - `JOBBER_CLIENT_SECRET`
 - `JOBBER_ACCESS_TOKEN`
 - `JOBBER_REFRESH_TOKEN`
 
 Also required (not in the `/health` critical list but needed for specific
-features): `JOBBER_WEB_EMAIL`, `JOBBER_WEB_PASSWORD`, `CLOUDFLARE_ACCOUNT_ID`,
+features): `INSTAGRAM_CLIENT_ID`, `INSTAGRAM_CLIENT_SECRET` (OAuth connect flow
+only — surfaced in `/health` `optionalMissingEnv`), `JOBBER_WEB_EMAIL`,
+`JOBBER_WEB_PASSWORD`, `CLOUDFLARE_ACCOUNT_ID`,
 `CLOUDFLARE_API_TOKEN`, `GITHUB_PAT`, and (optional) `GMAIL_CLIENT_ID`,
 `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`.
 
@@ -144,12 +145,20 @@ generation) much harder to ship again:
 
 ### a. Post-deploy health gate + pipeline smoke test (CI)
 
-`.github/workflows/deploy-worker.yml` now:
+`.github/workflows/deploy-worker.yml` now uses **three jobs**:
 
-- **Parses the `/health` JSON** after deploy and fails the job when `status` is
-  not `ok` (the old step only checked for HTTP 200, so a `degraded` worker with
-  missing secrets still passed). The failing run prints the `missingEnv` names.
-- Runs an optional **pipeline smoke test** against the new guarded endpoint
+1. **Deploy Worker** — lint, tests, deploy-health simulation, migrations, worker deploy.
+2. **Deploy Client** — builds and ships Pages whenever the worker deploy succeeds
+   (even if the health gate later fails, so production is never stranded with a
+   new worker and old UI).
+3. **Verify Production Health** — polls live `/health` and optional pipeline probes.
+
+The verify job:
+
+- **Parses the `/health` JSON** after deploy and fails the workflow when `status` is
+  not `ok`. Critical gaps are under `missingEnv`; optional gaps are under
+  `optionalMissingEnv` and do not block deploy readiness.
+- Runs an optional **pipeline smoke test** against the guarded endpoint
   `GET /health/pipelines`, which does read-only connectivity probes:
   - OpenAI — can the API key see the image model? (catches missing/invalid key)
   - GitHub — does the cookie-refresh workflow exist and can the PAT read it?
@@ -165,6 +174,9 @@ generation) much harder to ship again:
   ```bash
   curl.exe -s -H "X-Health-Key: <key>" https://social-media-cross-poster.chicago-reno.workers.dev/health/pipelines
   ```
+
+**Pre-merge:** `npm run verify:deploy-health` runs in CI on every PR. It simulates
+production direct-token config and fails if a change would block deploy readiness.
 
 ### b. Integration tests at the external HTTP boundary
 

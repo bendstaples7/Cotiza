@@ -40,14 +40,17 @@ export const EXTERNAL = {
 /**
  * Secrets that MUST be present (non-empty) for the worker's core pipelines to
  * function. Surfaced by NAME (never value) via `/health`.
+ *
+ * Instagram OAuth credentials (`INSTAGRAM_CLIENT_ID` / `INSTAGRAM_CLIENT_SECRET`)
+ * are intentionally excluded — production uses direct-token mode
+ * (`FB_PAGE_ACCESS_TOKEN` + `IG_BUSINESS_ACCOUNT_ID`). OAuth vars are only
+ * needed when connecting accounts via the in-app OAuth flow.
  */
 export const CRITICAL_SECRETS = [
   'AI_TEXT_API_KEY',
   'CHANNEL_ENCRYPTION_KEY',
   'FB_PAGE_ACCESS_TOKEN',
   'IG_BUSINESS_ACCOUNT_ID',
-  'INSTAGRAM_CLIENT_ID',
-  'INSTAGRAM_CLIENT_SECRET',
   'JOBBER_CLIENT_ID',
   'JOBBER_CLIENT_SECRET',
   'JOBBER_ACCESS_TOKEN',
@@ -56,6 +59,35 @@ export const CRITICAL_SECRETS = [
 
 export type CriticalSecret = (typeof CRITICAL_SECRETS)[number];
 
+/**
+ * Secrets that enable optional features. Reported in `/health` as
+ * `optionalMissingEnv` but never block deploy readiness.
+ */
+export const OPTIONAL_SECRETS = [
+  'INSTAGRAM_CLIENT_ID',
+  'INSTAGRAM_CLIENT_SECRET',
+  'GITHUB_PAT',
+  'GMAIL_CLIENT_ID',
+  'GMAIL_CLIENT_SECRET',
+  'GMAIL_REFRESH_TOKEN',
+  'HEALTHCHECK_KEY',
+  'JOBBER_WEB_EMAIL',
+  'JOBBER_WEB_PASSWORD',
+] as const satisfies readonly (keyof Bindings)[];
+
+export type OptionalSecret = (typeof OPTIONAL_SECRETS)[number];
+
+/**
+ * Guard list: these must never appear in CRITICAL_SECRETS (enforced by unit test).
+ * Production uses direct-token Instagram publishing without OAuth app credentials.
+ */
+export const SECRETS_FORBIDDEN_IN_CRITICAL = [
+  'INSTAGRAM_CLIENT_ID',
+  'INSTAGRAM_CLIENT_SECRET',
+] as const satisfies readonly (keyof Bindings)[];
+
+export type ForbiddenCriticalSecret = (typeof SECRETS_FORBIDDEN_IN_CRITICAL)[number];
+
 function isBlank(value: unknown): boolean {
   return value === undefined || value === null || String(value).trim() === '';
 }
@@ -63,6 +95,11 @@ function isBlank(value: unknown): boolean {
 /** Return the names of any missing/empty critical secrets. */
 export function getMissingCriticalSecrets(env: Bindings): CriticalSecret[] {
   return CRITICAL_SECRETS.filter((key) => isBlank(env[key]));
+}
+
+/** Return the names of any missing/empty optional secrets. */
+export function getMissingOptionalSecrets(env: Bindings): OptionalSecret[] {
+  return OPTIONAL_SECRETS.filter((key) => isBlank(env[key]));
 }
 
 /** Resolve the GitHub repo slug for workflow dispatch (configurable, defaulted). */
