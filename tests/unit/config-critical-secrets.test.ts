@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { CRITICAL_SECRETS, getMissingCriticalSecrets } from '../../worker/src/config.js';
+import {
+  CRITICAL_SECRETS,
+  OPTIONAL_SECRETS,
+  SECRETS_FORBIDDEN_IN_CRITICAL,
+  getMissingCriticalSecrets,
+  getMissingOptionalSecrets,
+} from '../../worker/src/config.js';
 
 describe('getMissingCriticalSecrets', () => {
   const fullEnv = Object.fromEntries(CRITICAL_SECRETS.map((key) => [key, 'set'])) as never;
@@ -24,5 +30,28 @@ describe('getMissingCriticalSecrets', () => {
     expect(getMissingCriticalSecrets({ ...fullEnv, AI_TEXT_API_KEY: '' } as never)).toEqual([
       'AI_TEXT_API_KEY',
     ]);
+  });
+});
+
+describe('getMissingOptionalSecrets', () => {
+  it('reports missing optional secrets by name', () => {
+    const env = Object.fromEntries(OPTIONAL_SECRETS.map((key) => [key, 'set'])) as never;
+    env.INSTAGRAM_CLIENT_ID = '';
+
+    expect(getMissingOptionalSecrets(env)).toEqual(['INSTAGRAM_CLIENT_ID']);
+  });
+});
+
+describe('SECRETS_FORBIDDEN_IN_CRITICAL guard', () => {
+  it('blocks OAuth vars from ever re-entering the deploy-critical list', () => {
+    for (const key of SECRETS_FORBIDDEN_IN_CRITICAL) {
+      expect(CRITICAL_SECRETS).not.toContain(key);
+    }
+  });
+
+  it('every forbidden secret is tracked as optional', () => {
+    for (const key of SECRETS_FORBIDDEN_IN_CRITICAL) {
+      expect(OPTIONAL_SECRETS).toContain(key);
+    }
   });
 });

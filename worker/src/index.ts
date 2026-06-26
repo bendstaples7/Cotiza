@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { bodyLimit } from 'hono/body-limit';
 import type { Bindings } from './bindings.js';
-import { getMissingCriticalSecrets } from './config.js';
+import { buildHealthReport } from './health-status.js';
 import { runPipelineProbes } from './services/pipeline-probes.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { handleImageQueue } from './queue/image-consumer.js';
@@ -47,43 +47,29 @@ app.use('/api/media/*', bodyLimit({ maxSize: 50 * 1024 * 1024 }));
 
 // Health check — validates critical environment bindings and DB connectivity
 app.get('/health', async (c) => {
-  const checks: Record<string, string> = {};
-
-  // Names (never values) of any missing critical secrets — the list of required
-  // secrets lives in config.ts so /health and request handlers agree.
-  const missing = getMissingCriticalSecrets(c.env);
-  if (missing.length > 0) {
-    console.warn(`[health] Missing env vars: ${missing.join(', ')}`);
-  }
-  checks.env = missing.length > 0 ? 'degraded' : 'ok';
-  checks.gmail = [
-    c.env.GMAIL_CLIENT_ID,
-    c.env.GMAIL_CLIENT_SECRET,
-    c.env.GMAIL_REFRESH_TOKEN,
-  ].every((value) => value?.trim())
-    ? 'ok'
-    : 'missing';
-
-  // Check DB connectivity
+  let dbOk = false;
   try {
     const result = await c.env.DB.prepare('SELECT COUNT(*) as count FROM rule_groups').first() as { count: number } | null;
-    checks.db = result ? 'ok' : 'error';
+    dbOk = Boolean(result);
   } catch (err) {
     console.warn(`[health] DB check failed: ${err instanceof Error ? err.message : 'unknown'}`);
-    checks.db = 'error';
   }
 
-  // Only env + db gate deploy readiness; gmail and other optional features are
-  // reported in checks but must not block a healthy production deploy.
-  const status = checks.env === 'ok' && checks.db === 'ok' ? 'ok' : 'degraded';
+  const report = buildHealthReport(c.env, dbOk);
 
-  if (status !== 'ok') {
-    console.warn(`[health] ${JSON.stringify(checks)}`);
+  if (report.missingEnv.length > 0) {
+    console.warn(`[health] Missing env vars: ${report.missingEnv.join(', ')}`);
+  }
+  if (report.status !== 'ok') {
+    console.warn(`[health] ${JSON.stringify(report.checks)}`);
   }
 
-  // Surface the NAMES (never values) of missing secrets so production
-  // misconfiguration is visible without shell access to the Worker.
-  return c.json({ status, checks, ...(missing.length > 0 ? { missingEnv: missing } : {}) });
+  return c.json({
+    status: report.status,
+    checks: report.checks,
+    ...(report.missingEnv.length > 0 ? { missingEnv: report.missingEnv } : {}),
+    ...(report.optionalMissingEnv.length > 0 ? { optionalMissingEnv: report.optionalMissingEnv } : {}),
+  });
 });
 
 /**
