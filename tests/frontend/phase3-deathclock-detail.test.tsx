@@ -201,6 +201,22 @@ function renderDashboardPage() {
   );
 }
 
+/** Wait until deathclock stats finish loading (Dashboard title renders before async data). */
+async function waitForDashboardStatsLoaded(totalActive = 20) {
+  if (totalActive === 0) {
+    await screen.findByText('No active requests.');
+    return;
+  }
+  const label = `${totalActive} active request${totalActive !== 1 ? 's' : ''}`;
+  await screen.findByText(label);
+}
+
+/** Wait until trends chart is rendered (nested inside loaded stats section). */
+async function waitForDashboardTrendsLoaded() {
+  await waitForDashboardStatsLoaded();
+  await screen.findByText('7-Day Avg');
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -495,7 +511,7 @@ describe('DeathclockDashboardPage — Phase 3', () => {
   it('renders 4 bucket bars (green/yellow/orange/red)', async () => {
     renderDashboardPage();
 
-    await screen.findByText('Dashboard');
+    await waitForDashboardStatsLoaded();
 
     // Each bucket label should render (appears in both bar label and legend)
     expect(screen.getAllByText('Green').length).toBeGreaterThanOrEqual(1);
@@ -510,8 +526,7 @@ describe('DeathclockDashboardPage — Phase 3', () => {
     );
     renderDashboardPage();
 
-    // Wait for stats fetch to finish — "Dashboard" renders before async data arrives.
-    expect(await screen.findByText('20 active requests')).toBeInTheDocument();
+    await waitForDashboardStatsLoaded(20);
 
     // aria-label shows percentage: green=50%, yellow=25%, orange=15%, red=10%
     const [greenBar, yellowBar, orangeBar, redBar] = await screen.findAllByRole('button');
@@ -548,16 +563,15 @@ describe('DeathclockDashboardPage — Phase 3', () => {
     );
     renderDashboardPage();
 
-    expect(await screen.findByText('Dashboard')).toBeInTheDocument();
-    expect(screen.getByText('No active requests.')).toBeInTheDocument();
+    await waitForDashboardStatsLoaded(0);
   });
 
   it('clicking a bar navigates to queue', async () => {
     renderDashboardPage();
 
-    await screen.findByText('Dashboard');
+    await waitForDashboardStatsLoaded();
 
-    const [firstBar] = screen.getAllByRole('button');
+    const [firstBar] = await screen.findAllByRole('button');
     fireEvent.click(firstBar);
 
     expect(mockNavigate).toHaveBeenCalledWith('/quotes/queue?sort=age_asc');
@@ -580,7 +594,7 @@ describe('DeathclockDashboardPage — Phase 3', () => {
   it('renders SVG chart with bucket bars', async () => {
     renderDashboardPage();
 
-    await screen.findByText('Dashboard');
+    await waitForDashboardTrendsLoaded();
 
     // The trends section renders an SVG element
     const svg = document.querySelector('svg');
@@ -612,8 +626,7 @@ describe('DeathclockDashboardPage — Phase 3', () => {
     mockFetchTrends.mockRejectedValue({ message: 'Failed to load trends.' });
     renderDashboardPage();
 
-    // Wait for dashboard stats to load first
-    await screen.findByText('Dashboard');
+    await waitForDashboardStatsLoaded();
 
     // Trends section should show error
     expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load trends.');
@@ -630,9 +643,7 @@ describe('DeathclockDashboardPage — Phase 3', () => {
     );
     renderDashboardPage();
 
-    await screen.findByText('Dashboard');
-    // Should hit the empty state, not try to render bars
-    expect(screen.getByText('No active requests.')).toBeInTheDocument();
+    await waitForDashboardStatsLoaded(0);
   });
 
   it('dashboard chart handles totalActive=0 without division by zero', async () => {
@@ -643,9 +654,7 @@ describe('DeathclockDashboardPage — Phase 3', () => {
     );
     renderDashboardPage();
 
-    await screen.findByText('Dashboard');
-    // Should show empty state, no bars rendered
-    expect(screen.getByText('No active requests.')).toBeInTheDocument();
+    await waitForDashboardStatsLoaded(0);
     expect(screen.queryByRole('button')).toBeNull();
   });
 
