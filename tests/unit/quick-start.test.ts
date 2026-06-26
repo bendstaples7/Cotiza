@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ContentType, AdvisorMode } from '../../shared/src/types/enums.js';
+import { buildMediaThumbnailPath } from '../../shared/src/media-urls.js';
 import type { ContentSuggestion } from '../../shared/src/types/content.js';
 import type { UserSettings } from '../../shared/src/types/user.js';
 import type { MediaItem } from '../../shared/src/types/media.js';
@@ -57,7 +58,7 @@ const MEDIA_ITEMS: MediaItem[] = [
     mimeType: 'image/jpeg',
     fileSizeBytes: 1024,
     storageKey: 'media/user-1/kitchen.jpg',
-    thumbnailUrl: '/media/thumbnail/media/user-1/kitchen.jpg',
+    thumbnailUrl: buildMediaThumbnailPath('media/user-1/kitchen.jpg'),
     source: 'uploaded',
     width: 1080,
     height: 1080,

@@ -94,6 +94,48 @@ describe('PostService', () => {
         }),
       ).rejects.toThrow('db error');
     });
+
+    it('binds NULL (never undefined) when no channel is selected', async () => {
+      // Regression: picking a content idea with no connected channel sends a
+      // null/empty channel. Previously the route coerced this to `undefined`,
+      // which D1 rejects with "D1_TYPE_ERROR: Type 'undefined' not supported".
+      const row = makePostRow({ channel_connection_id: null });
+      db.batch.mockResolvedValueOnce([]);
+      configurePrepareResults(db, [
+        {}, // INSERT INTO posts
+        { first: row }, // SELECT after batch
+      ]);
+
+      const post = await service.create({
+        userId: 'user-1',
+        channelConnectionId: null,
+        contentType: ContentType.Education,
+        caption: 'Idea caption',
+        hashtags: [],
+      });
+
+      // INSERT is the first prepared statement; channel_connection_id is bind index 2.
+      const boundArgs = db._stmts[0].bind.mock.calls[0];
+      expect(boundArgs[2]).toBeNull();
+      expect(boundArgs[2]).not.toBeUndefined();
+      expect(post.id).toBe('post-1');
+    });
+
+    it('coerces undefined channel to NULL via ?? null before bind', async () => {
+      const row = makePostRow({ channel_connection_id: null });
+      db.batch.mockResolvedValueOnce([]);
+      configurePrepareResults(db, [{}, { first: row }]);
+
+      await expect(
+        service.create({
+          userId: 'user-1',
+          channelConnectionId: undefined as unknown as null,
+          contentType: ContentType.Education,
+        }),
+      ).resolves.toBeDefined();
+
+      expect(db._stmts[0].bind.mock.calls[0][2]).toBeNull();
+    });
   });
 
   describe('getById()', () => {

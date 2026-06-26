@@ -182,8 +182,29 @@ export class JobberQuotePushService {
       jobberQuoteWebUri: quote.jobberWebUri,
     };
 
-    // Step 5: Persist the result back to D1
-    await this.persistPushResult(draft.id, result.jobberQuoteId, result.jobberQuoteNumber, result.jobberQuoteWebUri);
+    // Step 5: Persist the result back to D1. The remote quote already exists at
+    // this point, so a D1 failure must NOT surface as a generic push failure —
+    // that would invite a retry and create a DUPLICATE Jobber quote. Surface a
+    // specific error that tells the user the quote was created and not to retry.
+    try {
+      await this.persistPushResult(draft.id, result.jobberQuoteId, result.jobberQuoteNumber, result.jobberQuoteWebUri);
+    } catch (err) {
+      console.error(
+        `[JobberQuotePushService] Quote ${result.jobberQuoteNumber} (${result.jobberQuoteId}) was created in Jobber but persisting to draft ${draft.id} failed:`,
+        err,
+      );
+      throw new PlatformError({
+        severity: 'error',
+        component: 'JobberQuotePushService',
+        operation: 'pushToJobber',
+        description: `Quote ${result.jobberQuoteNumber} was created in Jobber, but linking it back to this draft failed. Do NOT push again or you will create a duplicate.`,
+        recommendedActions: [
+          `Open quote ${result.jobberQuoteNumber} in Jobber to confirm it exists`,
+          'Manually reconcile the draft or contact support before retrying',
+        ],
+        statusCode: 500,
+      });
+    }
 
     return result;
   }

@@ -1,19 +1,15 @@
 import type { Bindings } from '../bindings.js';
 import { ImageGenerator } from '../services/image-generator.js';
 import { MediaService } from '../services/media-service.js';
+import { isPermanentError } from '../utils/permanent-error.js';
 import type { ImageGenerationRequest } from 'shared';
+
+export { isPermanentError } from '../utils/permanent-error.js';
 
 export interface ImageJobMessage {
   jobId: string;
   userId: string;
   request: ImageGenerationRequest;
-}
-
-/** Errors that are permanent and should not be retried. */
-function isPermanentError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  const msg = err.message.toLowerCase();
-  return ['invalid', 'unauthorized', 'forbidden', 'bad request', 'not found'].some((k) => msg.includes(k));
 }
 
 export async function handleImageQueue(

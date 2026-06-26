@@ -11,6 +11,9 @@ import type {
   ProductivityRate, UpdateProductivityRatePayload,
   DeathclockState,
 } from 'shared';
+import { resolveMediaUrl, buildMediaThumbnailPath } from 'shared';
+
+export { resolveMediaUrl } from 'shared';
 
 /** A manual request row returned by the list endpoint with deathclock enrichment. */
 export interface ManualRequestWithDeathclock extends ManualRequest {
@@ -178,7 +181,9 @@ export async function generateImages(description: string, style?: ImageStyle, co
     if (status.status === 'completed' && status.mediaItem) {
       // Build a GeneratedImage for backward compat, but also return the saved MediaItem
       const img: GeneratedImage = {
-        url: status.mediaItem.thumbnailUrl || status.mediaItem.storageKey,
+        url: resolveMediaUrl(
+          status.mediaItem.thumbnailUrl || buildMediaThumbnailPath(status.mediaItem.storageKey),
+        ),
         format: status.mediaItem.mimeType === 'image/png' ? 'png' : 'jpeg',
         width: status.mediaItem.width ?? 1024,
         height: status.mediaItem.height ?? 1024,

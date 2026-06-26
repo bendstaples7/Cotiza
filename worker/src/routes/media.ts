@@ -5,6 +5,7 @@ import { sessionMiddleware } from '../middleware/session.js';
 import { MediaService } from '../services/media-service.js';
 import { ImageGenerator } from '../services/image-generator.js';
 import { PlatformError } from '../errors/index.js';
+import { assertConfigured } from '../config.js';
 
 const app = new Hono<{ Bindings: Bindings; Variables: { user: User } }>();
 
@@ -106,6 +107,10 @@ app.post('/upload', async (c) => {
 app.post('/generate', async (c) => {
   const body = await c.req.json() as Partial<ImageGenerationRequest> & { topic?: string };
   const userId = c.get('user').id;
+
+  // Fail fast on a missing server-side key instead of enqueuing a job that is
+  // guaranteed to fail (and would otherwise hang the client poller ~3 minutes).
+  assertConfigured(c.env, ['AI_TEXT_API_KEY'], 'ImageGenerator');
 
   let description = (body.description || '').trim();
 

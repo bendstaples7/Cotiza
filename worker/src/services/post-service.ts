@@ -1,4 +1,5 @@
 import { PlatformError } from '../errors/index.js';
+import { safeBind } from '../db/safe-bind.js';
 import type { Post, PostStatus, ContentType, PostMedia, PaginationParams } from 'shared';
 
 const VALID_TRANSITIONS: Record<string, PostStatus[]> = {
@@ -11,7 +12,8 @@ const VALID_TRANSITIONS: Record<string, PostStatus[]> = {
 
 export interface CreatePostParams {
   userId: string;
-  channelConnectionId: string;
+  /** Null when the draft has no channel selected yet (the column is nullable). */
+  channelConnectionId: string | null;
   contentType: ContentType;
   caption?: string;
   hashtags?: string[];
@@ -23,7 +25,8 @@ export interface UpdatePostParams {
   caption?: string;
   hashtags?: string[];
   contentType?: ContentType;
-  channelConnectionId?: string;
+  /** `undefined` leaves the channel unchanged; `null` clears it. */
+  channelConnectionId?: string | null;
   templateFields?: Record<string, string>;
   mediaItemIds?: string[];
 }
@@ -43,17 +46,23 @@ export class PostService {
     const templateFields = params.templateFields ? JSON.stringify(params.templateFields) : null;
 
     const statements: D1PreparedStatement[] = [
-      this.db.prepare(
-        'INSERT INTO posts (id, user_id, channel_connection_id, content_type, caption, hashtags_json, status, template_fields) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-      ).bind(postId, params.userId, params.channelConnectionId, params.contentType, params.caption ?? null, hashtagsJson, 'draft', templateFields),
+      safeBind(
+        this.db.prepare(
+          'INSERT INTO posts (id, user_id, channel_connection_id, content_type, caption, hashtags_json, status, template_fields) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        ),
+        postId, params.userId, params.channelConnectionId ?? null, params.contentType, params.caption ?? null, hashtagsJson, 'draft', templateFields
+      ),
     ];
 
     if (params.mediaItemIds && params.mediaItemIds.length > 0) {
       for (let i = 0; i < params.mediaItemIds.length; i++) {
         statements.push(
-          this.db.prepare(
-            'INSERT INTO post_media (id, post_id, media_item_id, display_order) VALUES (?, ?, ?, ?)'
-          ).bind(crypto.randomUUID(), postId, params.mediaItemIds[i], i)
+          safeBind(
+            this.db.prepare(
+              'INSERT INTO post_media (id, post_id, media_item_id, display_order) VALUES (?, ?, ?, ?)'
+            ),
+            crypto.randomUUID(), postId, params.mediaItemIds[i], i
+          )
         );
       }
     }
@@ -143,20 +152,26 @@ export class PostService {
     values.push(postId, userId);
 
     const statements: D1PreparedStatement[] = [
-      this.db.prepare(
-        'UPDATE posts SET ' + setClauses.join(', ') + ' WHERE id = ? AND user_id = ?'
-      ).bind(...values),
+      safeBind(
+        this.db.prepare(
+          'UPDATE posts SET ' + setClauses.join(', ') + ' WHERE id = ? AND user_id = ?'
+        ),
+        ...values
+      ),
     ];
 
     if (updates.mediaItemIds !== undefined) {
       statements.push(
-        this.db.prepare('DELETE FROM post_media WHERE post_id = ?').bind(postId)
+        safeBind(this.db.prepare('DELETE FROM post_media WHERE post_id = ?'), postId)
       );
       for (let i = 0; i < updates.mediaItemIds.length; i++) {
         statements.push(
-          this.db.prepare(
-            'INSERT INTO post_media (id, post_id, media_item_id, display_order) VALUES (?, ?, ?, ?)'
-          ).bind(crypto.randomUUID(), postId, updates.mediaItemIds[i], i)
+          safeBind(
+            this.db.prepare(
+              'INSERT INTO post_media (id, post_id, media_item_id, display_order) VALUES (?, ?, ?, ?)'
+            ),
+            crypto.randomUUID(), postId, updates.mediaItemIds[i], i
+          )
         );
       }
     }
@@ -228,7 +243,7 @@ export class PostService {
     return {
       id: row.id as string,
       userId: row.user_id as string,
-      channelConnectionId: row.channel_connection_id as string,
+      channelConnectionId: (row.channel_connection_id as string | null) ?? null,
       contentType: row.content_type as ContentType,
       caption: (row.caption as string) ?? '',
       hashtagsJson: (row.hashtags_json as string) ?? '[]',

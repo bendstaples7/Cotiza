@@ -1,26 +1,55 @@
 import type { ErrorHandler } from 'hono';
 import { PlatformError } from '../errors/platform-error.js';
 import { formatErrorResponse } from '../errors/format-error.js';
+import { safeBind } from '../db/safe-bind.js';
 import type { Bindings } from '../bindings.js';
+
+/**
+ * Matches database/driver internals (D1, SQLite, raw bind type errors) that
+ * must never be surfaced to end users verbatim.
+ */
+const DB_ERROR_PATTERN = /D1_[A-Z_]+|SQLITE_[A-Z_]+|not supported for value/;
 
 export const errorHandler: ErrorHandler<{ Bindings: Bindings }> = async (err, c) => {
   let platformError: PlatformError;
+  // Detail recorded server-side; for masked errors this differs from the
+  // (sanitized) message returned to the client.
+  let logDescription: string;
 
   if (err instanceof PlatformError) {
     platformError = err;
+    logDescription = err.description;
   } else {
-    platformError = new PlatformError({
-      severity: 'error',
-      component: 'Server',
-      operation: 'unknown',
-      description: err.message || 'An unexpected error occurred.',
-      recommendedActions: ['Try again', 'Contact support if the problem persists'],
-    });
+    const rawMessage =
+      (err instanceof Error ? err.message : String(err)) || 'An unexpected error occurred.';
+
+    if (DB_ERROR_PATTERN.test(rawMessage)) {
+      // Never leak raw DB/driver internals to the client.
+      console.error('[errorHandler] Masked database error from client:', rawMessage);
+      logDescription = 'Database error: ' + rawMessage;
+      platformError = new PlatformError({
+        severity: 'error',
+        component: 'Server',
+        operation: 'database',
+        description: 'Something went wrong while loading data. Please try again.',
+        recommendedActions: ['Try again', 'Contact support if the problem persists'],
+      });
+    } else {
+      logDescription = rawMessage;
+      platformError = new PlatformError({
+        severity: 'error',
+        component: 'Server',
+        operation: 'unknown',
+        description: rawMessage,
+        recommendedActions: ['Try again', 'Contact support if the problem persists'],
+      });
+    }
   }
 
   const statusCode = platformError.statusCode ?? (platformError.severity === 'warning' ? 400 : 500);
 
-  // Best-effort log to activity_log_entries
+  // Best-effort log to activity_log_entries (records the raw detail, not the
+  // sanitized client-facing message).
   try {
     const db = c.env.DB;
     if (db) {
@@ -35,9 +64,12 @@ export const errorHandler: ErrorHandler<{ Bindings: Bindings }> = async (err, c)
       } catch (_) {
         // no user in context
       }
-      await db.prepare(
-        'INSERT INTO activity_log_entries (id, user_id, component, operation, severity, description) VALUES (?, ?, ?, ?, ?, ?)'
-      ).bind(id, userId, platformError.component, platformError.operation, platformError.severity, platformError.description).run();
+      await safeBind(
+        db.prepare(
+          'INSERT INTO activity_log_entries (id, user_id, component, operation, severity, description) VALUES (?, ?, ?, ?, ?, ?)'
+        ),
+        id, userId, platformError.component, platformError.operation, platformError.severity, logDescription
+      ).run();
     }
   } catch (_) {
     // do not throw if logging fails

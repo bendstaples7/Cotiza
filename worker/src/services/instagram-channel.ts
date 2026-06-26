@@ -1,4 +1,5 @@
 import { PlatformError } from '../errors/index.js';
+import { EXTERNAL } from '../config.js';
 import type {
   ChannelInterface,
   ChannelConnection,
@@ -12,7 +13,7 @@ import type {
 
 const INSTAGRAM_AUTH_URL = 'https://api.instagram.com/oauth/authorize';
 const INSTAGRAM_TOKEN_URL = 'https://api.instagram.com/oauth/access_token';
-const INSTAGRAM_GRAPH_URL = 'https://graph.facebook.com/v25.0';
+const INSTAGRAM_GRAPH_URL = EXTERNAL.graph.base;
 /** Default token lifetime: 60 days in seconds */
 const DEFAULT_TOKEN_EXPIRES_SECONDS = 60 * 24 * 60 * 60;
 
@@ -51,6 +52,44 @@ async function decrypt(encryptedText: string, keyHex: string): Promise<string> {
   const key = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['decrypt']);
   const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
   return new TextDecoder().decode(plaintext);
+}
+
+/**
+ * Join hashtags into a caption-ready string, ensuring each has exactly one
+ * leading '#'. Hashtags are stored without the '#' prefix, so publishing them
+ * verbatim posts plain words that Instagram does not treat as hashtags.
+ */
+export function formatHashtagString(hashtags: string[]): string {
+  return hashtags
+    .map((tag) => tag.trim())
+    .filter((tag) => tag.length > 0)
+    .map((tag) => '#' + tag.replace(/^#+/, ''))
+    .join(' ');
+}
+
+/**
+ * Build a publicly fetchable media URL from the R2 public base and a storage
+ * key. Each path segment is URL-encoded so keys containing spaces or other
+ * special characters (e.g. original filenames) stay fetchable by the Facebook
+ * Graph crawler.
+ */
+export function buildPublicMediaUrl(publicUrl: string, storageKey: string): string {
+  const base = publicUrl.replace(/\/+$/, '');
+  const encodedKey = storageKey.split('/').map(encodeURIComponent).join('/');
+  return base + '/' + encodedKey;
+}
+
+/** Extract a human-friendly message from a Facebook Graph API error body. */
+export function parseGraphError(body: string): string {
+  try {
+    const parsed = JSON.parse(body) as { error?: { message?: string; error_user_msg?: string } };
+    const msg = parsed.error?.error_user_msg || parsed.error?.message;
+    if (msg) return msg;
+  } catch {
+    // Not JSON — fall through to truncated raw text
+  }
+  const trimmed = body.trim();
+  return trimmed ? trimmed.slice(0, 200) : 'Instagram rejected the request.';
 }
 
 export class InstagramChannel implements ChannelInterface {
@@ -232,7 +271,7 @@ export class InstagramChannel implements ChannelInterface {
     ).bind(post.id).all();
 
     const mediaUrls = (mediaResult.results as any[]).map(
-      (row) => this.publicUrl + '/' + (row.storage_key as string),
+      (row) => buildPublicMediaUrl(this.publicUrl, row.storage_key as string),
     );
     const mimeTypes = (mediaResult.results as any[]).map(
       (row) => row.mime_type as string,
@@ -309,8 +348,16 @@ export class InstagramChannel implements ChannelInterface {
     }
     const igUserId = connRow.external_account_id as string;
     const formatType = (formattedPost.metadata.formatType as string) ?? 'IMAGE';
-    const fullCaption = formattedPost.hashtags.length > 0
-      ? formattedPost.caption + '\n\n' + formattedPost.hashtags.join(' ')
+
+    // Instagram content publishing requires media; a missing URL would send
+    // `undefined` to the Graph API and fail with an opaque error.
+    if (!formattedPost.mediaUrls[0]) {
+      return { success: false, error: 'This post has no image or video attached. Instagram requires media to publish.' };
+    }
+
+    const hashtagString = formatHashtagString(formattedPost.hashtags);
+    const fullCaption = hashtagString
+      ? formattedPost.caption + '\n\n' + hashtagString
       : formattedPost.caption;
 
     try {
@@ -334,7 +381,7 @@ export class InstagramChannel implements ChannelInterface {
 
       if (!createResponse.ok) {
         const errorData = await createResponse.text();
-        return { success: false, error: 'Instagram API error: ' + errorData };
+        return { success: false, error: 'Instagram error: ' + parseGraphError(errorData) };
       }
 
       const createData = (await createResponse.json()) as { id: string };
@@ -347,7 +394,7 @@ export class InstagramChannel implements ChannelInterface {
 
       if (!publishResponse.ok) {
         const errorData = await publishResponse.text();
-        return { success: false, error: 'Instagram publish error: ' + errorData };
+        return { success: false, error: 'Instagram publish error: ' + parseGraphError(errorData) };
       }
 
       const publishData = (await publishResponse.json()) as { id: string };
@@ -397,7 +444,7 @@ export class InstagramChannel implements ChannelInterface {
       });
       if (!resp.ok) {
         const errorData = await resp.text();
-        return { success: false, error: 'Instagram carousel item error: ' + errorData };
+        return { success: false, error: 'Instagram carousel item error: ' + parseGraphError(errorData) };
       }
       const data = (await resp.json()) as { id: string };
       childIds.push(data.id);
@@ -410,7 +457,7 @@ export class InstagramChannel implements ChannelInterface {
     });
     if (!carouselResp.ok) {
       const errorData = await carouselResp.text();
-      return { success: false, error: 'Instagram carousel error: ' + errorData };
+      return { success: false, error: 'Instagram carousel error: ' + parseGraphError(errorData) };
     }
     const carouselData = (await carouselResp.json()) as { id: string };
 
@@ -421,7 +468,7 @@ export class InstagramChannel implements ChannelInterface {
     });
     if (!publishResp.ok) {
       const errorData = await publishResp.text();
-      return { success: false, error: 'Instagram carousel publish error: ' + errorData };
+      return { success: false, error: 'Instagram carousel publish error: ' + parseGraphError(errorData) };
     }
     const publishData = (await publishResp.json()) as { id: string };
     return { success: true, externalPostId: publishData.id };

@@ -7,7 +7,7 @@ export type PostSource = 'generator' | 'instagram_sync';
 export interface Post {
   id: string;
   userId: string;
-  channelConnectionId: string;
+  channelConnectionId: string | null;
   contentType: ContentType;
   caption: string;
   hashtagsJson: string;

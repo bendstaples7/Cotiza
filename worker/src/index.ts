@@ -2,6 +2,8 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { bodyLimit } from 'hono/body-limit';
 import type { Bindings } from './bindings.js';
+import { getMissingCriticalSecrets } from './config.js';
+import { runPipelineProbes } from './services/pipeline-probes.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { handleImageQueue } from './queue/image-consumer.js';
 import type { ImageJobMessage } from './queue/image-consumer.js';
@@ -20,8 +22,12 @@ import jobberAuthRoutes from './routes/jobber-auth.js';
 import systemsRoutes from './routes/systems.js';
 import dashboardRoutes from './routes/dashboard.js';
 import reviewRoutes from './routes/reviews.js';
+import mediaServeRoutes from './routes/media-serve.js';
 
 const app = new Hono<{ Bindings: Bindings }>();
+
+// Public R2 media delivery (must be before CORS body limits — img tags cannot auth)
+app.route('/', mediaServeRoutes);
 
 // Webhook routes — no CORS or auth, verified via HMAC signature
 app.route('/api/webhooks', webhookRoutes);
@@ -43,24 +49,9 @@ app.use('/api/media/*', bodyLimit({ maxSize: 50 * 1024 * 1024 }));
 app.get('/health', async (c) => {
   const checks: Record<string, string> = {};
 
-  // Check critical env vars
-  const missing: string[] = [];
-  const critical = [
-    'AI_TEXT_API_KEY',
-    'CHANNEL_ENCRYPTION_KEY',
-    'FB_PAGE_ACCESS_TOKEN',
-    'IG_BUSINESS_ACCOUNT_ID',
-    'INSTAGRAM_CLIENT_ID',
-    'INSTAGRAM_CLIENT_SECRET',
-    'JOBBER_CLIENT_ID',
-    'JOBBER_CLIENT_SECRET',
-    'JOBBER_ACCESS_TOKEN',
-    'JOBBER_REFRESH_TOKEN',
-  ] as const;
-
-  for (const key of critical) {
-    if (!c.env[key]) missing.push(key);
-  }
+  // Names (never values) of any missing critical secrets — the list of required
+  // secrets lives in config.ts so /health and request handlers agree.
+  const missing = getMissingCriticalSecrets(c.env);
   if (missing.length > 0) {
     console.warn(`[health] Missing env vars: ${missing.join(', ')}`);
   }
@@ -88,7 +79,32 @@ app.get('/health', async (c) => {
     console.warn(`[health] ${JSON.stringify(checks)}`);
   }
 
-  return c.json({ status, checks });
+  // Surface the NAMES (never values) of missing secrets so production
+  // misconfiguration is visible without shell access to the Worker.
+  return c.json({ status, checks, ...(missing.length > 0 ? { missingEnv: missing } : {}) });
+});
+
+/**
+ * GET /health/pipelines
+ * Deep, READ-ONLY connectivity probes for the external pipelines (OpenAI image
+ * model access, GitHub cookie-refresh workflow, Instagram Graph account). These
+ * make outbound calls, so the route is guarded by HEALTHCHECK_KEY and intended
+ * for the post-deploy CI smoke test. Returns 503 when the key is unset
+ * (skipped), 401 on a bad key, 200 when all probes pass, 503 when any fails.
+ */
+app.get('/health/pipelines', async (c) => {
+  const expected = (c.env.HEALTHCHECK_KEY || '').trim();
+  if (!expected) {
+    return c.json({ status: 'skipped', reason: 'HEALTHCHECK_KEY is not configured on this worker.' }, 503);
+  }
+  const provided = (c.req.header('X-Health-Key') || '').trim();
+  if (provided !== expected) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  const checks = await runPipelineProbes(c.env, c.req.url);
+  const ok = Object.values(checks).every((probe) => probe.ok);
+  return c.json({ status: ok ? 'ok' : 'error', checks }, ok ? 200 : 503);
 });
 
 /**

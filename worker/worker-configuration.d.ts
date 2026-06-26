@@ -5,6 +5,7 @@ interface Env {
 	S3_PUBLIC_URL: "https://pub-afd5afa0999c424cac970f4b4e671bd6.r2.dev";
 	FRONTEND_URL: "https://cotiza-e4h.pages.dev";
 	D1_DATABASE_ID: "300f9629-60b2-4e2d-a574-e77bf50235ff";
+	GITHUB_REPO: "bendstaples7/chicago-reno-social-generator";
 	R2_BUCKET: R2Bucket;
 	DB: D1Database;
 	IMAGE_QUEUE: Queue;

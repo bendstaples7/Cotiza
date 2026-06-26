@@ -28,6 +28,8 @@ AI_TEXT_API_URL = "https://api.openai.com/v1/chat/completions"
 S3_PUBLIC_URL = "https://pub-afd5afa0999c424cac970f4b4e671bd6.r2.dev"
 FRONTEND_URL = "https://cotiza-e4h.pages.dev"
 D1_DATABASE_ID = "300f9629-60b2-4e2d-a574-e77bf50235ff"
+# GitHub repo slug (owner/name) used to dispatch the cookie-refresh workflow.
+GITHUB_REPO = "bendstaples7/chicago-reno-social-generator"
 
 # Secrets (set via `wrangler secret put <NAME>`):
 # All secrets below are REQUIRED for the deployed worker to function correctly.
