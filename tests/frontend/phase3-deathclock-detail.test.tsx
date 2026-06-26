@@ -510,10 +510,11 @@ describe('DeathclockDashboardPage — Phase 3', () => {
     );
     renderDashboardPage();
 
-    await screen.findByText('Dashboard');
+    // Wait for stats fetch to finish — "Dashboard" renders before async data arrives.
+    expect(await screen.findByText('20 active requests')).toBeInTheDocument();
 
     // aria-label shows percentage: green=50%, yellow=25%, orange=15%, red=10%
-    const [greenBar, yellowBar, orangeBar, redBar] = screen.getAllByRole('button');
+    const [greenBar, yellowBar, orangeBar, redBar] = await screen.findAllByRole('button');
 
     expect(greenBar).toHaveAttribute('aria-label', expect.stringContaining('50%'));
     expect(yellowBar).toHaveAttribute('aria-label', expect.stringContaining('25%'));
