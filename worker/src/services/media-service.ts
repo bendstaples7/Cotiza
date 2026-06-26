@@ -1,4 +1,5 @@
 import { PlatformError } from '../errors/index.js';
+import { buildMediaThumbnailPath } from 'shared';
 import type { MediaItem, PaginationParams, GeneratedImage } from 'shared';
 
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'video/mp4'];
@@ -24,7 +25,7 @@ export class MediaService {
     this.validateFile(file);
 
     const storageKey = 'media/' + userId + '/' + crypto.randomUUID() + '-' + file.originalname;
-    const thumbnailUrl = '/media/thumbnail/' + storageKey;
+    const thumbnailUrl = buildMediaThumbnailPath(storageKey);
 
     await this.r2.put(storageKey, file.buffer, {
       httpMetadata: { contentType: file.mimetype },
@@ -118,7 +119,7 @@ export class MediaService {
     const ext = image.format === 'png' ? 'png' : image.format === 'webp' ? 'webp' : 'jpg';
     const filename = 'ai-generated-' + crypto.randomUUID() + '.' + ext;
     const storageKey = 'media/' + userId + '/' + filename;
-    const thumbnailUrl = '/media/thumbnail/' + storageKey;
+    const thumbnailUrl = buildMediaThumbnailPath(storageKey);
 
     await this.r2.put(storageKey, bytes.buffer as ArrayBuffer, {
       httpMetadata: { contentType: mimeType },

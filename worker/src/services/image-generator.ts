@@ -1,9 +1,10 @@
 import { PlatformError } from '../errors/index.js';
+import { EXTERNAL } from '../config.js';
 import type { ImageGenerationRequest, GeneratedImage } from 'shared';
 
 const GENERATION_TIMEOUT_MS = 120_000; // 120 seconds
-const OPENAI_IMAGE_URL = 'https://api.openai.com/v1/images/generations';
-const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
+const OPENAI_IMAGE_URL = EXTERNAL.openai.imageUrl;
+const OPENAI_CHAT_URL = EXTERNAL.openai.chatUrl;
 const SCENE_TIMEOUT_MS = 15_000;
 
 export class ImageGenerator {
@@ -47,7 +48,7 @@ export class ImageGenerator {
           'Authorization': 'Bearer ' + this.apiKey,
         },
         body: JSON.stringify({
-          model: 'gpt-image-1',
+          model: EXTERNAL.openai.imageModel,
           prompt: prompt,
           n: count,
           size: '1024x1024',
@@ -161,7 +162,7 @@ export class ImageGenerator {
           'Authorization': 'Bearer ' + this.apiKey,
         },
         body: JSON.stringify({
-          model: 'gpt-4o-mini',
+          model: EXTERNAL.openai.chatModel,
           messages: [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: 'Topic: ' + topic },

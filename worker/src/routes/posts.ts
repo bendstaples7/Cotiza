@@ -3,6 +3,7 @@ import type { Bindings } from '../bindings.js';
 import { ContentType } from 'shared';
 import type { User, PostStatus } from 'shared';
 import { sessionMiddleware } from '../middleware/session.js';
+import { emptyToNull, emptyToNullOptional } from '../http/normalize.js';
 import {
   PostService,
   PublishApprovalService,
@@ -117,7 +118,7 @@ app.post('/', async (c) => {
   const postService = new PostService(c.env.DB);
   const post = await postService.create({
     userId: c.get('user').id,
-    channelConnectionId: body.channelConnectionId || undefined as any,
+    channelConnectionId: emptyToNull(body.channelConnectionId),
     contentType: body.contentType as ContentType,
     caption: body.caption,
     hashtags: body.hashtags,
@@ -155,7 +156,7 @@ app.put('/:id', async (c) => {
     caption: body.caption,
     hashtags: body.hashtags,
     contentType: body.contentType as any,
-    channelConnectionId: body.channelConnectionId,
+    channelConnectionId: emptyToNullOptional(body.channelConnectionId),
     templateFields: body.templateFields,
     mediaItemIds: body.mediaItemIds,
   });

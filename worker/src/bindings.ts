@@ -22,6 +22,8 @@ export interface Bindings {
   CLOUDFLARE_ACCOUNT_ID: string;
   CLOUDFLARE_API_TOKEN: string;
   GITHUB_PAT: string;
+  /** GitHub repo slug (owner/name) for dispatching the cookie-refresh workflow. Defaults to the canonical repo when unset. */
+  GITHUB_REPO?: string;
   D1_DATABASE_ID: string;
   ENABLE_LOCAL_SYNC?: string;
   /** Secret key for admin operations (e.g. deathclock backfill). */
@@ -31,6 +33,11 @@ export interface Bindings {
    * Must NOT reuse CLOUDFLARE_API_TOKEN. Route is disabled when unset.
    */
   DEV_SECRETS_KEY?: string;
+  /**
+   * Key guarding GET /health/pipelines (deep read-only pipeline probes used by
+   * the post-deploy CI smoke test). Route is skipped (503) when unset.
+   */
+  HEALTHCHECK_KEY?: string;
   /** Gmail API OAuth client ID for email context enrichment. */
   GMAIL_CLIENT_ID: string;
   /** Gmail API OAuth client secret for email context enrichment. */

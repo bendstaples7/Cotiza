@@ -1,4 +1,5 @@
 import { ActivityLogService } from './activity-log-service.js';
+import { PlatformError } from '../errors/index.js';
 import type { JobberTokenStore } from './jobber-token-store.js';
 import type { ProductCatalogEntry, JobberCustomerRequest } from 'shared';
 import { abortableDelay, combineAbortSignals } from '../utils/abort.js';
@@ -410,7 +411,7 @@ export class JobberIntegration {
             .filter((m): m is string => !!m),
           structuredNotes,
           imageUrls: (r.noteAttachments?.edges ?? [])
-            .filter((e) => e.node.contentType.startsWith('image/'))
+            .filter((e) => (e.node?.contentType ?? '').startsWith('image/'))
             .map((e) => e.node.url),
           jobberWebUri: r.jobberWebUri,
           createdAt: r.createdAt,
@@ -528,7 +529,19 @@ export class JobberIntegration {
     throttled?: boolean;
   }> {
     if (!this.accessToken) {
-      throw new Error('JOBBER_ACCESS_TOKEN is not configured');
+      const hasCredentials = !!(this.clientId && this.clientSecret && this.refreshToken);
+      throw new PlatformError({
+        severity: 'error',
+        component: 'JobberIntegration',
+        operation: 'executeGraphql',
+        description: hasCredentials
+          ? 'Jobber access token is unavailable. Your Jobber session needs to be re-authorized.'
+          : 'Jobber is not configured. Connect a Jobber account to enable quotes and requests.',
+        recommendedActions: hasCredentials
+          ? ['Reconnect your Jobber account from Settings']
+          : ['Set the Jobber credentials (JOBBER_CLIENT_ID, JOBBER_CLIENT_SECRET, JOBBER_REFRESH_TOKEN) or reconnect Jobber from Settings'],
+        statusCode: 503,
+      });
     }
 
     // DEBUG: log token prefix and query cost hint

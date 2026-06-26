@@ -427,7 +427,7 @@ export class ReviewService {
   }> {
     // Get quote draft for push
     const draftRow = await this.db.prepare(
-      `SELECT id, status, review_status, jobber_quote_id, draft_number, user_id,
+      `SELECT id, status, review_status, jobber_quote_id, jobber_request_id, draft_number, user_id,
               customer_request_text, customer_note, deposit_schedule
        FROM quote_drafts WHERE id = ?`
     ).bind(quoteDraftId).first() as Record<string, unknown> | null;
@@ -502,7 +502,7 @@ export class ReviewService {
         selectedTemplateName: null,
         lineItems,
         unresolvedItems,
-        jobberRequestId: null,
+        jobberRequestId: (draftRow.jobber_request_id as string) ?? null,
         jobberQuoteId: (draftRow.jobber_quote_id as string) ?? null,
         customerNote: (draftRow.customer_note as string) ?? null,
         depositSchedule,

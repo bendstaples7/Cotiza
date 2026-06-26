@@ -29,6 +29,13 @@ CLOUDFLARE_API_TOKEN=
 # Do NOT reuse CLOUDFLARE_API_TOKEN.
 DEV_SECRETS_KEY=
 
+# Optional: guards GET /health/pipelines (deep, read-only probes of OpenAI / GitHub
+# cookie-refresh / Instagram Graph). Used by the post-deploy CI smoke test.
+# When unset, /health/pipelines returns 503 (skipped) and CI skips the probe step.
+# To enable: set the SAME value here, as a Worker secret (wrangler secret put
+# HEALTHCHECK_KEY), and as a GitHub Actions repo secret named HEALTHCHECK_KEY.
+HEALTHCHECK_KEY=
+
 # Enable local-to-remote D1 sync (rules, cookies, tokens). Only set in .dev.vars, never in production.
 # Does not bypass Jobber OAuth or session checks — reconnect via the app when tokens expire.
 ENABLE_LOCAL_SYNC=true
@@ -38,3 +45,7 @@ ENABLE_LOCAL_SYNC=true
 GMAIL_CLIENT_ID=
 GMAIL_CLIENT_SECRET=
 GMAIL_REFRESH_TOKEN=
+
+# GitHub repo slug (owner/name) for the cookie-refresh workflow dispatch.
+# Defaults to the canonical repo in wrangler.toml; only override if your fork differs.
+# GITHUB_REPO=bendstaples7/chicago-reno-social-generator

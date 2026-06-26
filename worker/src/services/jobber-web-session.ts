@@ -253,7 +253,10 @@ export class JobberWebSession {
 
       if (!resp.ok) {
         const text = await resp.text();
-        return { synced: false, error: `Cloudflare API error (${resp.status}): ${text.slice(0, 200)}` };
+        const hint = (resp.status === 401 || resp.status === 403)
+          ? ' (CLOUDFLARE_API_TOKEN may be expired or lack D1 read permission)'
+          : '';
+        return { synced: false, error: `Cloudflare D1 API error (${resp.status})${hint}: ${text.slice(0, 200)}` };
       }
 
       const data = await resp.json() as {

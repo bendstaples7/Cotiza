@@ -9,6 +9,7 @@
   "scripts": {
     "test": "vitest --run",
     "test:watch": "vitest",
+    "lint": "eslint worker/src",
     "dev:client": "npm run dev --workspace=client",
     "dev:worker": "npm run dev --workspace=worker",
     "dev:all": "node scripts/dev.mjs",
@@ -24,10 +25,12 @@
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
+    "eslint": "^10.5.0",
     "fast-check": "^3.22.0",
     "jsdom": "^29.0.2",
     "puppeteer": "^24.41.0",
     "typescript": "^5.4.0",
+    "typescript-eslint": "^8.62.0",
     "vitest": "^2.1.0",
     "wait-on": "^8.0.0"
   }

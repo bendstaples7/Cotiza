@@ -12,6 +12,7 @@ import {
   createPost, generateContent, approvePost, publishPost,
   generateImages, saveGeneratedImage, updatePost, uploadMedia,
   fetchContentIdeas, generateContentIdeas, useContentIdea, dismissContentIdea,
+  resolveMediaUrl,
 } from '../api';
 
 type Step = 'loading' | 'content-type' | 'ideas' | 'generating' | 'image' | 'preview' | 'done';
@@ -44,6 +45,7 @@ export default function QuickPostPage() {
   const [aiStyle, setAiStyle] = useState<ImageStyle>('photorealistic');
   const [aiGenerating, setAiGenerating] = useState(false);
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
+  const [generatedMediaItems, setGeneratedMediaItems] = useState<(MediaItem | undefined)[]>([]);
   const [selectedImage, setSelectedImage] = useState<MediaItem | null>(null);
 
   // Preview image upload state
@@ -120,7 +122,10 @@ export default function QuickPostPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  const channel = channels.length > 0 ? channels[0] : null;
+  // Prefer a fully connected channel; an expired/disconnected/errored one
+  // can't publish, so picking channels[0] blindly would surface a misleading
+  // "ready to publish" state.
+  const channel = channels.find((c) => c.status === 'connected') ?? null;
 
   // Load ideas for selected content type
   const loadIdeas = async (ct: ContentType) => {
@@ -216,6 +221,7 @@ export default function QuickPostPage() {
       const topic = selectedIdea ? selectedIdea.idea : caption.substring(0, 150);
       const result = await generateImages('', aiStyle, 1, topic);
       setGeneratedImages(result.images);
+      setGeneratedMediaItems(result.mediaItems ?? result.images.map(() => undefined));
     } catch (err) {
       setError((err as ErrorResponse).message ?? 'Image generation failed.');
     } finally {
@@ -223,19 +229,19 @@ export default function QuickPostPage() {
     }
   };
 
-  const handleSaveGenerated = async (image: GeneratedImage) => {
+  const handleSaveGenerated = async (image: GeneratedImage, mediaItem?: MediaItem) => {
     try {
       setActionLoading(true);
       setError(null);
-      const saved = await saveGeneratedImage(image);
-      // Keep the DALL-E URL for preview since thumbnailUrl may not be servable
-      saved.thumbnailUrl = image.url;
+      // Queue pipeline already persisted to R2 + D1; only legacy flows need save-generated.
+      const saved = mediaItem ?? await saveGeneratedImage(image);
       // Revoke previous blob URL if replacing an uploaded image
       if (selectedImage?.thumbnailUrl?.startsWith('blob:')) {
         URL.revokeObjectURL(selectedImage.thumbnailUrl);
       }
       setSelectedImage(saved);
       setGeneratedImages([]);
+      setGeneratedMediaItems([]);
       if (savedPostId) await updatePost(savedPostId, { mediaItemIds: [saved.id] });
       // Auto-advance to preview
       setStep('preview');
@@ -589,8 +595,8 @@ export default function QuickPostPage() {
               <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '0.75rem' }}>
                 {generatedImages.map((img, i) => (
                   <div key={i} style={{ width: 200, borderRadius: 8, overflow: 'hidden', border: '2px solid #80d4ce' }}>
-                    <img src={img.url} alt={img.description} style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }} />
-                    <button onClick={() => handleSaveGenerated(img)} disabled={actionLoading}
+                    <img src={resolveMediaUrl(img.url)} alt={img.description} style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }} />
+                    <button onClick={() => handleSaveGenerated(img, generatedMediaItems[i])} disabled={actionLoading}
                       style={{ width: '100%', padding: '0.5rem', border: 'none', background: '#00a89d', color: '#fff', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 500 }}>
                       {actionLoading ? 'Saving...' : 'Use This Image'}
                     </button>
@@ -620,11 +626,11 @@ export default function QuickPostPage() {
           </button>
           {selectedImage && (
             <div style={{ marginTop: '1rem', padding: '0.75rem', background: '#e0f7f5', border: '1px solid #80d4ce', borderRadius: 8, display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <img src={selectedImage.thumbnailUrl} alt="Selected" style={{ width: 60, height: 60, borderRadius: 6, objectFit: 'cover' }} />
+              <img src={resolveMediaUrl(selectedImage.thumbnailUrl)} alt="Selected" style={{ width: 60, height: 60, borderRadius: 6, objectFit: 'cover' }} />
               <div style={{ flex: 1 }}>
                 <span style={{ fontSize: '0.85rem', color: '#00a89d', fontWeight: 500 }}>Image attached to post</span>
               </div>
-              <button onClick={() => { clearSelectedImage(); setGeneratedImages([]); }}
+              <button onClick={() => { clearSelectedImage(); setGeneratedImages([]); setGeneratedMediaItems([]); }}
                 style={{ background: 'none', border: 'none', color: '#d32f2f', cursor: 'pointer', fontSize: '0.85rem' }}>✕ Remove</button>
             </div>
           )}
@@ -659,7 +665,7 @@ export default function QuickPostPage() {
               <span style={{ fontWeight: 500, fontSize: '0.9rem', display: 'block', marginBottom: '0.5rem' }}>Image</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                 {selectedImage ? (
-                  <img src={selectedImage.thumbnailUrl} alt="Selected" style={{ width: 80, height: 80, borderRadius: 8, objectFit: 'cover', border: '1px solid #e0e0e0' }} />
+                  <img src={resolveMediaUrl(selectedImage.thumbnailUrl)} alt="Selected" style={{ width: 80, height: 80, borderRadius: 8, objectFit: 'cover', border: '1px solid #e0e0e0' }} />
                 ) : (
                   <div style={{ width: 80, height: 80, borderRadius: 8, background: '#f5f5f5', border: '1px dashed #ccc', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999', fontSize: '0.75rem' }}>No image</div>
                 )}
@@ -752,7 +758,7 @@ export default function QuickPostPage() {
                 </div>
                 <div style={{ background: '#e0e0e0', aspectRatio: '1', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
                   {selectedImage ? (
-                    <img src={selectedImage.thumbnailUrl} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    <img src={resolveMediaUrl(selectedImage.thumbnailUrl)} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                   ) : (<span style={{ color: '#999', fontSize: '0.85rem' }}>No image</span>)}
                 </div>
                 <div style={{ padding: '0.5rem', fontSize: '0.8rem' }}>

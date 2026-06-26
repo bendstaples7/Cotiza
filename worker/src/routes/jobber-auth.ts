@@ -7,6 +7,7 @@
  */
 import { Hono } from 'hono';
 import type { Bindings } from '../bindings.js';
+import { EXTERNAL, getGithubRepo, getCookieRefreshDispatchUrl } from '../config.js';
 import { JobberTokenStore } from '../services/jobber-token-store.js';
 import { JobberWebSession } from '../services/jobber-web-session.js';
 
@@ -275,9 +276,13 @@ app.post('/trigger-cookie-refresh', async (c) => {
     return c.json({ error: 'GITHUB_PAT not configured' }, 500);
   }
 
+  // Repo slug + dispatch URL come from config so the target can't silently
+  // drift from the actual repository (ESLint blocks re-hardcoding it here).
+  const repo = getGithubRepo(c.env);
+
   try {
     const resp = await fetch(
-      'https://api.github.com/repos/bendstaples7/Cotiza/actions/workflows/refresh-jobber-cookies.yml/dispatches',
+      getCookieRefreshDispatchUrl(c.env),
       {
         method: 'POST',
         headers: {
@@ -286,7 +291,7 @@ app.post('/trigger-cookie-refresh', async (c) => {
           'Content-Type': 'application/json',
           'User-Agent': 'cotiza-worker',
         },
-        body: JSON.stringify({ ref: 'main' }),
+        body: JSON.stringify({ ref: EXTERNAL.github.workflowRef }),
       },
     );
 
@@ -295,8 +300,15 @@ app.post('/trigger-cookie-refresh', async (c) => {
     }
 
     const text = await resp.text();
-    console.error(`[jobber-auth] GitHub workflow dispatch failed (${resp.status}): ${text}`);
-    return c.json({ triggered: false, error: `GitHub API returned ${resp.status}` }, 500);
+    console.error(`[jobber-auth] GitHub workflow dispatch failed (${resp.status}) for repo ${repo}: ${text}`);
+    const detail = text.trim().slice(0, 200);
+    const hint = resp.status === 404
+      ? ` — verify the repo "${repo}" and workflow "refresh-jobber-cookies.yml" exist and GITHUB_PAT has workflow scope`
+      : '';
+    return c.json(
+      { triggered: false, error: `GitHub API returned ${resp.status}${hint}`, ...(detail ? { detail } : {}) },
+      500,
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     console.error('[jobber-auth] Failed to trigger workflow:', msg);

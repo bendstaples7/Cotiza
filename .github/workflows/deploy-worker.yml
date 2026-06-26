@@ -19,6 +19,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Lint (regression guards)
+        run: npm run lint
+
       - name: Run tests
         run: npm test
 
@@ -41,19 +44,47 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
-      - name: Verify worker deployment
+      - name: Verify worker health
         run: |
           URL="https://social-media-cross-poster.chicago-reno.workers.dev/health"
+          LAST=""
           for i in 1 2 3 4 5; do
             sleep 5
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL")
-            if [ "$STATUS" = "200" ]; then
-              echo "Health check passed (HTTP $STATUS) on attempt $i"
+            BODY=$(curl -s "$URL")
+            LAST="$BODY"
+            STATUS=$(echo "$BODY" | jq -r '.status // "unknown"')
+            if [ "$STATUS" = "ok" ]; then
+              echo "Health OK on attempt $i: $BODY"
               exit 0
             fi
-            echo "Attempt $i: HTTP $STATUS, retrying..."
+            echo "Attempt $i: status=$STATUS"
           done
-          echo "::error::Health check failed after 5 attempts"
+          # A persistent non-ok status means missing secrets / DB failure. The
+          # missing secret NAMES are listed under .missingEnv in the response.
+          echo "::error::Worker /health is not ok after 5 attempts. Last response: $LAST"
+          exit 1
+
+      - name: Smoke-test external pipelines
+        env:
+          HEALTHCHECK_KEY: ${{ secrets.HEALTHCHECK_KEY }}
+        run: |
+          if [ -z "$HEALTHCHECK_KEY" ]; then
+            echo "HEALTHCHECK_KEY secret not set — skipping pipeline smoke test."
+            echo "To enable: 'wrangler secret put HEALTHCHECK_KEY' on the worker AND add a repo secret of the same name."
+            exit 0
+          fi
+          URL="https://social-media-cross-poster.chicago-reno.workers.dev/health/pipelines"
+          BODY=$(curl -s -H "X-Health-Key: $HEALTHCHECK_KEY" "$URL")
+          STATUS=$(echo "$BODY" | jq -r '.status // "unknown"')
+          echo "Pipelines: $BODY"
+          if [ "$STATUS" = "ok" ]; then
+            echo "Pipeline smoke test passed."
+            exit 0
+          fi
+          # Probes are read-only; a failure points at OpenAI key/model access,
+          # the GitHub cookie-refresh workflow/PAT, the Instagram Graph token,
+          # or the R2 media thumbnail delivery route (img previews 404).
+          echo "::error::Pipeline smoke test failed: $BODY"
           exit 1
 
       # ── Client deploy (only after worker succeeds) ─────────────

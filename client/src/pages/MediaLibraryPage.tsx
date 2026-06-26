@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { MediaItem, GeneratedImage, ImageStyle, ErrorResponse } from 'shared';
-import { listMedia, uploadMedia, generateImages, saveGeneratedImage, deleteMedia } from '../api';
+import { listMedia, uploadMedia, generateImages, saveGeneratedImage, deleteMedia, resolveMediaUrl } from '../api';
 
 const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'video/mp4'];
 const ACCEPTED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.mp4'];
@@ -41,6 +41,7 @@ export default function MediaLibraryPage() {
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
+  const [generatedMediaItems, setGeneratedMediaItems] = useState<(MediaItem | undefined)[]>([]);
   const [savingIndex, setSavingIndex] = useState<number | null>(null);
 
   // Delete state
@@ -96,6 +97,7 @@ export default function MediaLibraryPage() {
       setGeneratedImages([]);
       const data = await generateImages(genDescription.trim(), genStyle || undefined);
       setGeneratedImages(data.images);
+      setGeneratedMediaItems(data.mediaItems ?? data.images.map(() => undefined));
     } catch (err) {
       setGenError((err as ErrorResponse).message ?? 'Image generation failed.');
     } finally {
@@ -106,9 +108,10 @@ export default function MediaLibraryPage() {
   const handleSaveGenerated = async (image: GeneratedImage, index: number) => {
     try {
       setSavingIndex(index);
-      const item = await saveGeneratedImage(image);
+      const item = generatedMediaItems[index] ?? await saveGeneratedImage(image);
       setItems((prev) => [item, ...prev]);
       setGeneratedImages((prev) => prev.filter((_, i) => i !== index));
+      setGeneratedMediaItems((prev) => prev.filter((_, i) => i !== index));
     } catch (err) {
       setGenError((err as ErrorResponse).message ?? 'Failed to save image.');
     } finally {
@@ -155,9 +158,9 @@ export default function MediaLibraryPage() {
             <div key={item.id} style={cardStyle}>
               <div style={{ position: 'relative', paddingTop: '100%', background: '#e0e0e0', borderRadius: '6px 6px 0 0', overflow: 'hidden' }}>
                 {item.mimeType.startsWith('video/') ? (
-                  <video src={item.thumbnailUrl} style={thumbStyle} />
+                  <video src={resolveMediaUrl(item.thumbnailUrl)} style={thumbStyle} />
                 ) : (
-                  <img src={item.thumbnailUrl} alt={item.filename} style={thumbStyle} loading="lazy" />
+                  <img src={resolveMediaUrl(item.thumbnailUrl)} alt={item.filename} style={thumbStyle} loading="lazy" />
                 )}
                 {item.source === 'ai_generated' && (
                   <span style={badgeStyle} aria-label="AI-Generated">AI</span>
@@ -247,7 +250,7 @@ export default function MediaLibraryPage() {
                 <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                   {generatedImages.map((img, idx) => (
                     <div key={idx} style={{ border: '1px solid #ddd', borderRadius: 6, overflow: 'hidden', width: 150 }}>
-                      <img src={img.url} alt={img.description} style={{ width: '100%', height: 150, objectFit: 'cover' }} />
+                      <img src={resolveMediaUrl(img.url)} alt={img.description} style={{ width: '100%', height: 150, objectFit: 'cover' }} />
                       <div style={{ padding: '0.4rem', textAlign: 'center' }}>
                         <button
                           onClick={() => handleSaveGenerated(img, idx)}

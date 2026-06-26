@@ -77,8 +77,33 @@ export class CrossPoster {
       });
     }
 
-    // 3. Format the post for the channel
-    const formattedPost = await this.channel.formatPost(post);
+    // 3. Format the post for the channel. If formatting throws, revert the
+    //    'publishing' transition so the post doesn't get stuck mid-flight.
+    let formattedPost: FormattedPost;
+    try {
+      formattedPost = await this.channel.formatPost(post);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : 'Unknown error';
+      await this.postService.transitionStatus(postId, userId, 'failed');
+      await this.activityLog.log({
+        userId,
+        component: 'CrossPoster',
+        operation: 'publish',
+        severity: 'error',
+        description: 'Post ' + postId + ' failed while preparing media: ' + reason,
+        recommendedAction: 'Check the attached media and try again',
+      });
+      throw new PlatformError({
+        severity: 'error',
+        component: 'CrossPoster',
+        operation: 'publish',
+        description: 'Publishing failed while preparing the post: ' + reason,
+        recommendedActions: [
+          'Check the attached media and try again',
+          'Verify the post content meets Instagram requirements',
+        ],
+      });
+    }
 
     // 4. Attempt publish with retry
     const result = await this.publishWithRetry(formattedPost);
