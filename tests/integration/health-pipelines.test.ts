@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { runPipelineProbes } from '../../worker/src/services/pipeline-probes.js';
+import { REQUIRED_D1_TABLES } from '../../worker/src/required-d1-tables.js';
 import { buildMediaThumbnailPath } from '../../shared/src/media-urls.js';
 import { installFetchMock, type FetchMock } from '../helpers/fetch-mock.js';
 
@@ -19,6 +20,19 @@ function env(overrides: Record<string, unknown> = {}) {
       };
     }),
   };
+  const tables = new Set<string>([...REQUIRED_D1_TABLES]);
+  const db = {
+    prepare: vi.fn((sql: string) => ({
+      bind: (...args: unknown[]) => ({
+        first: async () => {
+          if (sql.includes('sqlite_master') && typeof args[0] === 'string') {
+            return tables.has(args[0]) ? { name: args[0] } : null;
+          }
+          return null;
+        },
+      }),
+    })),
+  };
   return {
     AI_TEXT_API_KEY: 'sk-test',
     GITHUB_PAT: 'ghp_test',
@@ -26,6 +40,7 @@ function env(overrides: Record<string, unknown> = {}) {
     FB_PAGE_ACCESS_TOKEN: 'fb-token',
     IG_BUSINESS_ACCOUNT_ID: 'ig-1',
     R2_BUCKET: r2,
+    DB: db,
     ...overrides,
   } as never;
 }
@@ -49,6 +64,7 @@ describe('runPipelineProbes (deep /health/pipelines checks)', () => {
     expect(checks.github.ok).toBe(true);
     expect(checks.instagram.ok).toBe(true);
     expect(checks.media.ok).toBe(true);
+    expect(checks.d1.ok).toBe(true);
   });
 
   it('flags a GitHub repo/scope problem (the cookie-refresh drift class)', async () => {
@@ -95,5 +111,31 @@ describe('runPipelineProbes (deep /health/pipelines checks)', () => {
     expect(checks.media.detail).toContain('thumbnail route');
     const thumbnailCall = fetchMock.calls.find((c) => c.url.includes(buildMediaThumbnailPath('_healthcheck/media-probe.png')));
     expect(thumbnailCall).toBeDefined();
+  });
+
+  it('flags missing required D1 tables (the oauth_states drift class)', async () => {
+    fetchMock = installFetchMock()
+      .on('api.openai.com', { status: 200 })
+      .on('api.github.com', { status: 200 })
+      .on('graph.facebook.com', { status: 200 });
+
+    const tables = new Set<string>(['users', 'jobber_tokens', 'jobber_web_session', 'channel_connections']);
+    const db = {
+      prepare: vi.fn((sql: string) => ({
+        bind: (...args: unknown[]) => ({
+          first: async () => {
+            if (sql.includes('sqlite_master') && typeof args[0] === 'string') {
+              return tables.has(args[0]) ? { name: args[0] } : null;
+            }
+            return null;
+          },
+        }),
+      })),
+    };
+
+    const checks = await runPipelineProbes(env({ DB: db }));
+
+    expect(checks.d1.ok).toBe(false);
+    expect(checks.d1.detail).toContain('oauth_states');
   });
 });

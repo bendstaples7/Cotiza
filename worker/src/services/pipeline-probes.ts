@@ -1,5 +1,6 @@
 import type { Bindings } from '../bindings.js';
 import { EXTERNAL, getGithubRepo } from '../config.js';
+import { REQUIRED_D1_TABLES } from '../required-d1-tables.js';
 import { buildMediaThumbnailPath, storageKeyFromThumbnailPath } from 'shared';
 
 export interface ProbeResult {
@@ -7,7 +8,7 @@ export interface ProbeResult {
   detail: string;
 }
 
-export type PipelineProbes = Record<'openai' | 'github' | 'instagram' | 'media', ProbeResult>;
+export type PipelineProbes = Record<'openai' | 'github' | 'instagram' | 'media' | 'd1', ProbeResult>;
 
 const PROBE_TIMEOUT_MS = 8000;
 
@@ -142,6 +143,33 @@ async function probeMediaDelivery(env: Bindings, selfUrl?: string): Promise<Prob
   }
 }
 
+/** D1: confirm critical tables exist (catches schema drift after bad migration edits). */
+async function probeD1(env: Bindings): Promise<ProbeResult> {
+  if (!env.DB) {
+    return { ok: false, detail: 'DB binding is not configured' };
+  }
+
+  try {
+    const missing: string[] = [];
+    for (const table of REQUIRED_D1_TABLES) {
+      const row = await env.DB.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      ).bind(table).first<{ name: string }>();
+      if (!row) {
+        missing.push(table);
+      }
+    }
+
+    if (missing.length > 0) {
+      return { ok: false, detail: `missing tables: ${missing.join(', ')}` };
+    }
+
+    return { ok: true, detail: `${REQUIRED_D1_TABLES.length} required tables present` };
+  } catch (err) {
+    return { ok: false, detail: `D1 probe error: ${err instanceof Error ? err.message : 'unknown'}` };
+  }
+}
+
 /**
  * Run all read-only pipeline connectivity probes in parallel. Safe to call
  * repeatedly (writes a tiny healthcheck object to R2). Exposed via the guarded
@@ -151,11 +179,12 @@ async function probeMediaDelivery(env: Bindings, selfUrl?: string): Promise<Prob
  *   through the public /media/thumbnail route on the deployed worker.
  */
 export async function runPipelineProbes(env: Bindings, selfUrl?: string): Promise<PipelineProbes> {
-  const [openai, github, instagram, media] = await Promise.all([
+  const [openai, github, instagram, media, d1] = await Promise.all([
     probeOpenAI(env),
     probeGithub(env),
     probeInstagram(env),
     probeMediaDelivery(env, selfUrl),
+    probeD1(env),
   ]);
-  return { openai, github, instagram, media };
+  return { openai, github, instagram, media, d1 };
 }

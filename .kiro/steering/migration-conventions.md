@@ -50,11 +50,28 @@ This marker:
 
 Prefer soft-deletes or leaving unused columns in place. If you must drop, add a comment explaining why and ensure no deployed code references the dropped object.
 
+### Never edit an already-applied migration
+
+D1 tracks applied migrations by **filename**. Once a migration has run in production, editing that file does **not** re-apply it. New schema changes must always be a **new** numbered `00NN_*.sql` file.
+
+```sql
+-- ✅ Good — forward migration for a table missing in production
+-- worker/src/migrations/0067_oauth_states.sql
+CREATE TABLE IF NOT EXISTS oauth_states ( ... );
+
+-- ❌ Bad — adding a table to 0001_initial_schema.sql after 0001 was already applied
+```
+
+CI blocks PRs that modify or delete existing files under `worker/src/migrations/`.
+
 ## CI Enforcement
 
 The `worker/scripts/validate-migrations.sh` script runs in CI on every PR. It checks:
 - `CREATE TABLE` has `IF NOT EXISTS`
 - `CREATE INDEX` has `IF NOT EXISTS`
 - `ALTER TABLE ADD COLUMN` has an `IDEMPOTENCY:` marker comment
+- Existing migration files are not modified or deleted (immutable migrations)
 
 Migrations that fail these checks will block the PR.
+
+Post-deploy, `/health/pipelines` includes a `d1` probe that verifies required tables exist in production (see `worker/src/required-d1-tables.ts`).
