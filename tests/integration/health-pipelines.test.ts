@@ -4,6 +4,22 @@ import { REQUIRED_D1_TABLES } from '../../worker/src/required-d1-tables.js';
 import { buildMediaThumbnailPath } from '../../shared/src/media-urls.js';
 import { installFetchMock, type FetchMock } from '../helpers/fetch-mock.js';
 
+function createD1Mock(tables: Iterable<string>) {
+  const tableSet = new Set(tables);
+  return {
+    prepare: vi.fn((sql: string) => ({
+      bind: (...args: unknown[]) => ({
+        first: async () => {
+          if (sql.includes('sqlite_master') && typeof args[0] === 'string') {
+            return tableSet.has(args[0]) ? { name: args[0] } : null;
+          }
+          return null;
+        },
+      }),
+    })),
+  };
+}
+
 function env(overrides: Record<string, unknown> = {}) {
   const r2Objects = new Map<string, Uint8Array>();
   const r2 = {
@@ -20,19 +36,7 @@ function env(overrides: Record<string, unknown> = {}) {
       };
     }),
   };
-  const tables = new Set<string>([...REQUIRED_D1_TABLES]);
-  const db = {
-    prepare: vi.fn((sql: string) => ({
-      bind: (...args: unknown[]) => ({
-        first: async () => {
-          if (sql.includes('sqlite_master') && typeof args[0] === 'string') {
-            return tables.has(args[0]) ? { name: args[0] } : null;
-          }
-          return null;
-        },
-      }),
-    })),
-  };
+  const db = createD1Mock(REQUIRED_D1_TABLES);
   return {
     AI_TEXT_API_KEY: 'sk-test',
     GITHUB_PAT: 'ghp_test',
@@ -119,21 +123,9 @@ describe('runPipelineProbes (deep /health/pipelines checks)', () => {
       .on('api.github.com', { status: 200 })
       .on('graph.facebook.com', { status: 200 });
 
-    const tables = new Set<string>(['users', 'jobber_tokens', 'jobber_web_session', 'channel_connections']);
-    const db = {
-      prepare: vi.fn((sql: string) => ({
-        bind: (...args: unknown[]) => ({
-          first: async () => {
-            if (sql.includes('sqlite_master') && typeof args[0] === 'string') {
-              return tables.has(args[0]) ? { name: args[0] } : null;
-            }
-            return null;
-          },
-        }),
-      })),
-    };
-
-    const checks = await runPipelineProbes(env({ DB: db }));
+    const checks = await runPipelineProbes(env({
+      DB: createD1Mock(['users', 'jobber_tokens', 'jobber_web_session', 'channel_connections']),
+    }));
 
     expect(checks.d1.ok).toBe(false);
     expect(checks.d1.detail).toContain('oauth_states');

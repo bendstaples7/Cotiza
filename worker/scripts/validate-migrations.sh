@@ -63,10 +63,15 @@ echo ""
 # migration (e.g. 0001_initial_schema.sql) does not re-run on production D1.
 IMMUTABLE_BASE="${IMMUTABLE_MIGRATIONS_BASE:-origin/main}"
 if git rev-parse --verify "$IMMUTABLE_BASE" >/dev/null 2>&1; then
-  MODIFIED_MIGRATIONS=$(
-    git diff --name-only --diff-filter=MD "$IMMUTABLE_BASE"...HEAD -- "$MIGRATIONS_DIR" 2>/dev/null || true
-  )
-  if [ -n "$MODIFIED_MIGRATIONS" ]; then
+  set +e
+  MODIFIED_MIGRATIONS=$(git diff --name-only --diff-filter=MDR "$IMMUTABLE_BASE"...HEAD -- "$MIGRATIONS_DIR" 2>/dev/null)
+  DIFF_EXIT=$?
+  set -e
+  if [ "$DIFF_EXIT" -gt 1 ]; then
+    echo "❌ git diff failed (exit $DIFF_EXIT) — cannot verify immutable migrations."
+    echo ""
+    ERRORS=$((ERRORS + 1))
+  elif [ -n "$MODIFIED_MIGRATIONS" ]; then
     echo "❌ Modified or deleted migration files detected (only new *.sql files are allowed):"
     echo "$MODIFIED_MIGRATIONS" | sed 's/^/   /'
     echo ""
