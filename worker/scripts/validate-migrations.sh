@@ -55,6 +55,37 @@ for file in "$MIGRATIONS_DIR"/*.sql; do
   fi
 done
 
+echo ""
+echo "=== Immutable Migrations Check ==="
+echo ""
+
+# Schema changes must be additive: new numbered files only. Editing an already-applied
+# migration (e.g. 0001_initial_schema.sql) does not re-run on production D1.
+IMMUTABLE_BASE="${IMMUTABLE_MIGRATIONS_BASE:-origin/main}"
+if git rev-parse --verify "$IMMUTABLE_BASE" >/dev/null 2>&1; then
+  set +e
+  MODIFIED_MIGRATIONS=$(git diff --name-only --diff-filter=MDR "$IMMUTABLE_BASE"...HEAD -- "$MIGRATIONS_DIR" 2>/dev/null)
+  DIFF_EXIT=$?
+  set -e
+  if [ "$DIFF_EXIT" -gt 1 ]; then
+    echo "❌ git diff failed (exit $DIFF_EXIT) — cannot verify immutable migrations."
+    echo ""
+    ERRORS=$((ERRORS + 1))
+  elif [ -n "$MODIFIED_MIGRATIONS" ]; then
+    echo "❌ Modified or deleted migration files detected (only new *.sql files are allowed):"
+    echo "$MODIFIED_MIGRATIONS" | sed 's/^/   /'
+    echo ""
+    echo "   Schema changes to production must use a new numbered migration file,"
+    echo "   not edits to an existing one. D1 will not re-apply changed files."
+    echo ""
+    ERRORS=$((ERRORS + 1))
+  else
+    echo "✅ No edits to existing migration files since $IMMUTABLE_BASE"
+  fi
+else
+  echo "⚠️  Skipping immutable check ($IMMUTABLE_BASE not found — run git fetch origin)"
+fi
+
 if [ "$ERRORS" -gt 0 ]; then
   echo "=== ❌ $ERRORS migration issue(s) found ==="
   echo "See .kiro/steering/migration-conventions.md for required patterns."
