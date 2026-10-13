@@ -18,6 +18,7 @@ import { writeFileSync, unlinkSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
+import { formatLog, sanitizeLogText, summarizeUpstreamBody } from '../src/services/jobber-log-sanitize.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const API_URL = 'https://api.getjobber.com/api/graphql';
@@ -101,7 +102,11 @@ async function refreshToken(accessToken, refreshToken) {
 
   if (!response.ok) {
     const text = await response.text();
-    console.log(`[enrich-names] Token refresh failed (${response.status}): ${text.slice(0, 200)}. Proceeding with stale token.`);
+    console.log(formatLog(
+      `[enrich-names] Token refresh failed operation=refreshToken http=${response.status} refreshSucceeded=false.`,
+      summarizeUpstreamBody(text, [clientId, clientSecret, refreshToken, accessToken]),
+      [clientId, clientSecret, refreshToken, accessToken],
+    ) + ' Proceeding with stale token.');
     return accessToken;
   }
 
@@ -116,7 +121,7 @@ async function refreshToken(accessToken, refreshToken) {
     `ON CONFLICT (id) DO UPDATE SET access_token = excluded.access_token, refresh_token = excluded.refresh_token, updated_at = excluded.updated_at;`
   );
 
-  console.log('[enrich-names] Token refreshed and saved to local D1.');
+  console.log('[enrich-names] Token refresh operation=refreshToken refreshSucceeded=true');
   return newAccessToken;
 }
 
@@ -160,13 +165,19 @@ async function fetchRequests(accessToken, targetIds) {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`Jobber API ${response.status}: ${text.slice(0, 200)}`);
+      throw new Error(sanitizeLogText(
+        `Jobber API http=${response.status} operation=fetchRequests ${summarizeUpstreamBody(text, [accessToken])}`,
+        [accessToken],
+      ));
     }
 
     const result = await response.json();
 
     if (result.errors) {
-      throw new Error(`GraphQL error: ${result.errors[0].message}`);
+      throw new Error(sanitizeLogText(
+        `GraphQL error operation=fetchRequests ${summarizeUpstreamBody(JSON.stringify({ errors: result.errors }), [accessToken])}`,
+        [accessToken],
+      ));
     }
 
     const edges = result?.data?.requests?.edges || [];
@@ -270,18 +281,9 @@ async function main() {
   }
 
   console.log(`[enrich-names] Updated ${updated} manual_requests with real customer names.`);
-
-  // Preview
-  const samples = Object.entries(matched).slice(0, 5);
-  for (const [id, details] of samples) {
-    console.log(`  ✅ ${details.customerName} — ${details.title || '(no title)'}`);
-  }
-  if (Object.keys(matched).length > 5) {
-    console.log(`  ... and ${Object.keys(matched).length - 5} more`);
-  }
 }
 
 main().catch(err => {
-  console.log(`[enrich-names] Error: ${err.message}. Skipping.`);
+  console.log(formatLog('[enrich-names] Error. Skipping.', err instanceof Error ? err.message : err));
   process.exit(0);
 });

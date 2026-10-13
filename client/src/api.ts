@@ -4,7 +4,7 @@ import type {
   ChannelConnection, PublishResult, ContentType, UserSettings,
   ActivityLogEntry, AdvisorMode, ContentIdea, QuoteDraft,
   ProductCatalogEntry, QuoteTemplate, QuoteDraftUpdate, ActionItem,
-  JobberCustomerRequest, SimilarQuote, JobberRequestFormData,
+  JobberCustomerRequest, JobberReadMeta, SimilarQuote, JobberRequestFormData,
   Rule, RuleGroup, RuleGroupWithRules, SystemsStatusResponse,
   RuleCondition, RuleAction, TriggerMode,
   ManualRequest, CreateManualRequestPayload,
@@ -127,6 +127,61 @@ export async function fetchSystemsStatus(): Promise<SystemsStatusResponse> {
 export async function triggerCookieRefresh(): Promise<{ triggered: boolean; message?: string; error?: string }> {
   const res = await fetch(API_BASE + '/api/jobber-auth/trigger-cookie-refresh', {
     method: 'POST',
+    headers: { ...authHeaders() },
+  });
+  return handleResponse(res);
+}
+
+/** Start Jobber sign-in. The session stays in the Authorization header. */
+export async function startJobberAuthorization(): Promise<{ authorizationUrl: string }> {
+  const res = await fetch(API_BASE + '/api/jobber-auth/authorize', {
+    headers: { ...authHeaders(), Accept: 'application/json' },
+  });
+  return handleResponse(res);
+}
+
+export async function saveJobberSessionCookies(cookies: string): Promise<{ saved: boolean }> {
+  const res = await fetch(API_BASE + '/api/jobber-auth/set-cookies', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ cookies }),
+  });
+  return handleResponse(res);
+}
+
+export interface AssistantTokenSummary {
+  id: string;
+  label: string;
+  kind: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  createdAt: string;
+}
+
+export function opsAssistantMcpUrl(): string {
+  const base = API_BASE || (typeof window !== 'undefined' ? window.location.origin.replace(':5173', ':8787') : '');
+  return `${base.replace(/\/$/, '')}/mcp`;
+}
+
+export async function listAssistantTokens(): Promise<{ tokens: AssistantTokenSummary[] }> {
+  const res = await fetch(API_BASE + '/api/assistant/tokens', {
+    headers: { ...authHeaders() },
+  });
+  return handleResponse(res);
+}
+
+export async function mintAssistantToken(label: string): Promise<{ id: string; token: string; expiresAt: string; scope: string }> {
+  const res = await fetch(API_BASE + '/api/assistant/tokens', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ label }),
+  });
+  return handleResponse(res);
+}
+
+export async function revokeAssistantToken(tokenId: string): Promise<{ revoked: boolean }> {
+  const res = await fetch(API_BASE + '/api/assistant/tokens/' + encodeURIComponent(tokenId), {
+    method: 'DELETE',
     headers: { ...authHeaders() },
   });
   return handleResponse(res);
@@ -544,11 +599,15 @@ export async function deleteDraft(id: string): Promise<void> {
 }
 
 export async function fetchCatalog(): Promise<ProductCatalogEntry[]> {
+  const data = await fetchCatalogResult();
+  return data.catalog;
+}
+
+export async function fetchCatalogResult(): Promise<{ catalog: ProductCatalogEntry[]; jobber: JobberReadMeta }> {
   const res = await fetch(API_BASE + '/api/quotes/catalog', {
     headers: { ...authHeaders() },
   });
-  const data = await handleResponse<{ catalog: ProductCatalogEntry[] }>(res);
-  return data.catalog;
+  return handleResponse(res);
 }
 
 export async function saveCatalog(
@@ -629,15 +688,14 @@ export async function deleteTemplate(templateId: string): Promise<QuoteTemplate[
   return data.templates;
 }
 
-export async function checkJobberStatus(): Promise<boolean> {
+export async function checkJobberStatus(): Promise<{ available: boolean; webhookActive: boolean; read: JobberReadMeta }> {
   const res = await fetch(API_BASE + '/api/quotes/jobber/status', {
     headers: { ...authHeaders() },
   });
-  const data = await handleResponse<{ available: boolean }>(res);
-  return data.available;
+  return handleResponse(res);
 }
 
-export async function fetchJobberRequests(opts?: { fresh?: boolean }): Promise<{ requests: JobberCustomerRequest[]; available: boolean }> {
+export async function fetchJobberRequests(opts?: { fresh?: boolean }): Promise<{ requests: JobberCustomerRequest[]; available: boolean; read: JobberReadMeta }> {
   const url = opts?.fresh
     ? API_BASE + '/api/quotes/jobber/requests?fresh=true'
     : API_BASE + '/api/quotes/jobber/requests';

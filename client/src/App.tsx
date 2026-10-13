@@ -20,6 +20,7 @@ import RequestQueuePage from './pages/RequestQueuePage';
 import DeathclockDashboardPage from './pages/DeathclockDashboardPage';
 import PlaceholderPage from './pages/PlaceholderPage';
 import ReviewQueuePage from './pages/ReviewQueuePage';
+import OpsAssistantPage from './pages/OpsAssistantPage';
 
 function LegacyPostRedirect() {
   const { id } = useParams();
@@ -61,6 +62,7 @@ export default function App() {
                 <Route path="/quotes/drafts/:id" element={<QuoteDraftPage />} />
                 <Route path="/quotes/rules" element={<RulesPage />} />
                 <Route path="/quotes/catalog" element={<ManualFallbackPage />} />
+                <Route path="/quotes/assistant" element={<OpsAssistantPage />} />
               </Route>
             </Route>
             {/* Redirect legacy routes to new paths */}

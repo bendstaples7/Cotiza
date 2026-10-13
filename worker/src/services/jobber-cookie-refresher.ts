@@ -11,6 +11,7 @@
  * Requires: CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN secrets.
  */
 import { JobberWebSession } from './jobber-web-session.js';
+import { sanitizeLogText, summarizeUpstreamBody } from './jobber-log-sanitize.mjs';
 
 const COOKIE_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours
 const REFRESH_BACKOFF_MS = 60 * 1000; // 60s negative cache after failed refresh
@@ -115,8 +116,10 @@ export class JobberCookieRefresher {
       );
       if (!sessionResp.ok) {
         const text = await sessionResp.text();
+        const summary = summarizeUpstreamBody(text, [this.apiToken, this.email, this.password]);
         await this.markRefreshFailed();
-        return { success: false, error: `Failed to create browser session (${sessionResp.status}): ${text.slice(0, 200)}` };
+        console.error(`[JobberCookieRefresher] refresh failed operation=createBrowserSession http=${sessionResp.status} refreshSucceeded=false ${summary}`);
+        return { success: false, error: `Failed to create browser session (${sessionResp.status}): ${summary}` };
       }
       const sessionData = await sessionResp.json() as { sessionId: string; webSocketDebuggerUrl: string };
       sessionId = sessionData.sessionId;
@@ -157,8 +160,8 @@ export class JobberCookieRefresher {
       console.log('[JobberCookieRefresher] Cookies refreshed successfully via CDP');
       return { success: true };
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      console.error('[JobberCookieRefresher] Refresh failed:', message);
+      const message = sanitizeLogText(err instanceof Error ? err.message : 'Unknown error', [this.email, this.password, this.apiToken]);
+      console.error(`[JobberCookieRefresher] refresh failed operation=refreshCookies refreshSucceeded=false ${message}`);
       await this.markRefreshFailed();
       return { success: false, error: message };
     } finally {

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import type { ProductCatalogEntry, QuoteTemplate, ErrorResponse } from 'shared';
+import type { ProductCatalogEntry, QuoteTemplate, ErrorResponse, JobberReadMeta } from 'shared';
 import {
-  fetchCatalog,
+  fetchCatalogResult,
   saveCatalog,
   fetchTemplates,
   saveTemplates,
@@ -40,6 +40,7 @@ export default function ManualFallbackPage() {
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [jobberAvailable, setJobberAvailable] = useState(false);
+  const [jobberRead, setJobberRead] = useState<JobberReadMeta | null>(null);
 
   // Pagination & search state
   const [catalogSearch, setCatalogSearch] = useState('');
@@ -77,13 +78,17 @@ export default function ManualFallbackPage() {
       setLoading(true);
       setError(null);
       const [catalogRes, templatesRes, statusRes] = await Promise.all([
-        fetchCatalog(),
+        fetchCatalogResult(),
         fetchTemplates(),
         checkJobberStatus(),
       ]);
-      setCatalogEntries(catalogRes);
+      setCatalogEntries(catalogRes.catalog);
       setTemplateEntries(templatesRes);
-      setJobberAvailable(statusRes);
+      const catalogBad = catalogRes.jobber?.liveLookupFailed || catalogRes.jobber?.status === 'failed';
+      const statusBad = statusRes.read?.liveLookupFailed || statusRes.read?.status === 'failed';
+      const read = catalogBad ? catalogRes.jobber : statusBad ? statusRes.read : (catalogRes.jobber ?? statusRes.read);
+      setJobberRead(read);
+      setJobberAvailable(statusRes.available && read.status !== 'failed' && !read.liveLookupFailed);
     } catch (err) {
       setError((err as ErrorResponse).message ?? 'Failed to load data.');
     } finally {
@@ -97,8 +102,13 @@ export default function ManualFallbackPage() {
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const available = await checkJobberStatus();
-        setJobberAvailable(available);
+        const status = await checkJobberStatus();
+        setJobberAvailable(status.available);
+        if (status.read.liveLookupFailed || status.read.status === 'failed') {
+          setJobberRead(status.read);
+        } else if (status.available) {
+          setJobberRead(status.read);
+        }
       } catch { /* ignore */ }
     }, 30_000);
     return () => clearInterval(interval);
@@ -250,9 +260,22 @@ export default function ManualFallbackPage() {
       <h1 style={titleStyle}>Manual Catalog &amp; Templates</h1>
 
       {/* Jobber availability banner */}
-      {jobberAvailable && (
+      {jobberRead && (jobberRead.liveLookupFailed || jobberRead.status === 'failed') && (
+        <div style={jobberProblemStyle} role="alert">
+          <span>Jobber could not be reached. The products below are your saved catalog.</span>
+          <span>Connection failed</span>
+        </div>
+      )}
+      {jobberAvailable && jobberRead?.status !== 'failed' && !jobberRead?.liveLookupFailed && (
         <div style={jobberBannerStyle} role="status">
-          ✅ Jobber API is available. Product catalog will be sourced from Jobber when generating quotes. Templates are managed locally.
+          <span>
+            {jobberRead?.status === 'empty'
+              ? 'Jobber returned no products. The list below is your saved catalog.'
+              : jobberRead?.status === 'cached'
+                ? 'Showing your saved catalog from the last Jobber check.'
+                : 'Jobber is connected. New products can be pulled in from Jobber. Templates stay on this computer.'}
+          </span>
+          <span>{jobberRead?.status === 'cached' ? 'Saved copy' : 'Connected'}</span>
         </div>
       )}
 
@@ -487,12 +510,23 @@ const successStyle: React.CSSProperties = {
 };
 
 const jobberBannerStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  gap: '1rem',
+  flexWrap: 'wrap',
   background: '#e0f7f5',
   color: '#00a89d',
   padding: '0.75rem 1rem',
   borderRadius: 6,
   marginBottom: '1.25rem',
   fontSize: '0.9rem',
+};
+
+const jobberProblemStyle: React.CSSProperties = {
+  ...jobberBannerStyle,
+  background: '#fdecea',
+  color: '#611a15',
 };
 
 const sectionStyle: React.CSSProperties = {

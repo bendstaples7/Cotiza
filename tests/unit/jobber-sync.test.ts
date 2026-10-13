@@ -3,6 +3,7 @@ import { createMockD1 } from './helpers/mock-d1.js';
 import type { MockD1Database } from './helpers/mock-d1.js';
 import { JobberIntegration } from '../../worker/src/services/jobber-integration.js';
 import { ActivityLogService } from '../../worker/src/services/activity-log-service.js';
+import { failedJobberRead, liveJobberRead } from '../../worker/src/services/jobber-read.js';
 
 // Minimal mock for ActivityLogService
 function createMockActivityLog() {
@@ -41,7 +42,7 @@ describe('JobberIntegration.syncProductCatalog', () => {
   });
 
   it('inserts new products and updates jobber_active flags', async () => {
-    vi.spyOn(integration, 'fetchProductCatalog').mockResolvedValue(JOBBER_PRODUCTS);
+    vi.spyOn(integration, 'fetchProductCatalog').mockResolvedValue(liveJobberRead(JOBBER_PRODUCTS));
 
     // Mock batch for inserts — simulate 2 new inserts, 1 conflict (already exists)
     db.batch
@@ -86,11 +87,16 @@ describe('JobberIntegration.syncProductCatalog', () => {
   });
 
   it('returns zeros when Jobber returns no products', async () => {
-    vi.spyOn(integration, 'fetchProductCatalog').mockResolvedValue([]);
+    vi.spyOn(integration, 'fetchProductCatalog').mockResolvedValue(liveJobberRead([]));
 
     const result = await integration.syncProductCatalog(db as unknown as D1Database, 'user-1');
 
-    expect(result).toEqual({ inserted: 0, deactivated: 0, total: 0 });
+    expect(result.inserted).toBe(0);
+    expect(result.deactivated).toBe(0);
+    expect(result.total).toBe(0);
+    expect(result.outcome).toBe('empty');
+    expect(result.read.status).toBe('empty');
+    expect(result.read.liveLookupFailed).toBe(false);
     expect(db.batch).not.toHaveBeenCalled();
   });
 
@@ -98,7 +104,7 @@ describe('JobberIntegration.syncProductCatalog', () => {
     const singleProduct = [
       { id: 'j1', name: 'Lawn Mowing', unitPrice: 50, description: 'Basic mowing', category: 'Lawn', source: 'jobber' as const },
     ];
-    vi.spyOn(integration, 'fetchProductCatalog').mockResolvedValue(singleProduct);
+    vi.spyOn(integration, 'fetchProductCatalog').mockResolvedValue(liveJobberRead(singleProduct));
 
     db.batch
       .mockResolvedValueOnce([{ meta: { changes: 1 } }])
@@ -128,7 +134,7 @@ describe('JobberIntegration.syncProductCatalog', () => {
     const productNoCategory = [
       { id: 'j1', name: 'Custom Work', unitPrice: 0, description: '', source: 'jobber' as const },
     ];
-    vi.spyOn(integration, 'fetchProductCatalog').mockResolvedValue(productNoCategory);
+    vi.spyOn(integration, 'fetchProductCatalog').mockResolvedValue(liveJobberRead(productNoCategory));
 
     db.batch
       .mockResolvedValueOnce([{ meta: { changes: 1 } }])
@@ -148,7 +154,7 @@ describe('JobberIntegration.syncProductCatalog', () => {
   });
 
   it('deactivates Jobber-sourced products not in the response', async () => {
-    vi.spyOn(integration, 'fetchProductCatalog').mockResolvedValue([JOBBER_PRODUCTS[0]]);
+    vi.spyOn(integration, 'fetchProductCatalog').mockResolvedValue(liveJobberRead([JOBBER_PRODUCTS[0]]));
 
     db.batch
       .mockResolvedValueOnce([{ meta: { changes: 0 } }]) // insert batch
@@ -176,7 +182,12 @@ describe('JobberIntegration.syncProductCatalog', () => {
 
     const result = await integration.syncProductCatalog(db as unknown as D1Database, 'user-1');
 
-    expect(result).toEqual({ inserted: 0, deactivated: 0, total: 0 });
+    expect(result.inserted).toBe(0);
+    expect(result.deactivated).toBe(0);
+    expect(result.outcome).toBe('failed');
+    expect(result.read.liveLookupFailed).toBe(true);
+    expect(result.read.status).toBe('failed');
+    expect(db.batch).not.toHaveBeenCalled();
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('syncProductCatalog failed'),
     );
@@ -194,13 +205,17 @@ describe('JobberIntegration.syncProductCatalog', () => {
   });
 
   it('handles database errors gracefully and returns zeros', async () => {
-    vi.spyOn(integration, 'fetchProductCatalog').mockResolvedValue(JOBBER_PRODUCTS);
+    vi.spyOn(integration, 'fetchProductCatalog').mockResolvedValue(liveJobberRead(JOBBER_PRODUCTS));
     db.batch.mockRejectedValue(new Error('D1 unavailable'));
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const result = await integration.syncProductCatalog(db as unknown as D1Database, 'user-1');
 
-    expect(result).toEqual({ inserted: 0, deactivated: 0, total: 0 });
+    expect(result.inserted).toBe(0);
+    expect(result.deactivated).toBe(0);
+    expect(result.outcome).toBe('failed');
+    expect(result.read.error?.code).toBe('database');
+    expect(result.read.liveLookupFailed).toBe(false);
     consoleSpy.mockRestore();
   });
 
@@ -215,7 +230,7 @@ describe('JobberIntegration.syncProductCatalog', () => {
       source: 'jobber' as const,
     }));
 
-    vi.spyOn(integration, 'fetchProductCatalog').mockResolvedValue(manyProducts);
+    vi.spyOn(integration, 'fetchProductCatalog').mockResolvedValue(liveJobberRead(manyProducts));
 
     // 3 insert batches + 1 activate/deactivate batch
     db.batch
@@ -233,7 +248,7 @@ describe('JobberIntegration.syncProductCatalog', () => {
   });
 
   it('does not crash when activity log fails during success logging', async () => {
-    vi.spyOn(integration, 'fetchProductCatalog').mockResolvedValue([JOBBER_PRODUCTS[0]]);
+    vi.spyOn(integration, 'fetchProductCatalog').mockResolvedValue(liveJobberRead([JOBBER_PRODUCTS[0]]));
     (activityLog.log as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('log failed'));
 
     db.batch
@@ -244,5 +259,23 @@ describe('JobberIntegration.syncProductCatalog', () => {
     const result = await integration.syncProductCatalog(db as unknown as D1Database, 'user-1');
     expect(result.total).toBe(1);
     expect(result.inserted).toBe(1);
+  });
+
+  it('does not deactivate catalog rows when the live read failed but cache still has products', async () => {
+    vi.spyOn(integration, 'fetchProductCatalog').mockResolvedValue(
+      failedJobberRead(new Error('Jobber API throttled after max retries'), {
+        records: JOBBER_PRODUCTS,
+        fetchedAtMs: Date.now() - 60_000,
+      }),
+    );
+
+    const result = await integration.syncProductCatalog(db as unknown as D1Database, 'user-1');
+
+    expect(result.outcome).toBe('failed');
+    expect(result.deactivated).toBe(0);
+    expect(result.read.liveLookupFailed).toBe(true);
+    expect(result.read.source).toBe('cache');
+    expect(result.read.error?.code).toBe('throttled');
+    expect(db.batch).not.toHaveBeenCalled();
   });
 });

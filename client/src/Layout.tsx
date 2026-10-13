@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from './AuthContext';
 import { useEffect, useRef, useState } from 'react';
-import { API_BASE, getPendingReviewCount, triggerCookieRefresh } from './api';
+import { getPendingReviewCount, saveJobberSessionCookies, startJobberAuthorization, triggerCookieRefresh } from './api';
 
 const quotesNavItems = [
   { to: '/quotes/requests', label: 'Requests' },
@@ -9,6 +9,7 @@ const quotesNavItems = [
   { to: '/quotes/reviews', label: 'Pending Reviews' },
   { to: '/quotes/rules', label: 'Rules & Product Ordering' },
   { to: '/quotes/catalog', label: 'Catalog & Templates' },
+  { to: '/quotes/assistant', label: 'Ops assistant' },
 ];
 
 const socialNavItems = [
@@ -91,6 +92,8 @@ function JobberSessionOverlay({ recheckSystems, recheckSystemsSilent }: {
   const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState('');
   const [pollCount, setPollCount] = useState(0);
+  const [cookieDraft, setCookieDraft] = useState('');
+  const [savingCookies, setSavingCookies] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollCountRef = useRef(0);
 
@@ -206,14 +209,99 @@ function JobberSessionOverlay({ recheckSystems, recheckSystemsSilent }: {
           Manual fallback (if automated refresh fails)
         </summary>
         <p style={{ color: '#666', fontSize: '0.85rem', marginTop: '0.5rem', lineHeight: 1.5 }}>
-          Open{' '}
-          <a href={`${API_BASE}/api/jobber-auth/set-cookies`} target="_blank" rel="noopener noreferrer" style={{ color: '#00a89d' }}>
-            the cookie paste page
-          </a>
-          , follow the instructions, then click Re-check above.
+          On app.getjobber.com, open DevTools (F12) → Console, run <code>copy(document.cookie)</code>, then paste here.
         </p>
+        <textarea
+          value={cookieDraft}
+          onChange={(e) => setCookieDraft(e.target.value)}
+          rows={4}
+          placeholder="Paste cookies here..."
+          style={{ width: '100%', padding: '0.5rem', border: '1px solid #ccc', borderRadius: 4, fontFamily: 'monospace', fontSize: '0.85rem', boxSizing: 'border-box' }}
+        />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginTop: '0.5rem' }}>
+          <button
+            type="button"
+            disabled={savingCookies || cookieDraft.trim().length === 0}
+            onClick={async () => {
+              setSavingCookies(true);
+              setMessage('Saving cookies…');
+              try {
+                await saveJobberSessionCookies(cookieDraft.trim());
+                setCookieDraft('');
+                setMessage('Cookies saved. Re-checking…');
+                await recheckSystems();
+              } catch {
+                setMessage('Could not save cookies. Stay on this screen and try again.');
+              } finally {
+                setSavingCookies(false);
+              }
+            }}
+            style={{
+              background: savingCookies ? '#ccc' : '#00a89d', color: '#fff', border: 'none',
+              padding: '0.5rem 1rem', borderRadius: 4, cursor: savingCookies ? 'default' : 'pointer',
+              fontWeight: 600, fontSize: '0.9rem',
+            }}
+          >
+            {savingCookies ? 'Saving…' : 'Save cookies'}
+          </button>
+          <span style={{ color: '#999', fontSize: '0.75rem' }}>Then the app checks the connection again</span>
+        </div>
       </details>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </SystemsCheckOverlay>
+  );
+}
+
+function JobberConnectOverlay({ recheckSystems }: { recheckSystems: () => Promise<void> }) {
+  const [starting, setStarting] = useState(false);
+  const [message, setMessage] = useState('');
+
+  return (
+    <SystemsCheckOverlay>
+      <div style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>🔗</div>
+      <h2 style={{ margin: '0 0 0.75rem', color: '#333' }}>Connect Jobber</h2>
+      <p style={{ color: '#666', marginBottom: '1.5rem', lineHeight: 1.5 }}>
+        Jobber is required for quote generation and customer request management.
+        Connect your Jobber account to continue.
+      </p>
+      {message && (
+        <p style={{ color: '#a33', fontSize: '0.9rem', marginBottom: '1rem' }}>{message}</p>
+      )}
+      <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap', alignItems: 'center' }}>
+        <button
+          type="button"
+          disabled={starting}
+          onClick={async () => {
+            setStarting(true);
+            setMessage('');
+            try {
+              const { authorizationUrl } = await startJobberAuthorization();
+              window.location.assign(authorizationUrl);
+            } catch {
+              setMessage('Could not start Jobber sign-in. Stay signed in and try again.');
+              setStarting(false);
+            }
+          }}
+          style={{
+            background: starting ? '#ccc' : '#00a89d', color: '#fff', border: 'none',
+            padding: '0.65rem 1.5rem', borderRadius: 6, cursor: starting ? 'default' : 'pointer',
+            fontWeight: 600, fontSize: '0.95rem',
+          }}
+        >
+          {starting ? 'Opening Jobber…' : 'Connect Jobber'}
+        </button>
+        <button
+          type="button"
+          onClick={recheckSystems}
+          style={{
+            background: '#fff', color: '#333', border: '1px solid #ccc',
+            padding: '0.65rem 1.5rem', borderRadius: 6, cursor: 'pointer',
+            fontWeight: 600, fontSize: '0.95rem',
+          }}
+        >
+          I already connected — retry
+        </button>
+      </div>
     </SystemsCheckOverlay>
   );
 }
@@ -259,39 +347,7 @@ export default function Layout() {
   }
 
   if (systemsStatus.state === 'jobber_unavailable') {
-    return (
-      <SystemsCheckOverlay>
-        <div style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>🔗</div>
-        <h2 style={{ margin: '0 0 0.75rem', color: '#333' }}>Connect Jobber</h2>
-        <p style={{ color: '#666', marginBottom: '1.5rem', lineHeight: 1.5 }}>
-          Jobber is required for quote generation and customer request management.
-          Connect your Jobber account to continue.
-        </p>
-        <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}>
-          <a
-            href={`${API_BASE}/api/jobber-auth/authorize`}
-            style={{
-              display: 'inline-block', background: '#00a89d', color: '#fff',
-              padding: '0.65rem 1.5rem', borderRadius: 6, textDecoration: 'none',
-              fontWeight: 600, fontSize: '0.95rem',
-            }}
-          >
-            Connect Jobber
-          </a>
-          <button
-            type="button"
-            onClick={recheckSystems}
-            style={{
-              background: '#fff', color: '#333', border: '1px solid #ccc',
-              padding: '0.65rem 1.5rem', borderRadius: 6, cursor: 'pointer',
-              fontWeight: 600, fontSize: '0.95rem',
-            }}
-          >
-            I already connected — retry
-          </button>
-        </div>
-      </SystemsCheckOverlay>
-    );
+    return <JobberConnectOverlay recheckSystems={recheckSystems} />;
   }
 
   /*

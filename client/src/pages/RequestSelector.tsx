@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { JobberCustomerRequest } from 'shared';
+import type { JobberCustomerRequest, JobberReadMeta } from 'shared';
 import { fetchJobberRequests } from '../api';
 import DeathclockBadge from '../components/DeathclockBadge';
 
@@ -26,6 +26,7 @@ interface RequestSelectorProps {
 
 export default function RequestSelector({ onSelect, onClear, selectedRequestId, hasFormData }: RequestSelectorProps) {
   const [requests, setRequests] = useState<JobberCustomerRequest[]>([]);
+  const [read, setRead] = useState<JobberReadMeta | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -48,6 +49,7 @@ export default function RequestSelector({ onSelect, onClear, selectedRequestId, 
       // Only apply if this is still the most recent fetch (discard stale responses)
       if (fetchIdRef.current === currentFetchId) {
         setRequests(data.requests);
+        setRead(data.read ?? null);
       }
     } catch {
       if (fetchIdRef.current === currentFetchId && !opts?.silent) {
@@ -106,11 +108,23 @@ export default function RequestSelector({ onSelect, onClear, selectedRequestId, 
     );
   }
 
+  const connectionFailed = !!read && (read.liveLookupFailed || read.status === 'failed');
+  const savedNote = read && !connectionFailed && (read.status === 'cached' || read.source === 'webhook' || read.source === 'stored' || read.source === 'cache')
+    ? (read.fetchedAt ? `Saved ${new Date(read.fetchedAt).toLocaleString()}` : 'Saved copy')
+    : null;
+
   if (requests.length === 0) {
     return (
       <div style={wrapperStyle}>
-        <span style={headingStyle}>Jobber Requests</span>
-        <div style={inlineMessageStyle}>No customer requests found. You can enter text manually below.</div>
+        <div style={splitRowStyle}>
+          <span style={headingStyle}>Jobber Requests</span>
+          {connectionFailed && <span style={failedTagStyle}>Connection failed</span>}
+        </div>
+        <div style={connectionFailed ? warningStyle : inlineMessageStyle}>
+          {connectionFailed
+            ? 'Jobber could not be reached. This is not an empty request list. You can enter text manually below.'
+            : 'No customer requests found. You can enter text manually below.'}
+        </div>
       </div>
     );
   }
@@ -217,6 +231,17 @@ export default function RequestSelector({ onSelect, onClear, selectedRequestId, 
   // Show request list for selection
   return (
     <div style={wrapperStyle}>
+      {connectionFailed && (
+        <div style={{ ...warningStyle, marginBottom: '0.75rem' }}>
+          Jobber could not be reached. Showing saved requests.
+        </div>
+      )}
+      {savedNote && !connectionFailed && (
+        <div style={{ ...splitRowStyle, marginBottom: '0.5rem' }}>
+          <span style={{ fontSize: '0.8rem', color: '#666' }}>These requests are a saved copy, not a live Jobber check.</span>
+          <span style={{ fontSize: '0.8rem', color: '#666' }}>{savedNote}</span>
+        </div>
+      )}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
         <span style={headingStyle}>Jobber Requests</span>
         <button onClick={handleRefresh} disabled={refreshing} style={refreshBtnStyle} type="button">
@@ -262,6 +287,22 @@ function formatDate(iso: string): string {
 
 const wrapperStyle: React.CSSProperties = { marginBottom: '1.25rem' };
 const headingStyle: React.CSSProperties = { fontWeight: 500, fontSize: '0.9rem' };
+const splitRowStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  gap: '0.75rem',
+  flexWrap: 'wrap',
+};
+const failedTagStyle: React.CSSProperties = { fontSize: '0.8rem', color: '#8a1f11', fontWeight: 600 };
+const warningStyle: React.CSSProperties = {
+  background: '#fdecea',
+  color: '#611a15',
+  padding: '0.5rem 0.75rem',
+  borderRadius: 4,
+  marginTop: '0.25rem',
+  fontSize: '0.85rem',
+};
 
 const listStyle: React.CSSProperties = {
   display: 'flex',

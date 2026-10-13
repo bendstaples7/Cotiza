@@ -2,6 +2,7 @@ import { ActivityLogService } from './activity-log-service.js';
 import type { JobberTokenStore } from './jobber-token-store.js';
 import type { JobberCustomerRequest } from 'shared';
 import { isPlaceholderJobberClientName } from 'shared';
+import { sanitizeLogText, summarizeUpstreamBody } from './jobber-log-sanitize.mjs';
 
 const JOBBER_GRAPHQL_URL = 'https://api.getjobber.com/api/graphql';
 
@@ -123,10 +124,25 @@ export class JobberWebhookService {
       if (stored) {
         this.accessToken = stored.accessToken;
         this.refreshToken = stored.refreshToken;
+        console.log(`[WebhookService] loadPersistedTokens source=d1 ${this.credentialState()}`);
+      } else {
+        console.log(`[WebhookService] loadPersistedTokens source=env fallback=none_stored ${this.credentialState()}`);
       }
-    } catch (err) {
-      console.warn('[WebhookService] Failed to load persisted tokens, falling back to env:', err);
+    } catch {
+      console.warn(`[WebhookService] loadPersistedTokens source=env fallback=load_failed ${this.credentialState()}`);
     }
+  }
+
+  private credentialState(): string {
+    return `accessTokenConfigured=${Boolean(this.accessToken)} refreshTokenConfigured=${Boolean(this.refreshToken)} clientSecretConfigured=${Boolean(this.clientSecret)}`;
+  }
+
+  private logSecrets(): string[] {
+    return [this.accessToken, this.refreshToken, this.clientSecret];
+  }
+
+  private safe(detail: unknown): string {
+    return sanitizeLogText(detail, this.logSecrets());
   }
 
   /**
@@ -178,7 +194,7 @@ export class JobberWebhookService {
         detail,
       }, payload);
     } catch (err) {
-      console.error('Webhook processing error:', err);
+      console.error(`[WebhookService] processWebhook failed operation=processWebhook ${this.safe(err instanceof Error ? err.message : err)}`);
     }
   }
 
@@ -259,7 +275,10 @@ export class JobberWebhookService {
    * Updates the in-memory token for subsequent calls within this request.
    */
   private async refreshAccessToken(): Promise<boolean> {
-    if (!this.clientId || !this.clientSecret || !this.refreshToken) return false;
+    if (!this.clientId || !this.clientSecret || !this.refreshToken) {
+      console.error(`[WebhookService] token refresh failed operation=refreshAccessToken refreshSucceeded=false reason=credentials_not_configured ${this.credentialState()}`);
+      return false;
+    }
 
     try {
       const body = new URLSearchParams({
@@ -276,14 +295,15 @@ export class JobberWebhookService {
       });
 
       if (!response.ok) {
-        console.error(`[WebhookService] Token refresh failed (${response.status})`);
+        const summary = summarizeUpstreamBody(await response.text(), this.logSecrets());
+        console.error(`[WebhookService] token refresh failed operation=refreshAccessToken http=${response.status} refreshSucceeded=false ${summary}`);
         return false;
       }
 
       const data = (await response.json()) as { access_token: string; refresh_token?: string };
 
       if (!data.access_token) {
-        console.error('[WebhookService] Token refresh response missing access_token');
+        console.error('[WebhookService] token refresh failed operation=refreshAccessToken refreshSucceeded=false reason=missing_access_token');
         return false;
       }
 
@@ -297,14 +317,14 @@ export class JobberWebhookService {
         try {
           await this.tokenStore.save(this.accessToken, this.refreshToken);
         } catch (err) {
-          console.error('[WebhookService] Token refresh succeeded but failed to persist to D1:', err);
+          console.error(`[WebhookService] token refresh operation=refreshAccessToken refreshSucceeded=true persistSucceeded=false ${this.safe(err instanceof Error ? err.message : err)}`);
         }
       }
 
-      console.log('[WebhookService] Access token refreshed successfully');
+      console.log('[WebhookService] token refresh operation=refreshAccessToken http=200 refreshSucceeded=true');
       return true;
     } catch (err) {
-      console.error('[WebhookService] Token refresh error:', err);
+      console.error(`[WebhookService] token refresh failed operation=refreshAccessToken refreshSucceeded=false ${this.safe(err instanceof Error ? err.message : err)}`);
       return false;
     }
   }
@@ -411,12 +431,12 @@ export class JobberWebhookService {
               row.image_urls = JSON.stringify(imageUrls);
             }
           } catch (err) {
-            console.warn(`[WebhookService] Backfill-on-read failed for ${id}:`, err instanceof Error ? err.message : err);
+            console.warn(`[WebhookService] Backfill-on-read failed for ${id}: ${this.safe(err instanceof Error ? err.message : err)}`);
           }
         }
       }
     } catch (err) {
-      console.warn('[WebhookService] Backfill-on-read crashed, continuing with stored data:', err instanceof Error ? err.message : err);
+      console.warn(`[WebhookService] Backfill-on-read crashed, continuing with stored data: ${this.safe(err instanceof Error ? err.message : err)}`);
     }
 
     return rows.map((row): JobberCustomerRequest | null => {

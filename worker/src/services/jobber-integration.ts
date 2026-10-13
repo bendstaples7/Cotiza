@@ -1,8 +1,15 @@
 import { ActivityLogService } from './activity-log-service.js';
 import { PlatformError } from '../errors/index.js';
-import type { JobberTokenStore } from './jobber-token-store.js';
-import type { ProductCatalogEntry, JobberCustomerRequest } from 'shared';
+import { JobberTokenStore } from './jobber-token-store.js';
+import type { ProductCatalogEntry, JobberCustomerRequest, JobberReadMeta, JobberReadResult } from 'shared';
+import {
+  cachedJobberRead,
+  failedJobberRead,
+  jobberReadMeta,
+  liveJobberRead,
+} from './jobber-read.js';
 import { abortableDelay, combineAbortSignals } from '../utils/abort.js';
+import { graphqlOperationName, sanitizeLogText, summarizeUpstreamBody } from './jobber-log-sanitize.mjs';
 
 const DEFAULT_CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes
 const API_TIMEOUT_MS = 10_000;
@@ -173,13 +180,26 @@ export class JobberIntegration {
       if (stored) {
         this.accessToken = stored.accessToken;
         this.refreshToken = stored.refreshToken;
-        console.log(`[DEBUG] loadPersistedTokens: loaded token ${this.accessToken.substring(0, 15)}... len=${this.accessToken.length}`);
+        console.log(`[JobberIntegration] loadPersistedTokens source=d1 ${this.credentialState()}`);
       } else {
-        console.log(`[DEBUG] loadPersistedTokens: no stored tokens, using env vars: ${this.accessToken.substring(0, 15)}...`);
+        console.log(`[JobberIntegration] loadPersistedTokens source=env fallback=none_stored ${this.credentialState()}`);
       }
     } catch {
-      console.log(`[DEBUG] loadPersistedTokens: FAILED, falling back to env vars: ${this.accessToken.substring(0, 15)}...`);
+      console.log(`[JobberIntegration] loadPersistedTokens source=env fallback=load_failed ${this.credentialState()}`);
     }
+  }
+
+  /** Whether credentials are present. Never includes the credential values. */
+  private credentialState(): string {
+    return `accessTokenConfigured=${Boolean(this.accessToken)} refreshTokenConfigured=${Boolean(this.refreshToken)} clientSecretConfigured=${Boolean(this.clientSecret)}`;
+  }
+
+  private logSecrets(): string[] {
+    return [this.accessToken, this.refreshToken, this.clientSecret];
+  }
+
+  private safe(detail: unknown): string {
+    return sanitizeLogText(detail, this.logSecrets());
   }
 
   /**
@@ -209,12 +229,13 @@ export class JobberIntegration {
   // ── Product Catalog ──────────────────────────────────────────────
 
   /**
-   * Fetch the product catalog from Jobber, returning cached data when within TTL.
-   * On API failure, logs the error, sets available = false, and returns an empty array.
+   * Fetch the product catalog from Jobber.
+   * A live empty list is `status: 'empty'`. A failed call is `status: 'failed'`
+   * and may include the previous cache. It never looks like a successful empty list.
    */
-  async fetchProductCatalog(): Promise<ProductCatalogEntry[]> {
+  async fetchProductCatalog(): Promise<JobberReadResult<ProductCatalogEntry>> {
     if (this.productCatalogCache && !this.isCacheExpired(this.productCatalogCache)) {
-      return this.productCatalogCache.data;
+      return cachedJobberRead(this.productCatalogCache.data, this.productCatalogCache.fetchedAt);
     }
 
     try {
@@ -233,12 +254,29 @@ export class JobberIntegration {
         source: 'jobber' as const,
       }));
 
-      this.productCatalogCache = { data: catalog, fetchedAt: Date.now() };
+      const fetchedAt = Date.now();
+      this.productCatalogCache = { data: catalog, fetchedAt };
       this.available = true;
-      return catalog;
+      return liveJobberRead(catalog, new Date(fetchedAt).toISOString());
     } catch (err) {
       await this.handleApiError('fetchProductCatalog', err);
-      return [];
+      return failedJobberRead(err, this.productCatalogCache
+        ? { records: this.productCatalogCache.data, fetchedAtMs: this.productCatalogCache.fetchedAt }
+        : null);
+    }
+  }
+
+  /**
+   * Lightweight live call. Does not treat cached data or webhook history as healthy.
+   */
+  async probeLive(): Promise<JobberReadMeta> {
+    try {
+      await this.graphqlRequest('{ account { name } }');
+      this.available = true;
+      return jobberReadMeta(liveJobberRead(['ok']));
+    } catch (err) {
+      await this.handleApiError('probeLive', err);
+      return jobberReadMeta(failedJobberRead(err));
     }
   }
 
@@ -255,14 +293,21 @@ export class JobberIntegration {
   async syncProductCatalog(
     db: D1Database,
     userId: string,
-  ): Promise<{ inserted: number; deactivated: number; total: number }> {
+  ): Promise<{ inserted: number; deactivated: number; total: number; outcome: 'synced' | 'empty' | 'failed'; read: JobberReadMeta }> {
     try {
-      const jobberProducts = await this.fetchProductCatalog();
+      const read = await this.fetchProductCatalog();
 
-      if (jobberProducts.length === 0) {
-        return { inserted: 0, deactivated: 0, total: 0 };
+      // A failed or cached-after-failure read must not deactivate catalog rows.
+      if (read.status === 'failed' || read.liveLookupFailed) {
+        return { inserted: 0, deactivated: 0, total: 0, outcome: 'failed', read: jobberReadMeta(read) };
       }
 
+      // A genuine empty Jobber catalog is valid, but do not wipe stored rows on it.
+      if (read.status === 'empty' || read.records.length === 0) {
+        return { inserted: 0, deactivated: 0, total: 0, outcome: 'empty', read: jobberReadMeta(read) };
+      }
+
+      const jobberProducts = read.records;
       const total = jobberProducts.length;
       let inserted = 0;
 
@@ -332,12 +377,21 @@ export class JobberIntegration {
         // Activity log failure should not break sync
       }
 
-      return { inserted, deactivated, total };
+      return {
+        inserted,
+        deactivated,
+        total,
+        outcome: 'synced',
+        read: jobberReadMeta(read),
+      };
     } catch (err) {
-      const description =
+      const description = this.safe(
         err instanceof Error
           ? `Product catalog sync failed: ${err.message}`
-          : 'Product catalog sync failed: Unknown error';
+          : 'Product catalog sync failed: Unknown error',
+      );
+      const failure = failedJobberRead<ProductCatalogEntry>(err);
+      const databaseFailure = failure.error?.code === 'database';
 
       console.error(`[JobberIntegration] syncProductCatalog failed: ${description}`);
 
@@ -354,19 +408,32 @@ export class JobberIntegration {
         // Activity log failure should not break error handling
       }
 
-      return { inserted: 0, deactivated: 0, total: 0 };
+      return {
+        inserted: 0,
+        deactivated: 0,
+        total: 0,
+        outcome: 'failed',
+        read: {
+          status: 'failed',
+          source: 'none',
+          fetchedAt: null,
+          liveLookupFailed: !databaseFailure,
+          error: failure.error ?? { code: 'database', message: description },
+        },
+      };
     }
   }
 
   // ── Customer Requests ────────────────────────────────────────────
 
   /**
-   * Fetch customer requests from Jobber, returning cached data when within TTL.
-   * On failure, logs the error and returns [] but does NOT set available = false.
+   * Fetch customer requests from Jobber.
+   * Failure sets availability false and returns `status: 'failed'`, using the
+   * previous cache when one exists. A live zero-row response is `status: 'empty'`.
    */
-  async fetchCustomerRequests(): Promise<JobberCustomerRequest[]> {
+  async fetchCustomerRequests(): Promise<JobberReadResult<JobberCustomerRequest>> {
     if (this.customerRequestsCache && !this.isCacheExpired(this.customerRequestsCache)) {
-      return this.customerRequestsCache.data;
+      return cachedJobberRead(this.customerRequestsCache.data, this.customerRequestsCache.fetchedAt);
     }
 
     try {
@@ -377,11 +444,15 @@ export class JobberIntegration {
         first: DEFAULT_PAGE_SIZE,
         after: null,
       });
-      const connection = (data as any).requests as { edges: Array<{ node: JobberRequestNode }>; pageInfo: { hasNextPage: boolean; endCursor: string | null } } | undefined;
-      const nodes: JobberRequestNode[] = connection?.edges?.map((e) => e.node) ?? [];
+      const connection = (data as { requests?: { edges?: Array<{ node: JobberRequestNode }> } }).requests;
+      if (!connection || !Array.isArray(connection.edges)) {
+        throw new Error('Jobber GraphQL response missing connection data');
+      }
+      const nodes: JobberRequestNode[] = connection.edges.map((e) => e.node);
 
       const requests: JobberCustomerRequest[] = nodes.map((r) => {
-        const structuredNotes = r.notes.edges
+        const noteEdges = r.notes?.edges ?? [];
+        const structuredNotes = noteEdges
           .filter((e) => e.node?.message)
           .map((e) => {
             const typeName = e.node.createdBy?.__typename ?? '';
@@ -405,8 +476,8 @@ export class JobberIntegration {
           id: r.id,
           title: r.title || `Request from ${clientName}`,
           clientName,
-          description: r.notes.edges[0]?.node?.message || '',
-          notes: r.notes.edges
+          description: noteEdges[0]?.node?.message || '',
+          notes: noteEdges
             .map((e) => e.node?.message)
             .filter((m): m is string => !!m),
           structuredNotes,
@@ -421,31 +492,15 @@ export class JobberIntegration {
       // Sort by createdAt descending (newest first)
       requests.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-      this.customerRequestsCache = { data: requests, fetchedAt: Date.now() };
-      return requests;
+      const fetchedAt = Date.now();
+      this.customerRequestsCache = { data: requests, fetchedAt };
+      this.available = true;
+      return liveJobberRead(requests, new Date(fetchedAt).toISOString());
     } catch (err) {
-      // Log error but do NOT set available = false
-      const description =
-        err instanceof Error && err.name === 'AbortError'
-          ? 'Jobber API request timed out during fetchCustomerRequests'
-          : `Jobber API error during fetchCustomerRequests: ${err instanceof Error ? err.message : 'Unknown error'}`;
-
-      console.error(`[JobberIntegration] fetchCustomerRequests failed: ${description}`);
-
-      try {
-        await this.activityLog.log({
-          userId: 'system',
-          component: 'JobberIntegration',
-          operation: 'fetchCustomerRequests',
-          severity: 'error',
-          description,
-          recommendedAction: 'Check Jobber API credentials and connectivity. Customer requests are unavailable but manual entry still works.',
-        });
-      } catch (logErr) {
-        console.error('Failed to write to activity log:', logErr);
-      }
-
-      return [];
+      await this.handleApiError('fetchCustomerRequests', err);
+      return failedJobberRead(err, this.customerRequestsCache
+        ? { records: this.customerRequestsCache.data, fetchedAtMs: this.customerRequestsCache.fetchedAt }
+        : null);
     }
   }
 
@@ -488,7 +543,7 @@ export class JobberIntegration {
           }
           const retry = await this.executeGraphql<T>(query, variables, signal);
           if (retry.status !== undefined) {
-            throw new Error(`Jobber API error (${retry.status}): ${retry.errorText}`);
+            throw new Error(this.safe(`Jobber API error (${retry.status}): ${retry.errorText ?? 'empty body'}`));
           }
           if (!retry.throttled) {
             return retry.data!;
@@ -498,7 +553,7 @@ export class JobberIntegration {
       }
 
       if (result.status !== undefined) {
-        throw new Error(`Jobber API error (${result.status}): ${result.errorText}`);
+        throw new Error(this.safe(`Jobber API error (${result.status}): ${result.errorText ?? 'empty body'}`));
       }
 
       if (result.throttled && attempt < MAX_RETRIES) {
@@ -544,12 +599,7 @@ export class JobberIntegration {
       });
     }
 
-    // DEBUG: log token prefix and query cost hint
-    const tokenStart = this.accessToken.substring(0, 5);
-    const tokenEnd = this.accessToken.substring(this.accessToken.length - 5);
-    const tokenSum = tokenStart.split('').reduce((a, c) => a + c.charCodeAt(0), 0) + tokenEnd.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-    console.log(`[DEBUG] executeGraphql token_checksum=${tokenSum} len=${this.accessToken.length}`);
-    console.log(`[DEBUG] query hint: ${query.substring(0, 60).replace(/\n/g, ' ')}`);
+    const operation = graphqlOperationName(query);
 
     const timeoutController = new AbortController();
     const timeout = setTimeout(
@@ -572,26 +622,29 @@ export class JobberIntegration {
 
       if (!response.ok) {
         const text = await response.text();
-        console.log(`[DEBUG] Jobber HTTP ${response.status}: ${text.substring(0, 100)}`);
-        return { status: response.status, errorText: text };
+        const summary = summarizeUpstreamBody(text, this.logSecrets());
+        console.log(`[JobberIntegration] executeGraphql failed operation=${operation} http=${response.status} ${summary}`);
+        return { status: response.status, errorText: summary };
       }
 
       const json = (await response.json()) as GraphQLResponse<T>;
 
       if (json.errors && json.errors.length > 0) {
-        console.log(`[DEBUG] Jobber GraphQL errors: ${JSON.stringify(json.errors)}`);
+        const summary = summarizeUpstreamBody(JSON.stringify({ errors: json.errors }), this.logSecrets());
         const isThrottled = json.errors.some((e) => /throttle/i.test(e.message));
         if (isThrottled) {
+          console.log(`[JobberIntegration] executeGraphql throttled operation=${operation} http=${response.status}`);
           return { throttled: true };
         }
-        throw new Error(`Jobber GraphQL error: ${json.errors[0].message}`);
+        console.log(`[JobberIntegration] executeGraphql failed operation=${operation} http=${response.status} ${summary}`);
+        throw new Error(this.safe(`Jobber GraphQL error: ${summary}`));
       }
 
       if (!json.data) {
         throw new Error('Jobber GraphQL response missing data field');
       }
 
-      console.log(`[DEBUG] Jobber success, data keys: ${Object.keys(json.data as object).join(',')}`);
+      console.log(`[JobberIntegration] executeGraphql ok operation=${operation} http=${response.status} dataKeys=${Object.keys(json.data as object).join(',')}`);
       return { data: json.data };
     } catch (err) {
       if (signal?.aborted) {
@@ -626,14 +679,15 @@ export class JobberIntegration {
       });
 
       if (!response.ok) {
-        console.error(`[JobberIntegration] Token refresh failed (${response.status}): ${await response.text()}`);
+        const summary = summarizeUpstreamBody(await response.text(), this.logSecrets());
+        console.error(`[JobberIntegration] token refresh failed operation=refreshAccessToken http=${response.status} refreshSucceeded=false ${summary}`);
         return false;
       }
 
       const data = (await response.json()) as { access_token: string; refresh_token?: string };
 
       if (!data.access_token) {
-        console.error('[JobberIntegration] Token refresh response missing access_token');
+        console.error('[JobberIntegration] token refresh failed operation=refreshAccessToken refreshSucceeded=false reason=missing_access_token');
         return false;
       }
 
@@ -649,14 +703,14 @@ export class JobberIntegration {
         try {
           await this.tokenStore.save(this.accessToken, this.refreshToken);
         } catch (err) {
-          console.error('[JobberIntegration] Token refresh succeeded but failed to persist to D1:', err);
+          console.error(`[JobberIntegration] token refresh operation=refreshAccessToken refreshSucceeded=true persistSucceeded=false ${this.safe(err instanceof Error ? err.message : err)}`);
         }
       }
 
-      console.log('[JobberIntegration] Access token refreshed successfully');
+      console.log('[JobberIntegration] token refresh operation=refreshAccessToken http=200 refreshSucceeded=true');
       return true;
     } catch (err) {
-      console.error('[JobberIntegration] Token refresh error:', err);
+      console.error(`[JobberIntegration] token refresh failed operation=refreshAccessToken refreshSucceeded=false ${this.safe(err instanceof Error ? err.message : err)}`);
       return false;
     }
   }
@@ -684,8 +738,8 @@ export class JobberIntegration {
       }
 
       const typed = connection as RelayConnection<TNode>;
-      if (!typed || !typed.edges) {
-        break;
+      if (!typed || !Array.isArray(typed.edges)) {
+        throw new Error('Jobber GraphQL response missing connection data');
       }
 
       for (const edge of typed.edges) {
@@ -705,10 +759,11 @@ export class JobberIntegration {
   private async handleApiError(operation: string, err: unknown): Promise<void> {
     this.available = false;
 
-    const description =
+    const description = this.safe(
       err instanceof Error && err.name === 'AbortError'
         ? `Jobber API request timed out during ${operation}`
-        : `Jobber API error during ${operation}: ${err instanceof Error ? err.message : 'Unknown error'}`;
+        : `Jobber API error during ${operation}: ${err instanceof Error ? err.message : 'Unknown error'}`,
+    );
 
     try {
       await this.activityLog.log({
@@ -723,4 +778,29 @@ export class JobberIntegration {
       console.error('Failed to write to activity log:', logErr);
     }
   }
+}
+
+/** Build the shared Jobber client. Tokens stay on the server. */
+export async function openJobberIntegration(
+  db: D1Database,
+  env: {
+    JOBBER_CLIENT_ID?: string;
+    JOBBER_CLIENT_SECRET?: string;
+    JOBBER_ACCESS_TOKEN?: string;
+    JOBBER_REFRESH_TOKEN?: string;
+    JOBBER_API_URL?: string;
+  },
+): Promise<{ jobberIntegration: JobberIntegration; tokenStore: JobberTokenStore; activityLog: ActivityLogService }> {
+  const activityLog = new ActivityLogService(db);
+  const tokenStore = new JobberTokenStore(db);
+  const jobberIntegration = new JobberIntegration(activityLog, {
+    clientId: env.JOBBER_CLIENT_ID || '',
+    clientSecret: env.JOBBER_CLIENT_SECRET || '',
+    accessToken: env.JOBBER_ACCESS_TOKEN || '',
+    refreshToken: env.JOBBER_REFRESH_TOKEN || '',
+    apiUrl: env.JOBBER_API_URL || undefined,
+    tokenStore,
+  });
+  await jobberIntegration.loadPersistedTokens();
+  return { jobberIntegration, tokenStore, activityLog };
 }

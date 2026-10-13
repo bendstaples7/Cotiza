@@ -5,6 +5,7 @@ import {
   prependEmailContextToCustomerText,
   type EmailEnrichmentConfig,
 } from './email-context-enrichment.js';
+import { sanitizeLogText } from './jobber-log-sanitize.mjs';
 
 export type JobberImportEmailConfig = EmailEnrichmentConfig;
 
@@ -37,8 +38,7 @@ export async function buildJobberImportCustomerContext(
     }
   } catch (err) {
     console.warn(
-      '[buildJobberImportCustomerContext] Email enrichment failed:',
-      err instanceof Error ? err.message : err,
+      `[buildJobberImportCustomerContext] Email enrichment failed operation=fetchEmailContext ${sanitizeLogText(err instanceof Error ? err.message : err)}`,
     );
   }
 

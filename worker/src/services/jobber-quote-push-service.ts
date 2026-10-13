@@ -1,6 +1,7 @@
 import type { QuoteDraft, DepositSchedule, QuoteLineItem } from 'shared';
 import { PlatformError } from '../errors/index.js';
 import type { JobberIntegration } from './jobber-integration.js';
+import { sanitizeLogText } from './jobber-log-sanitize.mjs';
 
 /**
  * Assembles the Jobber quote message from its three optional segments:
@@ -428,7 +429,7 @@ export class JobberQuotePushService {
       if (lineItemResponse.quoteEditLineItems.userErrors?.length > 0) {
         // Log but don't block — header update succeeded
         console.warn(
-          `Line item update had errors: ${lineItemResponse.quoteEditLineItems.userErrors.map((e) => e.message).join(', ')}`,
+          `[JobberQuotePushService] line item update failed operation=quoteEditLineItems ${sanitizeLogText(lineItemResponse.quoteEditLineItems.userErrors.map((e) => e.message).join(', '))}`,
         );
       }
     }

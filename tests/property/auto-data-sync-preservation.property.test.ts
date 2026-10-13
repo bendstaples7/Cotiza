@@ -396,8 +396,9 @@ describe('Property 4 — Jobber Fallback Preservation', () => {
     expect(methodBody).toMatch(/catch\s*\(err\)/);
     expect(methodBody).toMatch(/handleApiError/);
 
-    // Verify it returns empty array on failure (route handler does the fallback)
-    expect(methodBody).toMatch(/return\s*\[\]/);
+    // A failed read is marked failed. It is not returned as a successful empty list.
+    expect(methodBody).toMatch(/failedJobberRead/);
+    expect(methodBody).not.toMatch(/return\s*\[\]/);
   });
 
   it('route handler uses unified product_catalog via fetchCatalog', () => {
