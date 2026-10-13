@@ -23,15 +23,15 @@ app.get('/status', async (c) => {
   const isLocalDev = c.env.ENABLE_LOCAL_SYNC === 'true';
 
   // ── Jobber live probe (same contract as GET /api/quotes/jobber/status) ──
-  let jobber = {
+  let jobber: SystemsStatusResponse['jobber'] = {
     available: false,
     webhookActive: false,
     read: {
-      status: 'failed' as const,
-      source: 'none' as const,
+      status: 'failed',
+      source: 'none',
       fetchedAt: null,
       liveLookupFailed: true,
-      error: { code: 'unavailable' as const, message: 'Jobber is not configured.' },
+      error: { code: 'unavailable', message: 'Jobber is not configured.' },
     },
   };
   try {
