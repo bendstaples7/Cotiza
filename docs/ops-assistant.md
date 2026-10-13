@@ -12,7 +12,7 @@ Checked against OpenAI’s docs on 13 Oct 2026:
 
 | Piece | Choice |
 | --- | --- |
-| Transport | Streaming HTTP at `POST /mcp`. One JSON response per call. `GET /mcp` returns 405 because this server does not push messages. |
+| Transport | Streaming HTTP at `POST /mcp`. Each JSON-RPC reply is one SSE message (`event: message`, `data: {…}`). `GET /mcp` returns 405 because this server does not push messages. |
 | Assistant login | Separate from Jobber. Scope is only `ops:read`. |
 | ChatGPT | OAuth authorization-code + PKCE. Public client (`token_endpoint_auth_method=none`). Dynamic client registration is limited to ChatGPT redirect URLs. |
 | Local exercise | Mint a bearer token with your existing Cotiza session, then run `scripts/ops-assistant-exercise.mjs`. |

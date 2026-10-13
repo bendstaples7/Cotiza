@@ -38,6 +38,22 @@ Saved webhook rows do not set `available` to true. `GET /api/quotes/jobber/statu
 { "available": false, "webhookActive": true, "read": { "status": "failed", "source": "none", "fetchedAt": null, "liveLookupFailed": true, "error": { "code": "auth", "message": "..." } } }
 ```
 
+`GET /api/systems/status` (login systems check)
+
+```json
+{
+  "jobber": {
+    "available": false,
+    "webhookActive": true,
+    "read": { "status": "failed", "source": "none", "fetchedAt": null, "liveLookupFailed": true, "error": { "code": "timeout", "message": "..." } }
+  },
+  "jobberSession": { "configured": true, "expired": false },
+  "instagram": { "status": "connected", "accountName": "Chicago Reno" }
+}
+```
+
+The Cotiza app uses the same `jobber.read` rules as quote pages: a failed live probe blocks login (`jobber_unavailable`) even when webhook history exists.
+
 `GET /api/quotes/catalog`
 
 ```json

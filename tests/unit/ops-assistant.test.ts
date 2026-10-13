@@ -479,6 +479,29 @@ describe('oauth client registration', () => {
   });
 });
 
+describe('oauth email step', () => {
+  it('keeps a rejected email on the page', async () => {
+    const directory = fakeDirectory(null);
+    directory.loadTx = async () => JSON.stringify({
+      clientId: 'cotiza-ops-local',
+      redirectUri: 'http://127.0.0.1:8787/oauth/exercise-callback',
+      codeChallenge: 'challenge',
+      state: 'exercise',
+      resource: 'http://127.0.0.1:8787/mcp',
+    });
+    const app = createOpsAssistantApp(() => directory);
+    const response = await app.request('http://127.0.0.1:8787/oauth/authorize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ tx: 'tx-1', email: 'person@gmail.com' }).toString(),
+    }, { DB: {} } as never);
+    const html = await response.text();
+    expect(response.status).toBe(200);
+    expect(html).toContain('value="person@gmail.com"');
+    expect(html).toContain('@chicago-reno.com');
+  });
+});
+
 describe('oauth registration guard', () => {
   it('rejects a client that wants an outside redirect', async () => {
     const app = createOpsAssistantApp(() => fakeDirectory(null));
@@ -488,5 +511,25 @@ describe('oauth registration guard', () => {
       body: JSON.stringify({ redirect_uris: ['https://evil.example/callback'], token_endpoint_auth_method: 'none' }),
     });
     expect(response.status).toBe(400);
+  });
+
+  it('registers an allowed ChatGPT redirect over HTTP', async () => {
+    const db = createMockD1();
+    configurePrepareResults(db, [{ run: { success: true, meta: { changes: 1 } } }]);
+    const app = createOpsAssistantApp(() => new D1AssistantDirectory(db as never));
+    const response = await app.request('http://127.0.0.1:8787/oauth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        redirect_uris: ['https://chatgpt.com/connector_platform_oauth_redirect'],
+        client_name: 'ChatGPT',
+        token_endpoint_auth_method: 'none',
+      }),
+    }, { DB: db } as never);
+    expect(response.status).toBe(201);
+    const body = await response.json() as { client_id: string; redirect_uris: string[] };
+    expect(body.client_id).toMatch(/^ctz_client_/);
+    expect(body.redirect_uris[0]).toContain('chatgpt.com');
+    expect(String(db.prepare.mock.calls[0][0])).toMatch(/ON CONFLICT\(client_id\) DO UPDATE/i);
   });
 });
