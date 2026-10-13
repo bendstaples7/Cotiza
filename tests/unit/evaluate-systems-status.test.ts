@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SystemsStatusResponse } from 'shared';
-import { evaluateSystemsStatus } from '../../client/src/AuthContext';
+import { evaluateSystemsStatus } from '../../client/src/systemsStatus';
 
 function base(overrides: Partial<SystemsStatusResponse> = {}): SystemsStatusResponse {
   return {

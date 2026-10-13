@@ -2,20 +2,10 @@
  * Shared Jobber connection: login required to change it, and the OAuth
  * callback only accepts a one-time state tied to the person who started it.
  *
- * The database is real SQLite, so the route's DELETE (user check, 15-minute
- * expiry, one-time consume) actually runs.
+ * The database fixture models the D1 statements these routes issue, including
+ * the state owner check, 15-minute expiry, and one-time consume.
  */
-import { createRequire } from 'node:module';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-
-let DatabaseSync: typeof import('node:sqlite').DatabaseSync | null = null;
-try {
-  DatabaseSync = createRequire(import.meta.url)('node:sqlite').DatabaseSync;
-} catch {
-  DatabaseSync = null;
-}
-
-const describeWithSqlite = DatabaseSync ? describe : describe.skip;
 import { Hono } from 'hono';
 import jobberAuth from '../../worker/src/routes/jobber-auth.js';
 import { errorHandler } from '../../worker/src/middleware/error-handler.js';
@@ -40,54 +30,116 @@ vi.mock('../../worker/src/services/auth-service.js', () => ({
   },
 }));
 
+type Row = Record<string, unknown>;
+type OAuthStateRow = { id: string; user_id: string; created_at: number };
+type MemoryStatement = {
+  run: (...args: unknown[]) => { success: boolean; meta: { changes: number } };
+  get: (...args: unknown[]) => Row | null;
+  all: (...args: unknown[]) => Row[];
+};
+
 function createDb() {
-  if (!DatabaseSync) throw new Error('node:sqlite is not available in this Node runtime');
-  const sqlite = new DatabaseSync(':memory:');
-  sqlite.exec(`
-    CREATE TABLE users (
-      id TEXT PRIMARY KEY,
-      email TEXT NOT NULL UNIQUE,
-      name TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      last_active_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE oauth_states (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE jobber_tokens (
-      id TEXT PRIMARY KEY DEFAULT 'default',
-      access_token TEXT NOT NULL,
-      refresh_token TEXT NOT NULL,
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE jobber_web_session (
-      id TEXT PRIMARY KEY DEFAULT 'default',
-      cookies TEXT NOT NULL,
-      expires_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE activity_log_entries (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      component TEXT NOT NULL,
-      operation TEXT NOT NULL,
-      severity TEXT NOT NULL DEFAULT 'info',
-      description TEXT NOT NULL,
-      recommended_action TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    INSERT INTO users (id, email, name) VALUES
-      ('user-manager', 'owner@chicago-reno.com', 'Owner'),
-      ('system', 'system@internal', 'System'),
-      ('outsider', 'outsider@example.com', 'Outsider');
-  `);
+  const users = new Map([
+    ['user-manager', { id: 'user-manager', email: 'owner@chicago-reno.com', name: 'Owner' }],
+    ['system', { id: 'system', email: 'system@internal', name: 'System' }],
+    ['outsider', { id: 'outsider', email: 'outsider@example.com', name: 'Outsider' }],
+  ]);
+  const oauthStates: OAuthStateRow[] = [];
+  let jobberTokens: Row | null = null;
+  let webSession: Row | null = null;
+
+  const normalize = (sql: string) => sql.replace(/\s+/g, ' ').trim();
+
+  function runSql(sql: string, args: unknown[]): { success: boolean; meta: { changes: number } } {
+    const normalized = normalize(sql);
+    if (normalized.startsWith('INSERT INTO oauth_states')) {
+      if (normalized.includes("'expired-state'")) {
+        oauthStates.push({ id: 'expired-state', user_id: String(args[0]), created_at: Date.now() - 16 * 60 * 1000 });
+      } else if (normalized.includes("'system-state'")) {
+        oauthStates.push({ id: 'system-state', user_id: 'system', created_at: Date.now() });
+      } else {
+        oauthStates.push({ id: String(args[0]), user_id: String(args[1]), created_at: Date.now() });
+      }
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (normalized.startsWith('INSERT INTO jobber_tokens')) {
+      jobberTokens = { id: 'default', access_token: String(args[0]), refresh_token: String(args[1]) };
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (normalized.startsWith('INSERT INTO jobber_web_session')) {
+      webSession = { id: 'default', cookies: String(args[0]), expires_at: String(args[1]) };
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (normalized.startsWith('DELETE FROM jobber_web_session')) {
+      const changes = webSession ? 1 : 0;
+      webSession = null;
+      return { success: true, meta: { changes } };
+    }
+    return { success: true, meta: { changes: 0 } };
+  }
+
+  function getSql(sql: string, args: unknown[]): Row | null {
+    const normalized = normalize(sql);
+    if (normalized.startsWith('DELETE FROM oauth_states')) {
+      const stateId = String(args[0]);
+      const index = oauthStates.findIndex((state) => state.id === stateId);
+      if (index === -1) return null;
+      const state = oauthStates[index];
+      const user = users.get(state.user_id);
+      const isFresh = state.created_at > Date.now() - 15 * 60 * 1000;
+      const isManager = Boolean(user && user.id !== 'system' && user.email.toLowerCase().endsWith('@chicago-reno.com'));
+      if (!isFresh || !isManager) return null;
+      oauthStates.splice(index, 1);
+      return { id: state.id };
+    }
+    if (normalized.startsWith("SELECT access_token, refresh_token FROM jobber_tokens WHERE id = 'default'")) {
+      return jobberTokens
+        ? { access_token: jobberTokens.access_token, refresh_token: jobberTokens.refresh_token }
+        : null;
+    }
+    if (normalized.startsWith("SELECT cookies FROM jobber_web_session WHERE id = 'default'")) {
+      return webSession ? { cookies: webSession.cookies } : null;
+    }
+    if (normalized.startsWith("SELECT expires_at FROM jobber_web_session WHERE id = 'default'")) {
+      return webSession ? { expires_at: webSession.expires_at } : null;
+    }
+    if (normalized.startsWith("SELECT cookies, expires_at FROM jobber_web_session WHERE id = 'default'")) {
+      return webSession ? { cookies: webSession.cookies, expires_at: webSession.expires_at } : null;
+    }
+    return null;
+  }
+
+  function allSql(sql: string, args: unknown[]): Row[] {
+    void args;
+    const normalized = normalize(sql);
+    if (normalized.startsWith('SELECT id, user_id FROM oauth_states ORDER BY id')) {
+      return [...oauthStates]
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map(({ id, user_id }) => ({ id, user_id }));
+    }
+    if (normalized.startsWith('SELECT id FROM jobber_tokens')) {
+      return jobberTokens ? [{ id: 'default' }] : [];
+    }
+    if (normalized.startsWith('SELECT id FROM jobber_web_session')) {
+      return webSession ? [{ id: 'default' }] : [];
+    }
+    return [];
+  }
+
+  const sqlite = {
+    prepare(sql: string): MemoryStatement {
+      return {
+        run: (...args: unknown[]) => runSql(sql, args),
+        get: (...args: unknown[]) => getSql(sql, args),
+        all: (...args: unknown[]) => allSql(sql, args),
+      };
+    },
+    close() { /* in-memory fixture */ },
+  };
 
   const db = {
     sqlite,
     prepare(sql: string) {
-      const stmt = sqlite.prepare(sql);
       let args: unknown[] = [];
       const api = {
         bind(...bound: unknown[]) {
@@ -95,14 +147,13 @@ function createDb() {
           return api;
         },
         async first() {
-          return stmt.get(...(args as never[])) ?? null;
+          return getSql(sql, args);
         },
         async run() {
-          stmt.run(...(args as never[]));
-          return { success: true, meta: {} };
+          return runSql(sql, args);
         },
         async all() {
-          return { results: stmt.all(...(args as never[])) };
+          return { results: allSql(sql, args) };
         },
       };
       return api;
@@ -151,7 +202,7 @@ describe('shared Jobber connection policy', () => {
   });
 });
 
-describeWithSqlite('Jobber connection management auth', () => {
+describe('Jobber connection management auth', () => {
   let fetchMock: FetchMock | null = null;
   let db: TestDb;
 
