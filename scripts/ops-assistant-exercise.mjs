@@ -100,7 +100,22 @@ async function rpc(accessToken, method, params) {
     },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
   });
-  const body = await response.json().catch(() => null);
+  const raw = await response.text();
+  let body = null;
+  try {
+    const trimmed = raw.trim();
+    if (trimmed.startsWith('{')) body = JSON.parse(trimmed);
+    else {
+      for (const line of trimmed.split('\n')) {
+        if (line.startsWith('data: ')) {
+          body = JSON.parse(line.slice(6));
+          break;
+        }
+      }
+    }
+  } catch {
+    body = null;
+  }
   if (!response.ok || body?.error) {
     fail(`${method} failed (HTTP ${response.status}${body?.error?.message ? `: ${body.error.message}` : ''}).`);
   }

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { CallBudget, pkceS256, redirectUriAllowed, sha256Hex, D1AssistantDirectory, oauthAuthorizationServerMetadata } from '../../worker/src/services/assistant-access.js';
 import { classifyJobberReadError } from '../../worker/src/services/jobber-read.js';
 import { ASSISTANT_QUERIES, OpsAssistantRead, SEARCH_LIMITATIONS } from '../../worker/src/services/ops-assistant-read.js';
-import { handleMcpPost } from '../../worker/src/routes/ops-assistant.js';
+import { handleMcpPost, readMcpJsonBody } from '../../worker/src/routes/ops-assistant.js';
 import { createOpsAssistantApp } from '../../worker/src/routes/ops-assistant.js';
 import { createMockD1, configurePrepareResults } from './helpers/mock-d1.js';
 import type { AssistantDirectory, AssistantPrincipal } from '../../worker/src/services/assistant-access.js';
@@ -45,8 +45,16 @@ function mcp(method: string, params?: unknown, token = 'ctz_test') {
   });
 }
 
+async function mcpJson(response: Response) {
+  const text = await response.text();
+  return readMcpJsonBody(text) as {
+    result?: { content?: Array<{ text: string }>; tools?: Array<{ name: string; description: string }> };
+    error?: { message: string };
+  };
+}
+
 async function toolText(response: Response) {
-  const body = await response.json() as { result?: { content?: Array<{ text: string }>; isError?: boolean } };
+  const body = await mcpJson(response);
   return JSON.parse(body.result!.content![0].text) as Record<string, unknown>;
 }
 
@@ -125,10 +133,11 @@ describe('ops assistant tools', () => {
       db: createMockD1() as never,
       budget: new CallBudget(),
     });
-    const body = await response.json() as { result: { tools: Array<{ name: string; description: string }> } };
-    const names = body.result.tools.map((tool) => tool.name);
+    expect(response.headers.get('Content-Type')).toContain('text/event-stream');
+    const body = await mcpJson(response);
+    const names = body.result!.tools!.map((tool) => tool.name);
     expect(names).toEqual(['find_requests', 'read_request', 'find_quotes', 'read_quote', 'list_request_quotes']);
-    const described = body.result.tools.map((tool) => `${tool.name} ${tool.description}`).join('\n').toLowerCase();
+    const described = body.result!.tools!.map((tool) => `${tool.name} ${tool.description}`).join('\n').toLowerCase();
     expect(described).not.toMatch(/\b(create|delete|mutation|graphql)\b/);
     for (const query of Object.values(ASSISTANT_QUERIES)) {
       expect(query.toLowerCase()).not.toContain('mutation');
@@ -143,8 +152,8 @@ describe('ops assistant tools', () => {
       db: createMockD1() as never,
       budget: new CallBudget(),
     });
-    const body = await response.json() as { error: { message: string } };
-    expect(body.error.message).toBe('Unknown tool');
+    const body = await mcpJson(response);
+    expect(body.error!.message).toBe('Unknown tool');
   });
 
   it('rejects an oversized page', async () => {
@@ -310,9 +319,9 @@ describe('ops assistant tools', () => {
       budget: new CallBudget(),
     };
     const listed = await handleMcpPost(mcp('tools/list'), deps);
-    const listBody = await listed.json() as { result: { tools: Array<{ name: string }> } };
+    const listBody = await mcpJson(listed);
     expect(listed.status).toBe(200);
-    expect(listBody.result.tools.some((tool) => tool.name === 'read_request')).toBe(true);
+    expect(listBody.result!.tools!.some((tool) => tool.name === 'read_request')).toBe(true);
 
     const called = await handleMcpPost(mcp('tools/call', { name: 'read_request', arguments: { requestId: 'req-9' } }), deps);
     const payload = await toolText(called);
@@ -446,6 +455,27 @@ describe('oauth code exchange', () => {
     }, env);
     expect(revoked.status).toBe(200);
     expect(await directory.authenticateAccessToken(next.access_token, RESOURCE)).toBeNull();
+  });
+});
+
+describe('oauth client registration', () => {
+  it('upserts the same client_id on repeat registration', async () => {
+    const db = createMockD1();
+    configurePrepareResults(db, [{ run: { success: true, meta: { changes: 1 } } }, { run: { success: true, meta: { changes: 1 } } }]);
+    const directory = new D1AssistantDirectory(db as never);
+    await directory.saveClient({
+      clientId: 'cotiza-ops-local',
+      name: 'Local exercise',
+      redirectUris: ['http://127.0.0.1:8787/oauth/exercise-callback'],
+    });
+    await directory.saveClient({
+      clientId: 'cotiza-ops-local',
+      name: 'Local exercise (updated)',
+      redirectUris: ['http://127.0.0.1:8787/oauth/exercise-callback'],
+    });
+    const sql = String(db.prepare.mock.calls[0][0]);
+    expect(sql).toMatch(/ON CONFLICT\(client_id\) DO UPDATE/i);
+    expect(db.prepare).toHaveBeenCalledTimes(2);
   });
 });
 

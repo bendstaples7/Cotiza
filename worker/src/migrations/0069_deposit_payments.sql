@@ -1,4 +1,4 @@
--- Migration: 0065_deposit_payments.sql
+-- Migration: 0069_deposit_payments.sql
 -- Creates the deposit payments tracking system so deposit milestones
 -- become actual payment records (not just text in a client message).
 --

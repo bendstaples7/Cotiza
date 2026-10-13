@@ -65,6 +65,28 @@ function json(body: unknown, status = 200, extra?: HeadersInit): Response {
   });
 }
 
+/** Parse JSON-RPC body from plain JSON or MCP SSE (`event: message` / `data: …`). */
+export function readMcpJsonBody(text: string): unknown {
+  const trimmed = text.trim();
+  if (trimmed.startsWith('{')) return JSON.parse(trimmed);
+  for (const line of trimmed.split('\n')) {
+    if (line.startsWith('data: ')) return JSON.parse(line.slice(6));
+  }
+  throw new Error('Unrecognized MCP response body');
+}
+
+function mcpEvent(body: unknown, status = 200, extra?: HeadersInit): Response {
+  const payload = JSON.stringify(body);
+  return new Response(`event: message\ndata: ${payload}\n\n`, {
+    status,
+    headers: {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-store',
+      ...extra,
+    },
+  });
+}
+
 async function audit(db: D1Database, userId: string, operation: string, description: string, severity: 'info' | 'error') {
   const log = new ActivityLogService(db);
   await log.log({
@@ -104,14 +126,14 @@ export async function handleMcpPost(request: Request, deps: {
   try {
     message = JSON.parse(text);
   } catch {
-    return json({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }, 400);
+    return mcpEvent({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }, 400);
   }
   if (Array.isArray(message) || message.jsonrpc !== '2.0' || typeof message.method !== 'string') {
-    return json({ jsonrpc: '2.0', id: message.id ?? null, error: { code: -32600, message: 'Invalid request' } }, 400);
+    return mcpEvent({ jsonrpc: '2.0', id: message.id ?? null, error: { code: -32600, message: 'Invalid request' } }, 400);
   }
 
   if (!deps.budget.allow(principal.tokenId)) {
-    return json({ jsonrpc: '2.0', id: message.id ?? null, error: { code: -32000, message: 'Too many reads. Wait a minute and try again.' } }, 429);
+    return mcpEvent({ jsonrpc: '2.0', id: message.id ?? null, error: { code: -32000, message: 'Too many reads. Wait a minute and try again.' } }, 429);
   }
 
   const headers = { 'MCP-Protocol-Version': PROTOCOL };
@@ -121,7 +143,7 @@ export async function handleMcpPost(request: Request, deps: {
 
   const id = message.id ?? null;
   if (message.method === 'initialize') {
-    return json({
+    return mcpEvent({
       jsonrpc: '2.0',
       id,
       result: {
@@ -132,15 +154,15 @@ export async function handleMcpPost(request: Request, deps: {
       },
     }, 200, headers);
   }
-  if (message.method === 'ping') return json({ jsonrpc: '2.0', id, result: {} }, 200, headers);
+  if (message.method === 'ping') return mcpEvent({ jsonrpc: '2.0', id, result: {} }, 200, headers);
   if (message.method === 'tools/list') {
-    return json({ jsonrpc: '2.0', id, result: { tools: TOOL_DEFINITIONS } }, 200, headers);
+    return mcpEvent({ jsonrpc: '2.0', id, result: { tools: TOOL_DEFINITIONS } }, 200, headers);
   }
   if (message.method === 'tools/call') {
     const name = String(message.params?.name || '');
     const args = message.params?.arguments ?? {};
     if (!TOOL_DEFINITIONS.some((tool) => tool.name === name)) {
-      return json({ jsonrpc: '2.0', id, error: { code: -32602, message: 'Unknown tool' } }, 200, headers);
+      return mcpEvent({ jsonrpc: '2.0', id, error: { code: -32602, message: 'Unknown tool' } }, 200, headers);
     }
     try {
       const result = await callAssistantTool(deps.read, principal.userId, name, args);
@@ -152,7 +174,7 @@ export async function handleMcpPost(request: Request, deps: {
         `tool=${name} outcome=${outcome || 'ok'}`,
         outcome === 'failed' ? 'error' : 'info',
       );
-      return json({
+      return mcpEvent({
         jsonrpc: '2.0',
         id,
         result: {
@@ -163,7 +185,7 @@ export async function handleMcpPost(request: Request, deps: {
     } catch (err) {
       if (err instanceof InvalidAssistantArgs) {
         await audit(deps.db, principal.userId, name, `tool=${name} outcome=invalid_request`, 'info');
-        return json({
+        return mcpEvent({
           jsonrpc: '2.0',
           id,
           result: {
@@ -173,7 +195,7 @@ export async function handleMcpPost(request: Request, deps: {
         }, 200, headers);
       }
       await audit(deps.db, principal.userId, name, `tool=${name} outcome=failed`, 'error');
-      return json({
+      return mcpEvent({
         jsonrpc: '2.0',
         id,
         result: {
@@ -183,7 +205,7 @@ export async function handleMcpPost(request: Request, deps: {
       }, 200, headers);
     }
   }
-  return json({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found' } }, 200, headers);
+  return mcpEvent({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found' } }, 200, headers);
 }
 
 function consentPage(txId: string, email: string): string {

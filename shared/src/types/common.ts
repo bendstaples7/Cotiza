@@ -1,3 +1,5 @@
+import type { JobberReadMeta } from './quote.js';
+
 /** Pagination parameters for list endpoints */
 export interface PaginationParams {
   page: number;
@@ -8,6 +10,8 @@ export interface PaginationParams {
 export interface SystemsStatusResponse {
   jobber: {
     available: boolean;
+    webhookActive: boolean;
+    read: JobberReadMeta;
   };
   jobberSession: {
     configured: boolean;

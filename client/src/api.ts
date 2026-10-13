@@ -159,7 +159,7 @@ export interface AssistantTokenSummary {
 }
 
 export function opsAssistantMcpUrl(): string {
-  const base = API_BASE || (typeof window !== 'undefined' ? window.location.origin.replace(':5173', ':8787') : '');
+  const base = API_BASE || (typeof window !== 'undefined' ? window.location.origin : '');
   return `${base.replace(/\/$/, '')}/mcp`;
 }
 

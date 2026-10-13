@@ -252,7 +252,10 @@ export class D1AssistantDirectory implements AssistantDirectory {
 
   async saveClient(client: OauthClient): Promise<void> {
     await this.db.prepare(
-      `INSERT INTO assistant_oauth_clients (client_id, client_name, redirect_uris) VALUES (?, ?, ?)`,
+      `INSERT INTO assistant_oauth_clients (client_id, client_name, redirect_uris) VALUES (?, ?, ?)
+       ON CONFLICT(client_id) DO UPDATE SET
+         client_name = excluded.client_name,
+         redirect_uris = excluded.redirect_uris`,
     ).bind(client.clientId, client.name.slice(0, 80), JSON.stringify(client.redirectUris)).run();
   }
 

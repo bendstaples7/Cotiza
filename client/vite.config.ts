@@ -15,6 +15,18 @@ export default defineConfig({
         target: 'http://localhost:8787',
         changeOrigin: true,
       },
+      '/mcp': {
+        target: 'http://localhost:8787',
+        changeOrigin: true,
+      },
+      '/oauth': {
+        target: 'http://localhost:8787',
+        changeOrigin: true,
+      },
+      '/.well-known': {
+        target: 'http://localhost:8787',
+        changeOrigin: true,
+      },
     },
   },
 });
