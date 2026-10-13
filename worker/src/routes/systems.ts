@@ -23,7 +23,7 @@ app.get('/status', async (c) => {
   const isLocalDev = c.env.ENABLE_LOCAL_SYNC === 'true';
 
   // ── Jobber live probe (same contract as GET /api/quotes/jobber/status) ──
-  let jobber = {
+  let jobber: SystemsStatusResponse['jobber'] = {
     available: false,
     webhookActive: false,
     read: {
