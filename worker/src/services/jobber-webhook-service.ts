@@ -241,11 +241,14 @@ export class JobberWebhookService {
         if (refreshed) {
           try {
             return await this.attemptFetchDetail(requestId);
-          } catch {
+          } catch (retryErr) {
+            console.error(`[WebhookService] fetchRequestDetail failed operation=fetchRequestDetail afterRefresh=true ${this.safe(retryErr instanceof Error ? retryErr.message : retryErr)}`);
             return null;
           }
         }
+        return null;
       }
+      console.error(`[WebhookService] fetchRequestDetail failed operation=fetchRequestDetail ${this.safe(err instanceof Error ? err.message : err)}`);
       return null;
     }
   }
@@ -265,8 +268,16 @@ export class JobberWebhookService {
     });
 
     if (res.status === 401) throw new TokenExpiredError();
-    if (!res.ok) return null;
-    const json = await res.json() as { data?: { request?: RequestDetail } };
+    if (!res.ok) {
+      const summary = summarizeUpstreamBody(await res.text(), this.logSecrets());
+      console.error(`[WebhookService] fetchRequestDetail failed operation=fetchRequestDetail http=${res.status} ${summary}`);
+      return null;
+    }
+    const json = await res.json() as { data?: { request?: RequestDetail }; errors?: Array<{ message?: string }> };
+    if (json.errors?.length && !json.data?.request) {
+      const summary = summarizeUpstreamBody(JSON.stringify({ errors: json.errors }), this.logSecrets());
+      console.error(`[WebhookService] fetchRequestDetail failed operation=fetchRequestDetail http=${res.status} ${summary}`);
+    }
     return json.data?.request ?? null;
   }
 

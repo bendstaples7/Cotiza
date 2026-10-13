@@ -5,6 +5,7 @@ import { extractCustomerEmailFromRequestBody, splitEmailContextFromCustomerText,
 import { sessionMiddleware } from '../middleware/session.js';
 import { PlatformError } from '../errors/index.js';
 import { JobberWebSession } from '../services/jobber-web-session.js';
+import { sanitizeLogText } from '../services/jobber-log-sanitize.mjs';
 import {
   QuoteEngine,
   JobberIntegration,
@@ -2427,7 +2428,7 @@ app.get('/jobber/requests/:id/form-data', async (c) => {
     }
     // If sessionExpired or no data, fall through to fallback
   } catch (err) {
-    console.warn('[quotes/form-data] Web session fetch failed:', err instanceof Error ? err.message : err);
+    console.warn(`[quotes/form-data] Web session fetch failed operation=fetchRequestFormData ${sanitizeLogText(err instanceof Error ? err.message : err)}`);
   }
 
   // Step 2: Fallback — check D1 for stored webhook/API data
@@ -2681,7 +2682,7 @@ app.get('/jobber/requests', async (c) => {
 
             console.log(`[quotes/requests] Enriched request ${req.id}`);
           } catch (err) {
-            console.error(`[quotes/requests] Enrichment failed for ${req.id}:`, err instanceof Error ? err.message : err);
+            console.error(`[quotes/requests] Enrichment failed operation=enrichRequest requestId=${req.id} ${sanitizeLogText(err instanceof Error ? err.message : err)}`);
           }
         })
       )

@@ -2,11 +2,16 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { Hono } from 'hono';
 import { JobberIntegration } from '../../worker/src/services/jobber-integration.js';
 import { JobberWebhookService } from '../../worker/src/services/jobber-webhook-service.js';
+import { JobberCookieRefresher } from '../../worker/src/services/jobber-cookie-refresher.js';
+import { JobberQuotePushService } from '../../worker/src/services/jobber-quote-push-service.js';
 import { ActivityLogService } from '../../worker/src/services/activity-log-service.js';
+import { logSyncFailure } from '../../worker/scripts/sync-cookies.mjs';
+import { logEnrichFailure, rememberSecrets } from '../../worker/scripts/enrich-request-names.mjs';
+import type { QuoteDraft } from 'shared';
 import jobberAuth from '../../worker/src/routes/jobber-auth.js';
 import { errorHandler } from '../../worker/src/middleware/error-handler.js';
 import { installFetchMock, type FetchMock } from '../helpers/fetch-mock.js';
-import { formatLog, sanitizeLogText } from '../../worker/src/services/jobber-log-sanitize.mjs';
+import { sanitizeLogText } from '../../worker/src/services/jobber-log-sanitize.mjs';
 
 vi.mock('../../worker/src/services/auth-service.js', () => ({
   AuthService: class {
@@ -334,15 +339,176 @@ describe('Jobber log redaction', () => {
   });
 
   it('sanitizes cookie-refresh script failures that echo the cookie', () => {
-    const err = {
+    logs = captureLogs();
+    logSyncFailure({
       message: 'Command failed: wrangler d1 execute',
       stderr: `near cookies='${COOKIE}' password=${SECRET}`,
+    }, [COOKIE, SECRET]);
+
+    const text = logs.text();
+    expectNoCredentials(text);
+    expect(text).toContain('[sync-cookies] FATAL:');
+    expect(text).toContain('[redacted]');
+  });
+
+  it('sanitizes name-enrichment failures that echo tokens and customer text', () => {
+    logs = captureLogs();
+    rememberSecrets(ACCESS, REFRESH);
+    logEnrichFailure({
+      message: 'Command failed: wrangler d1 execute',
+      stderr: `UPDATE manual_requests SET customer_name = '${CUSTOMER}' , access_token = '${ACCESS}'`,
+    });
+
+    const text = logs.text();
+    expectNoCredentials(text);
+    expect(text).toContain('[enrich-names] Error. Skipping.');
+    expect(text).toContain('[redacted]');
+  });
+
+  it('logs a non-401 webhook fetch without the response body secrets', async () => {
+    logs = captureLogs();
+    fetchMock = installFetchMock().on('api/graphql', {
+      status: 500,
+      json: { error: 'server_error', access_token: ACCESS, notes: CUSTOMER },
+    });
+
+    const db = {
+      prepare: () => ({
+        bind: () => ({ run: async () => ({}) }),
+      }),
     };
-    const line = formatLog('[sync-cookies] WARNING: Failed to write cookies to remote D1.', err, [COOKIE, SECRET]);
-    expect(line).toContain('Failed to write cookies');
-    expect(line).toContain('[redacted]');
-    expect(line).not.toContain(COOKIE);
-    expect(line).not.toContain(SECRET);
-    expect(line).not.toContain(SECRET.slice(-8));
+    const service = new JobberWebhookService(db as unknown as D1Database, activityLog(), {
+      accessToken: ACCESS,
+      clientSecret: SECRET,
+      clientId: 'jobber-client-id',
+      refreshToken: REFRESH,
+    });
+
+    await service.processWebhook({
+      data: {
+        webHookEvent: {
+          topic: 'REQUEST_CREATE',
+          appId: 'app',
+          accountId: 'account',
+          itemId: 'request-1',
+          occurredAt: '2026-01-01T00:00:00Z',
+        },
+      },
+    });
+
+    const text = logs.text();
+    expectNoCredentials(text);
+    expect(text).toContain('operation=fetchRequestDetail');
+    expect(text).toContain('http=500');
+    expect(text).toContain('server_error');
+  });
+
+  it('sanitizes browser cookie-refresh failures', async () => {
+    logs = captureLogs();
+    const email = 'owner-EMAIL8unique-jobber@example.com';
+    const password = 'jobber-web-PASSWORD9UNIQUEloginSFXPP88';
+    const apiToken = 'cf-api-TOKEN6UNIQUEcloudflareSFXCF44';
+    fetchMock = installFetchMock().on('browser-rendering', {
+      status: 403,
+      json: {
+        error: 'forbidden',
+        authorization: `Bearer ${apiToken}`,
+        password,
+        email,
+      },
+    });
+    const db = {
+      prepare: () => ({
+        first: async () => null,
+        run: async () => ({}),
+      }),
+    };
+    const refresher = new JobberCookieRefresher(db as unknown as D1Database, {
+      email,
+      password,
+      accountId: 'acct',
+      apiToken,
+    });
+
+    const result = await refresher.refresh();
+    const text = `${logs.text()}\n${result.error ?? ''}`;
+    expectNoCredentials(text);
+    expect(text).not.toContain(password);
+    expect(text).not.toContain(apiToken);
+    expect(text).not.toContain(email);
+    expect(text).toContain('operation=createBrowserSession');
+    expect(text).toContain('http=403');
+    expect(text).toContain('refreshSucceeded=false');
+    expect(text).toContain('forbidden');
+  });
+
+  it('sanitizes activity-log write failures', async () => {
+    logs = captureLogs();
+    const log = activityLog();
+    vi.mocked(log.log).mockRejectedValue(new Error(`activity insert failed ${ACCESS}`));
+    const client = new JobberIntegration(log, {
+      clientId: 'jobber-client-id',
+      clientSecret: SECRET,
+      accessToken: ACCESS,
+      refreshToken: REFRESH,
+      apiUrl: 'https://api.getjobber.com/api/graphql',
+    });
+    vi.spyOn(client, 'graphqlRequest').mockRejectedValue(new Error(`upstream ${ACCESS}`));
+
+    await client.fetchCustomerRequests();
+
+    const text = logs.text();
+    expectNoCredentials(text);
+    expect(text).toContain('activity log write failed');
+    expect(text).toContain('operation=fetchCustomerRequests');
+    expect(log.log).toHaveBeenCalledWith(expect.objectContaining({
+      description: expect.not.stringContaining(ACCESS),
+    }));
+  });
+
+  it('sanitizes quote-save failures after a Jobber quote is created', async () => {
+    logs = captureLogs();
+    const client = integration();
+    vi.spyOn(client, 'graphqlRequest')
+      .mockResolvedValueOnce({
+        request: { id: 'req-1', client: { id: 'client-1', clientProperties: { nodes: [{ id: 'prop-1' }] } } },
+      })
+      .mockResolvedValueOnce({
+        quoteCreate: {
+          quote: { id: 'jq-1', quoteNumber: 'Q-9', quoteStatus: 'draft', jobberWebUri: 'https://example.test/q' },
+          userErrors: [],
+        },
+      });
+    const db = {
+      prepare: () => ({
+        bind: () => ({
+          run: async () => {
+            throw new Error(`D1 write failed ${ACCESS}`);
+          },
+        }),
+      }),
+    };
+    const draft = {
+      id: 'draft-1',
+      draftNumber: 1,
+      userId: 'user-1',
+      customerRequestText: CUSTOMER,
+      selectedTemplateId: null,
+      selectedTemplateName: null,
+      lineItems: [],
+      unresolvedItems: [],
+      jobberRequestId: 'req-1',
+      status: 'draft',
+      customerNote: null,
+      depositSchedule: null,
+    } as QuoteDraft;
+    const service = new JobberQuotePushService(db as unknown as D1Database, client);
+
+    await expect(service.pushToJobber(draft)).rejects.toThrow(/duplicate/);
+
+    const text = logs.text();
+    expectNoCredentials(text);
+    expect(text).toContain('operation=pushToJobber');
+    expect(text).toContain('persist failed');
   });
 });

@@ -131,8 +131,10 @@ export class JobberCookieRefresher {
         { method: 'PUT', headers: this.authHeaders() },
       );
       if (!tabResp.ok) {
+        const summary = summarizeUpstreamBody(await tabResp.text(), [this.apiToken, this.email, this.password]);
         await this.markRefreshFailed();
-        return { success: false, error: `Failed to open tab (${tabResp.status})` };
+        console.error(`[JobberCookieRefresher] refresh failed operation=openLoginTab http=${tabResp.status} refreshSucceeded=false ${summary}`);
+        return { success: false, error: `Failed to open tab (${tabResp.status}): ${summary}` };
       }
       const tabData = await tabResp.json() as { id: string; webSocketDebuggerUrl: string };
       const pageWsUrl = tabData.webSocketDebuggerUrl;

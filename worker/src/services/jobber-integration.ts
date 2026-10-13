@@ -764,6 +764,7 @@ export class JobberIntegration {
         ? `Jobber API request timed out during ${operation}`
         : `Jobber API error during ${operation}: ${err instanceof Error ? err.message : 'Unknown error'}`,
     );
+    console.error(`[JobberIntegration] ${operation} failed ${description}`);
 
     try {
       await this.activityLog.log({
@@ -775,7 +776,7 @@ export class JobberIntegration {
         recommendedAction: 'Check Jobber API credentials and connectivity. Using manual fallback mode.',
       });
     } catch (logErr) {
-      console.error('Failed to write to activity log:', logErr);
+      console.error(`[JobberIntegration] activity log write failed operation=${operation} ${this.safe(logErr instanceof Error ? logErr.message : logErr)}`);
     }
   }
 }

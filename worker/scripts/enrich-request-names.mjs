@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Enrich manual_requests with real customer names and request details from Jobber.
  *
@@ -17,10 +16,30 @@ import { execSync } from 'child_process';
 import { writeFileSync, unlinkSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { formatLog, sanitizeLogText, summarizeUpstreamBody } from '../src/services/jobber-log-sanitize.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const knownSecrets = [];
+
+export function rememberSecrets(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length >= 8 && !knownSecrets.includes(value)) {
+      knownSecrets.push(value);
+    }
+  }
+}
+
+function redactSqlLiterals(text) {
+  return text.replace(/'(?:''|[^'])*'/g, "'[redacted]'");
+}
+
+/** Log an enrich-names failure without tokens, cookies, or customer text from SQL. */
+export function logEnrichFailure(err, secrets = knownSecrets) {
+  const cleaned = redactSqlLiterals(sanitizeLogText(err, secrets));
+  console.log(formatLog('[enrich-names] Error. Skipping.', cleaned, secrets));
+  return cleaned;
+}
 const API_URL = 'https://api.getjobber.com/api/graphql';
 const TOKEN_URL = 'https://api.getjobber.com/api/oauth/token';
 
@@ -43,6 +62,8 @@ function execSQL(sql) {
   try {
     writeFileSync(tmpFile, sql, 'utf8');
     run(`npx wrangler d1 execute DB --local --file "${tmpFile}"`);
+  } catch (err) {
+    throw new Error(redactSqlLiterals(sanitizeLogText(err, knownSecrets)));
   } finally {
     try { unlinkSync(tmpFile); } catch {}
   }
@@ -76,6 +97,7 @@ async function refreshToken(accessToken, refreshToken) {
   const envVars = loadEnvVars();
   const clientId = envVars.JOBBER_CLIENT_ID;
   const clientSecret = envVars.JOBBER_CLIENT_SECRET;
+  rememberSecrets(clientId, clientSecret, accessToken, refreshToken);
 
   if (!clientId || !clientSecret) {
     console.log('[enrich-names] JOBBER_CLIENT_ID or JOBBER_CLIENT_SECRET not found in .dev.vars. Skipping refresh.');
@@ -210,6 +232,7 @@ async function main() {
 
   let accessToken = tokens[0].access_token;
   const storedRefreshToken = tokens[0].refresh_token;
+  rememberSecrets(accessToken, storedRefreshToken);
 
   if (!accessToken) {
     console.log('[enrich-names] Empty Jobber access token. Skipping.');
@@ -283,7 +306,15 @@ async function main() {
   console.log(`[enrich-names] Updated ${updated} manual_requests with real customer names.`);
 }
 
-main().catch(err => {
-  console.log(formatLog('[enrich-names] Error. Skipping.', err instanceof Error ? err.message : err));
-  process.exit(0);
-});
+function invokedDirectly() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  return import.meta.url === pathToFileURL(entry).href;
+}
+
+if (invokedDirectly()) {
+  main().catch(err => {
+    logEnrichFailure(err);
+    process.exit(0);
+  });
+}

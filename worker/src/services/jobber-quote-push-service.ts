@@ -191,8 +191,7 @@ export class JobberQuotePushService {
       await this.persistPushResult(draft.id, result.jobberQuoteId, result.jobberQuoteNumber, result.jobberQuoteWebUri);
     } catch (err) {
       console.error(
-        `[JobberQuotePushService] Quote ${result.jobberQuoteNumber} (${result.jobberQuoteId}) was created in Jobber but persisting to draft ${draft.id} failed:`,
-        err,
+        `[JobberQuotePushService] persist failed operation=pushToJobber quoteNumber=${result.jobberQuoteNumber} draftId=${draft.id} ${sanitizeLogText(err instanceof Error ? err.message : err)}`,
       );
       throw new PlatformError({
         severity: 'error',
