@@ -214,10 +214,12 @@ function consentPage(txId: string, email: string): string {
 <style>
   body { font-family: Georgia, serif; margin: 2rem auto; max-width: 40rem; background: #faf7f2; color: #1c1917; }
   header, form .row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+  header p { margin: 0; }
   button { font: inherit; padding: 0.4rem 0.8rem; }
+  button[value="allow"] { background: #1c1917; color: #faf7f2; border: 0; }
 </style></head>
 <body>
-  <header><h1>Connect the assistant</h1><p>Read only</p></header>
+  <header><h1>Connect the assistant</h1><p>Allow read access</p></header>
   <p>Signed in as ${escapeHtml(email)}. This allows an assistant to read Jobber requests and quotes for your Cotiza user. It cannot create, edit, send, or delete records.</p>
   <form method="post" action="/oauth/authorize">
     <input type="hidden" name="tx" value="${escapeHtml(txId)}">
@@ -229,30 +231,52 @@ function consentPage(txId: string, email: string): string {
 </body></html>`;
 }
 
-function loginPage(txId: string, error = ''): string {
+function loginPage(txId: string, error = '', email = ''): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Connect the assistant</title>
 <style>
   body { font-family: Georgia, serif; margin: 2rem auto; max-width: 40rem; background: #faf7f2; color: #1c1917; }
-  header, form .row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-  input, button { font: inherit; padding: 0.4rem 0.8rem; }
+  header, form .row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  form .row label { display: flex; align-items: center; gap: 0.5rem; flex: 1; }
+  input { font: inherit; padding: 0.4rem 0.8rem; flex: 1; min-width: 16rem; }
+  button { font: inherit; padding: 0.4rem 0.8rem; }
+  header p, p.error { margin: 0; }
+  p.error { margin-top: 0.75rem; }
 </style></head>
 <body>
   <header><h1>Connect the assistant</h1><p>Chicago Reno email</p></header>
-  ${error ? `<p>${escapeHtml(error)}</p>` : ''}
+  ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
   <form method="post" action="/oauth/authorize">
     <input type="hidden" name="tx" value="${escapeHtml(txId)}">
     <div class="row">
-      <label>Email <input name="email" type="email" autocomplete="username" required></label>
+      <label>Email <input name="email" type="email" autocomplete="email" required value="${escapeHtml(email)}"></label>
       <button type="submit">Continue</button>
     </div>
   </form>
+  <script>
+    document.querySelector('form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const response = await fetch(form.action, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams(new FormData(form)),
+      });
+      document.open();
+      document.write(await response.text());
+      document.close();
+    });
+  </script>
 </body></html>`;
 }
 
-async function readForm(request: Request): Promise<URLSearchParams> {
-  const text = await request.text();
-  return new URLSearchParams(text);
+async function readForm(req: { parseBody: () => Promise<Record<string, string | File>> }): Promise<URLSearchParams> {
+  const parsed = await req.parseBody();
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(parsed)) {
+    if (typeof value === 'string') params.set(key, value);
+  }
+  return params;
 }
 
 export function createOpsAssistantApp(directoryFor?: (db: D1Database) => AssistantDirectory) {
@@ -336,7 +360,7 @@ export function createOpsAssistantApp(directoryFor?: (db: D1Database) => Assista
   });
 
   app.post('/oauth/authorize', async (c) => {
-    const form = await readForm(c.req.raw);
+    const form = await readForm(c.req);
     const tx = form.get('tx') || '';
     const directory = directoryOf(c.env.DB);
     const payload = await directory.loadTx(tx);
@@ -379,6 +403,9 @@ export function createOpsAssistantApp(directoryFor?: (db: D1Database) => Assista
       return c.redirect(back.toString());
     }
     const email = (form.get('email') || '').trim();
+    if (!email) {
+      return c.html(loginPage(tx, 'Type your email, then press Continue.'));
+    }
     try {
       const auth = new AuthService(c.env.DB);
       const session = await auth.initiateAuth(email);
@@ -389,15 +416,15 @@ export function createOpsAssistantApp(directoryFor?: (db: D1Database) => Assista
     } catch (err) {
       const message = err instanceof Error ? err.message : '';
       if (/chicago-reno\.com/i.test(message)) {
-        return c.html(loginPage(tx, 'Use a @chicago-reno.com email.'), 400);
+        return c.html(loginPage(tx, 'That email has to end with @chicago-reno.com.', email));
       }
       console.error('[ops-assistant] sign-in failed', message.slice(0, 180));
-      return c.html(loginPage(tx, 'Sign-in did not finish. Try again.'), 500);
+      return c.html(loginPage(tx, 'Sign-in did not finish. Try again.', email));
     }
   });
 
   app.post('/oauth/token', async (c) => {
-    const form = await readForm(c.req.raw);
+    const form = await readForm(c.req);
     const directory = directoryOf(c.env.DB);
     const resource = form.get('resource') || '';
     if (resource !== mcpResource(c.req.url)) return c.json({ error: 'invalid_target' }, 400);
@@ -465,7 +492,7 @@ export function createOpsAssistantApp(directoryFor?: (db: D1Database) => Assista
   });
 
   app.post('/oauth/revoke', async (c) => {
-    const form = await readForm(c.req.raw);
+    const form = await readForm(c.req);
     const token = form.get('token') || '';
     await directoryOf(c.env.DB).revokeByHash(token);
     return c.body(null, 200);

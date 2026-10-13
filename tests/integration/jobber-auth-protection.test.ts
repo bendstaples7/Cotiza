@@ -8,7 +8,14 @@
 import { createRequire } from 'node:module';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 
-const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
+let DatabaseSync: typeof import('node:sqlite').DatabaseSync | null = null;
+try {
+  DatabaseSync = createRequire(import.meta.url)('node:sqlite').DatabaseSync;
+} catch {
+  DatabaseSync = null;
+}
+
+const describeWithSqlite = DatabaseSync ? describe : describe.skip;
 import { Hono } from 'hono';
 import jobberAuth from '../../worker/src/routes/jobber-auth.js';
 import { errorHandler } from '../../worker/src/middleware/error-handler.js';
@@ -34,6 +41,7 @@ vi.mock('../../worker/src/services/auth-service.js', () => ({
 }));
 
 function createDb() {
+  if (!DatabaseSync) throw new Error('node:sqlite is not available in this Node runtime');
   const sqlite = new DatabaseSync(':memory:');
   sqlite.exec(`
     CREATE TABLE users (
@@ -143,7 +151,7 @@ describe('shared Jobber connection policy', () => {
   });
 });
 
-describe('Jobber connection management auth', () => {
+describeWithSqlite('Jobber connection management auth', () => {
   let fetchMock: FetchMock | null = null;
   let db: TestDb;
 
