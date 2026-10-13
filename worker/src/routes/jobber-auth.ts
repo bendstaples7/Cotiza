@@ -1,94 +1,54 @@
 /**
- * Jobber OAuth Authorization Routes
+ * Jobber OAuth and shared-connection recovery routes.
  *
- * Provides a local OAuth flow to obtain fresh Jobber access/refresh tokens.
- * Hit GET /api/jobber-auth/authorize in your browser to start the flow.
- * The callback exchanges the code for tokens and persists them to D1.
+ * Management routes require a signed-in Chicago Reno user (see
+ * jobber-connection-policy). GET /callback stays public so Jobber can send
+ * the browser back, and it only accepts a one-time state row created by
+ * that user.
  */
 import { Hono } from 'hono';
+import type { User } from 'shared';
 import type { Bindings } from '../bindings.js';
 import { EXTERNAL, getGithubRepo, getCookieRefreshDispatchUrl } from '../config.js';
+import { sessionMiddleware } from '../middleware/session.js';
+import { canManageSharedJobberConnection } from '../services/jobber-connection-policy.js';
 import { JobberTokenStore } from '../services/jobber-token-store.js';
 import { JobberWebSession } from '../services/jobber-web-session.js';
+import { sanitizeLogText, summarizeUpstreamBody } from '../services/jobber-log-sanitize.mjs';
 
-const app = new Hono<{ Bindings: Bindings }>();
+const app = new Hono<{ Bindings: Bindings; Variables: { user: User } }>();
 
 const JOBBER_AUTHORIZE_URL = 'https://api.getjobber.com/api/oauth/authorize';
 const JOBBER_TOKEN_URL = 'https://api.getjobber.com/api/oauth/token';
 const OAUTH_STATE_TTL_MINUTES = 15;
 
-function toBase64Url(bytes: ArrayBuffer): string {
-  const binary = String.fromCharCode(...new Uint8Array(bytes));
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
+/**
+ * Delete a stored state only when it was issued to a manager and is still
+ * inside the TTL. The DELETE is the one-time consume. There is no signed
+ * fallback: a signature alone is not tied to a user and can be replayed.
+ */
+const CONSUME_OAUTH_STATE_SQL = `DELETE FROM oauth_states
+     WHERE id = ?
+       AND datetime(created_at) > datetime('now', '-${OAUTH_STATE_TTL_MINUTES} minutes')
+       AND EXISTS (
+         SELECT 1 FROM users
+         WHERE users.id = oauth_states.user_id
+           AND users.id != 'system'
+           AND lower(users.email) GLOB '*@chicago-reno.com'
+       )
+     RETURNING id`;
 
-async function signOAuthState(secret: string): Promise<string> {
-  const nonce = crypto.randomUUID();
-  const issuedAt = String(Math.floor(Date.now() / 1000));
-  const payload = `${nonce}.${issuedAt}`;
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
-  return `${payload}.${toBase64Url(signature)}`;
-}
-
-async function verifyOAuthState(state: string, secret: string): Promise<boolean> {
-  const parts = state.split('.');
-  if (parts.length !== 3) return false;
-  const [nonce, issuedAtStr, sig] = parts;
-  if (!nonce || !issuedAtStr || !sig) return false;
-
-  const issuedAt = Number(issuedAtStr);
-  if (!Number.isFinite(issuedAt)) return false;
-  if (Date.now() / 1000 - issuedAt > OAUTH_STATE_TTL_MINUTES * 60) return false;
-
-  const payload = `${nonce}.${issuedAtStr}`;
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
-  return sig === toBase64Url(signature);
-}
-
-async function createJobberOAuthState(db: D1Database, clientSecret: string): Promise<string> {
-  const userRow = await db.prepare('SELECT id FROM users ORDER BY created_at ASC LIMIT 1').first<{ id: string }>();
-  if (!userRow?.id) {
-    return signOAuthState(clientSecret);
-  }
-
+async function createJobberOAuthState(db: D1Database, userId: string): Promise<string> {
   const state = crypto.randomUUID();
   await db.prepare(
     "INSERT INTO oauth_states (id, user_id, created_at) VALUES (?, ?, datetime('now'))",
-  ).bind(state, userRow.id).run();
+  ).bind(state, userId).run();
   return state;
 }
 
-async function consumeJobberOAuthState(
-  db: D1Database,
-  state: string,
-  clientSecret: string,
-): Promise<boolean> {
-  const consumed = await db.prepare(
-    `DELETE FROM oauth_states
-     WHERE id = ?
-       AND datetime(created_at) > datetime('now', '-${OAUTH_STATE_TTL_MINUTES} minutes')
-     RETURNING id`,
-  ).bind(state).first<{ id: string }>();
-
-  if (consumed) return true;
-
-  return verifyOAuthState(state, clientSecret);
+async function consumeJobberOAuthState(db: D1Database, state: string): Promise<boolean> {
+  const consumed = await db.prepare(CONSUME_OAUTH_STATE_SQL).bind(state).first<{ id: string }>();
+  return Boolean(consumed?.id);
 }
 
 /** Stable OAuth callback URL — must match a redirect URI registered in the Jobber app. */
@@ -121,9 +81,24 @@ app.use('*', async (c, next) => {
   await next();
 });
 
+// Do not mount session middleware on the whole router. /callback is a browser
+// redirect from Jobber and does not carry the app's Authorization header.
+const managedPaths = ['/authorize', '/trigger-cookie-refresh', '/set-cookies', '/session-cookies/status'] as const;
+for (const path of managedPaths) {
+  app.use(path, sessionMiddleware);
+  app.use(path, async (c, next) => {
+    if (!canManageSharedJobberConnection(c.get('user'))) {
+      return c.json({ error: 'You are not allowed to manage the shared Jobber connection.' }, 403);
+    }
+    await next();
+  });
+}
+
 /**
  * GET /authorize
- * Redirects the user to Jobber's OAuth authorization page.
+ * Starts the Jobber OAuth flow for the signed-in user.
+ * JSON callers receive { authorizationUrl } so the app can navigate there
+ * without putting the session token in the URL. Other callers are redirected.
  */
 app.get('/authorize', async (c) => {
   const clientId = c.env.JOBBER_CLIENT_ID;
@@ -132,9 +107,10 @@ app.get('/authorize', async (c) => {
     return c.json({ error: 'JOBBER_CLIENT_ID and JOBBER_CLIENT_SECRET must be configured' }, 500);
   }
 
+  const user = c.get('user');
   let state: string;
   try {
-    state = await createJobberOAuthState(c.env.DB, clientSecret);
+    state = await createJobberOAuthState(c.env.DB, user.id);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Failed to initialize OAuth flow';
     return c.json({ error: msg }, 500);
@@ -150,6 +126,10 @@ app.get('/authorize', async (c) => {
   authUrl.searchParams.set('scope', 'read:account read:clients read:quotes');
   authUrl.searchParams.set('state', state);
 
+  const accept = c.req.header('accept') || '';
+  if (accept.includes('application/json')) {
+    return c.json({ authorizationUrl: authUrl.toString() });
+  }
   return c.redirect(authUrl.toString());
 });
 
@@ -169,7 +149,8 @@ app.get('/callback', async (c) => {
   // Jobber may redirect back with an error parameter instead of a code
   const jobberError = c.req.query('error');
   if (jobberError) {
-    const desc = c.req.query('error_description') || jobberError;
+    const desc = sanitizeLogText(c.req.query('error_description') || jobberError);
+    console.error(`[jobber-auth] oauth callback failed operation=oauthCallback ${desc}`);
     return c.redirect(frontendUrl + returnPath + '?oauth_error=' + encodeURIComponent(desc));
   }
 
@@ -186,7 +167,7 @@ app.get('/callback', async (c) => {
     return c.redirect(frontendUrl + returnPath + '?oauth_error=' + encodeURIComponent('Server configuration error'));
   }
 
-  if (!state || !(await consumeJobberOAuthState(c.env.DB, state, clientSecret))) {
+  if (!state || !(await consumeJobberOAuthState(c.env.DB, state))) {
     return c.redirect(frontendUrl + returnPath + '?oauth_error=' + encodeURIComponent('Invalid OAuth state'));
   }
 
@@ -208,6 +189,8 @@ app.get('/callback', async (c) => {
   });
 
   if (!response.ok) {
+    const summary = summarizeUpstreamBody(await response.text(), [clientSecret]);
+    console.error(`[jobber-auth] token exchange failed operation=oauthCallback http=${response.status} ${summary}`);
     const errorMsg = `Token exchange failed (${response.status})`;
     return c.redirect(frontendUrl + returnPath + '?oauth_error=' + encodeURIComponent(errorMsg));
   }
@@ -228,8 +211,9 @@ app.get('/callback', async (c) => {
     const tokenStore = new JobberTokenStore(c.env.DB);
     await tokenStore.save(data.access_token, data.refresh_token);
   } catch (saveErr) {
-    const msg = saveErr instanceof Error ? saveErr.message : 'Unknown error saving tokens';
-    return c.redirect(frontendUrl + returnPath + '?oauth_error=' + encodeURIComponent('Failed to save tokens: ' + msg));
+    const msg = sanitizeLogText(saveErr instanceof Error ? saveErr.message : 'Unknown error saving tokens', [data.access_token, data.refresh_token, clientSecret]);
+    console.error(`[jobber-auth] token save failed operation=oauthCallback ${msg}`);
+    return c.redirect(frontendUrl + returnPath + '?oauth_error=' + encodeURIComponent('Failed to save tokens'));
   }
 
   return c.redirect(frontendUrl + returnPath);
@@ -266,7 +250,7 @@ app.post('/trigger-cookie-refresh', async (c) => {
       if (result.synced) {
         return c.json({ triggered: true, message: 'Cookies synced from production. Re-checking now…' });
       }
-      console.warn(`[jobber-auth] Remote sync failed: ${result.error}. Falling back to GitHub workflow.`);
+      console.warn(`[jobber-auth] Remote sync failed operation=syncFromRemote. Falling back to GitHub workflow. ${sanitizeLogText(result.error, [apiToken])}`);
     }
   }
 
@@ -300,8 +284,9 @@ app.post('/trigger-cookie-refresh', async (c) => {
     }
 
     const text = await resp.text();
-    console.error(`[jobber-auth] GitHub workflow dispatch failed (${resp.status}) for repo ${repo}: ${text}`);
-    const detail = text.trim().slice(0, 200);
+    const summary = summarizeUpstreamBody(text, [githubPat]);
+    console.error(`[jobber-auth] GitHub workflow dispatch failed operation=triggerCookieRefresh http=${resp.status} repo=${repo} ${summary}`);
+    const detail = summary;
     const hint = resp.status === 404
       ? ` — verify the repo "${repo}" and workflow "${EXTERNAL.github.cookieRefreshWorkflow}" exist and GITHUB_PAT has workflow scope`
       : '';
@@ -310,8 +295,8 @@ app.post('/trigger-cookie-refresh', async (c) => {
       500,
     );
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[jobber-auth] Failed to trigger workflow:', msg);
+    const msg = sanitizeLogText(err instanceof Error ? err.message : 'Unknown error', [githubPat]);
+    console.error(`[jobber-auth] Failed to trigger workflow operation=triggerCookieRefresh ${msg}`);
     return c.json({ triggered: false, error: msg }, 500);
   }
 });
@@ -339,6 +324,10 @@ app.post('/set-cookies', async (c) => {
 
   const webSession = new JobberWebSession(c.env.DB);
   await webSession.setCookies(cookies.trim());
+
+  if (contentType.includes('application/json')) {
+    return c.json({ saved: true });
+  }
 
   return c.html(`
     <html>
@@ -371,12 +360,8 @@ app.get('/set-cookies', async (c) => {
           <li>Open <a href="https://app.getjobber.com" target="_blank">app.getjobber.com</a> and log in</li>
           <li>Open DevTools (F12) → Console tab</li>
           <li>Run: <code>copy(document.cookie)</code></li>
-          <li>Paste below and submit</li>
+          <li>Paste them into the Refresh Jobber Session screen in the app and save</li>
         </ol>
-        <form method="POST" action="/api/jobber-auth/set-cookies">
-          <textarea name="cookies" rows="6" style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; font-family: monospace; font-size: 0.85rem; box-sizing: border-box;" placeholder="Paste cookies here..."></textarea>
-          <button type="submit" style="margin-top: 0.5rem; padding: 0.5rem 1rem; background: #00a89d; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Save Cookies</button>
-        </form>
       </body>
     </html>
   `);

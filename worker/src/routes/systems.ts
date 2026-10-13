@@ -2,28 +2,13 @@ import { Hono } from 'hono';
 import type { Bindings } from '../bindings.js';
 import type { User, SystemsStatusResponse } from 'shared';
 import { sessionMiddleware } from '../middleware/session.js';
-import { JobberTokenStore } from '../services/jobber-token-store.js';
-import { JobberIntegration, ActivityLogService } from '../services/index.js';
+import { openJobberIntegration } from '../services/jobber-integration.js';
+import { jobberStatusPayload } from '../services/jobber-read.js';
 import { JobberWebSession } from '../services/jobber-web-session.js';
-import { createTimeoutSignal } from '../utils/abort.js';
 
 const app = new Hono<{ Bindings: Bindings; Variables: { user: User } }>();
 
 app.use('*', sessionMiddleware);
-
-const JOBBER_PING_TIMEOUT_MS = 3_000;
-
-async function pingJobber(jobber: JobberIntegration): Promise<boolean> {
-  const { signal, clear } = createTimeoutSignal(JOBBER_PING_TIMEOUT_MS, 'Jobber health check timed out');
-  try {
-    await jobber.graphqlRequest('{ account { name } }', {}, { signal });
-    return jobber.isAvailable();
-  } catch {
-    return false;
-  } finally {
-    clear();
-  }
-}
 
 /**
  * GET /status
@@ -37,32 +22,40 @@ app.get('/status', async (c) => {
   const userId = c.get('user').id;
   const isLocalDev = c.env.ENABLE_LOCAL_SYNC === 'true';
 
-  // ── Jobber OAuth token validity (fail-closed — same in local dev and production) ──
-  let jobberAvailable = false;
+  // ── Jobber live probe (same contract as GET /api/quotes/jobber/status) ──
+  let jobber = {
+    available: false,
+    webhookActive: false,
+    read: {
+      status: 'failed' as const,
+      source: 'none' as const,
+      fetchedAt: null,
+      liveLookupFailed: true,
+      error: { code: 'unavailable' as const, message: 'Jobber is not configured.' },
+    },
+  };
   try {
-    const tokenStore = new JobberTokenStore(db);
-    const tokens = await tokenStore.load();
-    if (tokens) {
-      const activityLog = new ActivityLogService(db);
-      const jobber = new JobberIntegration(activityLog, {
-        clientId: c.env.JOBBER_CLIENT_ID || '',
-        clientSecret: c.env.JOBBER_CLIENT_SECRET || '',
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-        tokenStore,
-      });
-      jobberAvailable = await pingJobber(jobber);
+    let webhookActive = false;
+    try {
+      const result = await db.prepare(
+        `SELECT COUNT(*) as count FROM jobber_webhook_requests WHERE processed_at IS NOT NULL`,
+      ).first() as { count: number } | null;
+      webhookActive = (result?.count ?? 0) > 0;
+    } catch { /* table may not exist yet */ }
 
-      if (jobberAvailable && !isLocalDev) {
-        c.executionCtx.waitUntil(
-          jobber.syncProductCatalog(db, userId).catch(() => {
-            // Sync failure is non-blocking — syncProductCatalog already logs errors internally
-          }),
-        );
-      }
+    const { jobberIntegration } = await openJobberIntegration(db, c.env);
+    const probe = await jobberIntegration.probeLive();
+    jobber = jobberStatusPayload(probe, webhookActive);
+
+    if (jobber.available && !isLocalDev) {
+      c.executionCtx.waitUntil(
+        jobberIntegration.syncProductCatalog(db, userId).catch(() => {
+          // Sync failure is non-blocking — syncProductCatalog already logs errors internally
+        }),
+      );
     }
   } catch {
-    jobberAvailable = false;
+    // keep failed jobber payload above
   }
 
   // ── Jobber web session cookies ──
@@ -117,7 +110,7 @@ app.get('/status', async (c) => {
   }
 
   const response: SystemsStatusResponse = {
-    jobber: { available: jobberAvailable },
+    jobber,
     jobberSession,
     instagram: instagramStatus,
   };

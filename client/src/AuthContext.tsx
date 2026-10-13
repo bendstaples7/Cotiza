@@ -28,7 +28,11 @@ interface AuthState {
 const AuthContext = createContext<AuthState | null>(null);
 
 function evaluateSystemsStatus(response: SystemsStatusResponse): SystemsStatus {
-  if (!response.jobber.available) {
+  const read = response.jobber.read;
+  const jobberDown = !response.jobber.available
+    || read.liveLookupFailed
+    || read.status === 'failed';
+  if (jobberDown) {
     return { state: 'jobber_unavailable' };
   }
   /*

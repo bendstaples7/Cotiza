@@ -322,6 +322,48 @@ export interface JobberRequestNote {
   createdAt: string;
 }
 
+/**
+ * How a Jobber read turned out.
+ * `live` and `empty` are successful calls to the Jobber API.
+ * `cached` is saved data from an earlier success, with no new failure.
+ * `failed` is an unsuccessful read. `records` may still hold fallback data.
+ */
+export type JobberReadStatus = 'live' | 'empty' | 'cached' | 'failed';
+
+/** Where the records in a response came from. */
+export type JobberReadSource = 'live' | 'cache' | 'webhook' | 'stored' | 'mixed' | 'none';
+
+export type JobberReadErrorCode =
+  | 'auth'
+  | 'timeout'
+  | 'throttled'
+  | 'graphql'
+  | 'database'
+  | 'network'
+  | 'unavailable';
+
+export interface JobberReadError {
+  code: JobberReadErrorCode;
+  message: string;
+}
+
+/**
+ * Distinguishes a real empty Jobber response from a failed call and from
+ * saved or cached rows. `liveLookupFailed` stays false for a genuine empty list.
+ */
+export interface JobberReadMeta {
+  status: JobberReadStatus;
+  source: JobberReadSource;
+  /** When the records were fetched, if that time is known. */
+  fetchedAt: string | null;
+  liveLookupFailed: boolean;
+  error: JobberReadError | null;
+}
+
+export interface JobberReadResult<T> extends JobberReadMeta {
+  records: T[];
+}
+
 /** A customer request from Jobber */
 export interface JobberCustomerRequest {
   id: string;

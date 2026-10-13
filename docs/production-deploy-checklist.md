@@ -84,17 +84,14 @@ shows the real reason (missing key / quota / verification) within seconds.
 Verify: click "Refresh Cookies". A 404 now returns a diagnostic `detail`
 snippet and a hint naming the repo/workflow.
 
-## 5. Migrations (D1) — reconcile before renumbering
+## 5. Migrations (D1) — ledger before apply
 
-There are currently **two** migrations numbered `0065`
-(`0065_add_client_name_property_address.sql` and `0065_deposit_payments.sql`).
-A guard test (`tests/unit/migrations-unique-number.test.ts`) allows this single
-known duplicate and fails on any *new* one. Renumbering is deferred until the
-production ledger is confirmed, because renaming an already-applied migration
-makes wrangler re-run it (and the non-idempotent `ALTER`s would then fail).
+Deposit payments was renumbered to `0069_deposit_payments.sql` (it previously
+shared `0065` with another file). If production already applied the old filename
+`0065_deposit_payments.sql`, reconcile `d1_migrations` before deploy so wrangler
+does not re-run the same `ALTER`s under `0069`.
 
-Check whether the 0064/0065 migrations are recorded as applied and whether their
-columns already exist:
+Check recent migrations and schema:
 
 ```bash
 cd worker
@@ -103,17 +100,7 @@ npx wrangler d1 execute cross-poster-db --remote --command "PRAGMA table_info(qu
 npx wrangler d1 execute cross-poster-db --remote --command "SELECT name FROM d1_migrations ORDER BY id"
 ```
 
-Then, depending on what you find:
-
-- **Neither 0065 file is recorded as applied** → safe to renumber. Rename the
-  newer file `0065_add_client_name_property_address.sql` → `0067_...sql`, then
-  remove `'0065'` from `KNOWN_PENDING_DUPLICATES` in
-  `tests/unit/migrations-unique-number.test.ts` so the guard becomes strict.
-- **A 0065 file is recorded as applied** → do **not** rename it. Instead leave
-  the filename and (if needed) make the `ALTER`s idempotent / mark the duplicate
-  applied manually, keeping the allowlist entry.
-- **A column already exists but the migration isn't recorded** → insert the
-  migration row manually so `migrations apply` skips it on the next deploy.
+`tests/unit/migrations-unique-number.test.ts` fails on any duplicate `NNNN_` prefix.
 
 ## 6. Instagram publishing
 

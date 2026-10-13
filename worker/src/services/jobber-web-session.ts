@@ -8,6 +8,7 @@
  * (which uses Puppeteer to log into Jobber and store cookies in D1).
  * This service only reads cookies from D1 and uses them for API calls.
  */
+import { sanitizeLogText, summarizeUpstreamBody } from './jobber-log-sanitize.mjs';
 
 export interface RequestFormData {
   sections: Array<{
@@ -135,7 +136,7 @@ export class JobberWebSession {
 
       return { formData: result.data, sessionExpired: false };
     } catch (err) {
-      console.error('[JobberWebSession] Failed to fetch form data:', err instanceof Error ? err.message : err);
+      console.error(`[JobberWebSession] fetchRequestFormData failed operation=fetchRequestFormData ${sanitizeLogText(err instanceof Error ? err.message : err, cookies ? [cookies] : [])}`);
       return { formData: null, sessionExpired: false };
     }
   }
@@ -168,8 +169,8 @@ export class JobberWebSession {
       const data = await resp.json() as any;
 
       if (data?.errors?.length > 0) {
-        const msg = data.errors.map((e: any) => e.message).join(', ');
-        console.error('[JobberWebSession] GraphQL errors:', msg);
+        const msg = sanitizeLogText(data.errors.map((e: any) => e.message).join(', '), [cookies]);
+        console.error(`[JobberWebSession] queryInternalApi failed operation=queryInternalApi http=${resp.status} ${summarizeUpstreamBody(JSON.stringify({ errors: data.errors }), [cookies])}`);
         if (msg.includes('unauthenticated') || msg.includes('hidden')) {
           return { data: null, authFailed: true };
         }
@@ -256,7 +257,7 @@ export class JobberWebSession {
         const hint = (resp.status === 401 || resp.status === 403)
           ? ' (CLOUDFLARE_API_TOKEN may be expired or lack D1 read permission)'
           : '';
-        return { synced: false, error: `Cloudflare D1 API error (${resp.status})${hint}: ${text.slice(0, 200)}` };
+        return { synced: false, error: sanitizeLogText(`Cloudflare D1 API error (${resp.status})${hint}: ${summarizeUpstreamBody(text, [opts.apiToken])}`, [opts.apiToken]) };
       }
 
       const data = await resp.json() as {
@@ -272,13 +273,13 @@ export class JobberWebSession {
       // Validate top-level D1 API success
       if (!data.success) {
         const msgs = (data.errors ?? []).map((e) => e.message).join(', ');
-        return { synced: false, error: `D1 API error: ${msgs || 'unknown error'}` };
+        return { synced: false, error: sanitizeLogText(`D1 API error: ${msgs || 'unknown error'}`, [opts.apiToken]) };
       }
 
       // Validate query-level success
       if (!data.result?.[0]?.success) {
         const msgs = (data.result?.[0]?.errors ?? []).map((e) => e.message).join(', ');
-        return { synced: false, error: `D1 query error: ${msgs || 'unknown error'}` };
+        return { synced: false, error: sanitizeLogText(`D1 query error: ${msgs || 'unknown error'}`, [opts.apiToken]) };
       }
 
       const rows = data.result[0].results ?? [];
@@ -308,7 +309,7 @@ export class JobberWebSession {
       console.log('[JobberWebSession] Synced cookies from remote D1 to local');
       return { synced: true };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
+      const msg = sanitizeLogText(err instanceof Error ? err.message : 'Unknown error', [opts.apiToken]);
       return { synced: false, error: msg };
     } finally {
       clearTimeout(timeout);

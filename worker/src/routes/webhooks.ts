@@ -3,6 +3,7 @@ import type { Bindings } from '../bindings.js';
 import { JobberWebhookService, type JobberWebhookPayload } from '../services/jobber-webhook-service.js';
 import { JobberTokenStore } from '../services/jobber-token-store.js';
 import { ActivityLogService } from '../services/index.js';
+import { sanitizeLogText } from '../services/jobber-log-sanitize.mjs';
 
 const app = new Hono<{ Bindings: Bindings }>();
 
@@ -65,7 +66,7 @@ app.post('/jobber', async (c) => {
   // Process asynchronously via waitUntil (keeps worker alive after response)
   c.executionCtx.waitUntil(
     webhookService.processWebhook(payload).catch((err) => {
-      console.error('Webhook processing error:', err);
+      console.error(`[webhooks] processWebhook failed operation=processWebhook ${sanitizeLogText(err instanceof Error ? err.message : err)}`);
     })
   );
 

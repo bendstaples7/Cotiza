@@ -23,6 +23,7 @@ import systemsRoutes from './routes/systems.js';
 import dashboardRoutes from './routes/dashboard.js';
 import reviewRoutes from './routes/reviews.js';
 import mediaServeRoutes from './routes/media-serve.js';
+import opsAssistantRoutes from './routes/ops-assistant.js';
 
 const app = new Hono<{ Bindings: Bindings }>();
 
@@ -34,9 +35,15 @@ app.route('/api/webhooks', webhookRoutes);
 
 // CORS – allow the Pages frontend to call the Worker API
 app.use('*', cors({
-  origin: ['https://cotiza-e4h.pages.dev', 'http://localhost:5173', 'http://192.168.0.31:5173'],
+  origin: [
+    'https://cotiza-e4h.pages.dev',
+    'http://localhost:5173',
+    'http://192.168.0.31:5173',
+    'https://chatgpt.com',
+    'https://chat.openai.com',
+  ],
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization'],
+  allowHeaders: ['Content-Type', 'Authorization', 'Accept'],
 }));
 
 // Default 10 MB body size limit for non-upload routes
@@ -155,6 +162,9 @@ app.get('/api/admin/dev-secrets/gmail', async (c) => {
     'Cache-Control': 'no-store',
   });
 });
+
+// Assistant MCP + its own OAuth. Jobber credentials stay on the server.
+app.route('/', opsAssistantRoutes);
 
 // API routes
 app.route('/api/auth', authRoutes);

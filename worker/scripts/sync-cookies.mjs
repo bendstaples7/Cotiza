@@ -19,6 +19,8 @@ import { execSync } from 'child_process';
 import { readFileSync, writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { pathToFileURL } from 'url';
+import { formatLog, sanitizeLogText } from '../src/services/jobber-log-sanitize.mjs';
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
@@ -124,7 +126,7 @@ function writeCookies(cookieString, expiresAt, target) {
       if (target === 'both') {
         // When target is 'both', don't fail the whole script if one target fails
         // (e.g. remote table doesn't exist yet because migrations haven't been deployed)
-        console.warn(`[sync-cookies] WARNING: Failed to write cookies to ${loc} D1: ${err.message || err}`);
+        console.warn(formatLog(`[sync-cookies] WARNING: Failed to write cookies to ${loc} D1.`, err, [cookieString]));
       } else {
         throw err;
       }
@@ -193,6 +195,9 @@ async function loginAndExtractCookies(email, password) {
     console.log(`[sync-cookies] Login successful, extracted ${jobberCookies.length} cookies.`);
 
     return cookieString;
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    throw new Error(sanitizeLogText(raw, [email, password]));
   } finally {
     await browser.close();
   }
@@ -217,7 +222,7 @@ async function validateCookies(cookieString) {
   }
   const testData = await testResp.json();
   if (testData?.errors?.length > 0) {
-    throw new Error(`Cookie validation failed: ${testData.errors[0]?.message}`);
+    throw new Error(sanitizeLogText(`Cookie validation failed: ${testData.errors[0]?.message || 'unknown'}`, [cookieString]));
   }
   if (!testData?.data?.account?.id) {
     throw new Error('Cookie validation failed: no account data returned (cookies may not be authenticated)');
@@ -279,23 +284,40 @@ async function main() {
   console.log(`[sync-cookies] Done. Cookies written to ${target} D1.`);
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((err) => {
-    const msg = err instanceof Error ? err.message : String(err);
-    let target = 'both';
-    try {
-      target = parseTarget(process.argv);
-    } catch {
-      console.error(`[sync-cookies] FATAL: ${msg}`);
+/** Log a cookie-sync failure without cookie values, passwords, or token fragments. */
+export function logSyncFailure(err, extraSecrets = []) {
+  const secrets = [process.env.JOBBER_WEB_EMAIL, process.env.JOBBER_WEB_PASSWORD, ...extraSecrets].filter(Boolean);
+  const msg = sanitizeLogText(err, secrets);
+  console.error(formatLog('[sync-cookies] FATAL:', msg, secrets));
+  return msg;
+}
+
+function invokedDirectly() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  return import.meta.url === pathToFileURL(entry).href;
+}
+
+if (invokedDirectly()) {
+  main()
+    .then(() => process.exit(0))
+    .catch((err) => {
+      const secrets = [process.env.JOBBER_WEB_EMAIL, process.env.JOBBER_WEB_PASSWORD].filter(Boolean);
+      const msg = sanitizeLogText(err, secrets);
+      let target = 'both';
+      try {
+        target = parseTarget(process.argv);
+      } catch {
+        logSyncFailure(err, secrets);
+        process.exit(1);
+        return;
+      }
+      if (target === 'local' && /Could not find Chrome/i.test(msg)) {
+        console.warn('[sync-cookies] Chrome not available — skipping cookie login for local dev.');
+        process.exit(0);
+        return;
+      }
+      logSyncFailure(err, secrets);
       process.exit(1);
-      return;
-    }
-    if (target === 'local' && /Could not find Chrome/i.test(msg)) {
-      console.warn('[sync-cookies] Chrome not available — skipping cookie login for local dev.');
-      process.exit(0);
-      return;
-    }
-    console.error(`[sync-cookies] FATAL: ${msg}`);
-    process.exit(1);
-  });
+    });
+}

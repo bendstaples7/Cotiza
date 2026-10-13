@@ -1,6 +1,22 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { Hono } from 'hono';
 import jobberAuth from '../../worker/src/routes/jobber-auth.js';
+import { errorHandler } from '../../worker/src/middleware/error-handler.js';
 import { installFetchMock, type FetchMock } from '../helpers/fetch-mock.js';
+
+vi.mock('../../worker/src/services/auth-service.js', () => ({
+  AuthService: class {
+    async verifySession() {
+      return {
+        id: 'user-manager',
+        email: 'owner@chicago-reno.com',
+        name: 'Owner',
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        lastActiveAt: new Date('2026-01-01T00:00:00Z'),
+      };
+    }
+  },
+}));
 
 function baseEnv(overrides: Record<string, unknown> = {}) {
   return {
@@ -11,8 +27,15 @@ function baseEnv(overrides: Record<string, unknown> = {}) {
   } as never;
 }
 
-function trigger(env: ReturnType<typeof baseEnv>) {
-  return jobberAuth.request('/trigger-cookie-refresh', { method: 'POST' }, env);
+function trigger(env: ReturnType<typeof baseEnv>, init: RequestInit = {}) {
+  const app = new Hono();
+  app.onError(errorHandler);
+  app.route('/', jobberAuth);
+  const headers = new Headers(init.headers);
+  if (!headers.has('Authorization')) {
+    headers.set('Authorization', 'Bearer test-session');
+  }
+  return app.request('/trigger-cookie-refresh', { ...init, method: 'POST', headers }, env);
 }
 
 describe('POST /trigger-cookie-refresh (production GitHub dispatch)', () => {
@@ -20,6 +43,13 @@ describe('POST /trigger-cookie-refresh (production GitHub dispatch)', () => {
   afterEach(() => {
     fetchMock?.restore();
     fetchMock = null;
+  });
+
+  it('rejects a caller who is not signed in', async () => {
+    fetchMock = installFetchMock();
+    const res = await trigger(baseEnv(), { headers: { Authorization: '' } });
+    expect(res.status).toBe(401);
+    expect(fetchMock.callsTo('api.github.com')).toHaveLength(0);
   });
 
   it('dispatches to the correct repo + workflow and reports success on 204', async () => {

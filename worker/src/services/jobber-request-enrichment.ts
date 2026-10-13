@@ -2,6 +2,7 @@ import { resolveJobberRequestFields, isAbsentStoredValue, isPlaceholderJobberCli
 import type { JobberRequestDisplayFields } from 'shared';
 import type { JobberIntegration } from './jobber-integration.js';
 import { JobberWebSession } from './jobber-web-session.js';
+import { sanitizeLogText } from './jobber-log-sanitize.mjs';
 import type { ManualRequestListRow } from './manual-request-service.js';
 
 /** SQL: treat NULL, blank, and literal "null"/"undefined" as absent. */
@@ -123,8 +124,7 @@ export async function enrichJobberRequest(
       }
     } catch (err) {
       console.warn(
-        '[JobberRequestEnrichment] Public API fetch failed:',
-        err instanceof Error ? err.message : err,
+        `[JobberRequestEnrichment] Public API fetch failed operation=enrichFromPublicApi ${sanitizeLogText(err instanceof Error ? err.message : err)}`,
       );
     }
   }

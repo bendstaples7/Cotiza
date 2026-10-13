@@ -22,6 +22,7 @@ import { execSync } from 'child_process';
 import { writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { formatLog } from '../src/services/jobber-log-sanitize.mjs';
 
 function run(cmd) {
   return execSync(cmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
@@ -54,10 +55,13 @@ function upsertTokens(flag, accessToken, refreshToken) {
   }
 }
 
+let remote = null;
+let local = null;
+
 try {
   console.log('[sync-tokens] Pulling Jobber tokens from production D1...');
 
-  const remote = queryTokens('--remote');
+  remote = queryTokens('--remote');
 
   if (!remote) {
     console.log('[sync-tokens] No tokens in production D1. Skipping.');
@@ -65,7 +69,7 @@ try {
   }
 
   const force = process.argv.includes('--force');
-  const local = queryTokens('--local');
+  local = queryTokens('--local');
 
   if (local && !force) {
     const localTime = Date.parse(String(local.updated_at).replace(' ', 'T') + 'Z') || 0;
@@ -81,6 +85,7 @@ try {
   console.log('[sync-tokens] Pulled tokens from production → local.');
 
 } catch (err) {
-  console.log(`[sync-tokens] Could not reach production D1: ${err.message}. Skipping.`);
+  const secrets = [remote?.access_token, remote?.refresh_token, local?.access_token, local?.refresh_token].filter(Boolean);
+  console.log(formatLog('[sync-tokens] Could not reach production D1. Skipping.', err, secrets));
   process.exit(0);
 }

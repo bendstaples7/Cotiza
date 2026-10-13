@@ -1,10 +1,11 @@
 import { Hono } from 'hono';
 import type { Bindings } from '../bindings.js';
-import type { User, ProductCatalogEntry, QuoteTemplate, JobberCustomerRequest, SimilarQuote, StructuredRule, RuleCondition, RuleAction, TriggerMode, ActionItem, CreateManualRequestPayload, UpdateProductivityRatePayload, DepositSchedule, DraftEmailContextResponse } from 'shared';
+import type { User, ProductCatalogEntry, QuoteTemplate, JobberCustomerRequest, JobberReadMeta, SimilarQuote, StructuredRule, RuleCondition, RuleAction, TriggerMode, ActionItem, CreateManualRequestPayload, UpdateProductivityRatePayload, DepositSchedule, DraftEmailContextResponse } from 'shared';
 import { extractCustomerEmailFromRequestBody, splitEmailContextFromCustomerText, parseEmailMessages } from 'shared';
 import { sessionMiddleware } from '../middleware/session.js';
 import { PlatformError } from '../errors/index.js';
 import { JobberWebSession } from '../services/jobber-web-session.js';
+import { sanitizeLogText } from '../services/jobber-log-sanitize.mjs';
 import {
   QuoteEngine,
   JobberIntegration,
@@ -32,7 +33,9 @@ import {
   prependEmailContextToCustomerText,
 } from '../services/email-context-enrichment.js';
 import { JobberWebhookService } from '../services/jobber-webhook-service.js';
+import { finalizeRequestListRead, jobberReadMeta, jobberStatusPayload } from '../services/jobber-read.js';
 import { JobberTokenStore } from '../services/jobber-token-store.js';
+import { openJobberIntegration } from '../services/jobber-integration.js';
 import { RulesSyncService } from '../services/rules-sync.js';
 import { JobberQuoteImportService } from '../services/jobber-quote-importer.js';
 import { buildJobberImportCustomerContext } from '../services/jobber-import-context.js';
@@ -73,26 +76,19 @@ function mergeActionItems(
 const app = new Hono<{ Bindings: Bindings; Variables: { user: User } }>();
 
 // ── Catalog sync TTL cache ──────────────────────────────────────
-// Track last sync time per user to avoid syncing on every GET /catalog request.
-// Resets on worker cold start, which is acceptable — first request triggers a sync.
-const catalogSyncTimestamps = new Map<string, number>();
+// Remember the last Jobber catalog read so a later response can say it is
+// saved data, including when that read failed. Resets on worker cold start.
+const catalogSyncMemory = new Map<string, { at: number; read: JobberReadMeta }>();
 const CATALOG_SYNC_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function storedCatalogRead(read: JobberReadMeta): JobberReadMeta {
+  return { ...read, source: 'stored' };
+}
 
 // ── Helper: create a JobberIntegration with D1-persisted tokens ──
 
 async function createJobberIntegration(db: D1Database, env: Bindings): Promise<{ jobberIntegration: JobberIntegration; tokenStore: JobberTokenStore; activityLog: ActivityLogService }> {
-  const activityLog = new ActivityLogService(db);
-  const tokenStore = new JobberTokenStore(db);
-  const jobberIntegration = new JobberIntegration(activityLog, {
-    clientId: env.JOBBER_CLIENT_ID || '',
-    clientSecret: env.JOBBER_CLIENT_SECRET || '',
-    accessToken: env.JOBBER_ACCESS_TOKEN || '',
-    refreshToken: env.JOBBER_REFRESH_TOKEN || '',
-    apiUrl: env.JOBBER_API_URL || undefined,
-    tokenStore,
-  });
-  await jobberIntegration.loadPersistedTokens();
-  return { jobberIntegration, tokenStore, activityLog };
+  return openJobberIntegration(db, env);
 }
 
 app.use('*', sessionMiddleware);
@@ -1656,22 +1652,48 @@ app.get('/catalog', async (c) => {
   const userId = c.get('user').id;
   const { jobberIntegration } = await createJobberIntegration(db, c.env);
 
-  // Sync Jobber products into product_catalog if stale (TTL-gated)
-  if (jobberIntegration.isAvailable()) {
-    const lastSync = catalogSyncTimestamps.get(userId) ?? 0;
-    if (Date.now() - lastSync > CATALOG_SYNC_TTL_MS) {
-      try {
-        await jobberIntegration.syncProductCatalog(db, userId);
-        catalogSyncTimestamps.set(userId, Date.now());
-      } catch {
-        // Sync failure is non-blocking — continue with existing catalog data
-      }
+  // Sync Jobber products into product_catalog if the last read is stale.
+  // The catalog rows below are always the saved table. `jobber` says whether
+  // the live lookup just succeeded, was empty, failed, or is being reused.
+  const remembered = catalogSyncMemory.get(userId);
+  let jobber: JobberReadMeta = remembered
+    ? storedCatalogRead(remembered.read.status === 'failed' || remembered.read.liveLookupFailed
+      ? remembered.read
+      : {
+          status: 'cached',
+          source: 'stored',
+          fetchedAt: new Date(remembered.at).toISOString(),
+          liveLookupFailed: false,
+          error: null,
+        })
+    : {
+        status: 'cached',
+        source: 'stored',
+        fetchedAt: null,
+        liveLookupFailed: false,
+        error: null,
+      };
+
+  const lastSync = remembered?.at ?? 0;
+  if (Date.now() - lastSync > CATALOG_SYNC_TTL_MS) {
+    try {
+      const synced = await jobberIntegration.syncProductCatalog(db, userId);
+      jobber = storedCatalogRead(synced.read);
+      catalogSyncMemory.set(userId, { at: Date.now(), read: jobber });
+    } catch {
+      jobber = {
+        status: 'failed',
+        source: 'stored',
+        fetchedAt: remembered ? new Date(remembered.at).toISOString() : null,
+        liveLookupFailed: true,
+        error: { code: 'unavailable', message: 'Jobber catalog sync failed. Showing your saved catalog.' },
+      };
     }
   }
 
   // Unified catalog: always read from product_catalog after sync
   const catalog = await fetchCatalog(db, userId);
-  return c.json({ catalog });
+  return c.json({ catalog, jobber });
 });
 
 /**
@@ -2406,7 +2428,7 @@ app.get('/jobber/requests/:id/form-data', async (c) => {
     }
     // If sessionExpired or no data, fall through to fallback
   } catch (err) {
-    console.warn('[quotes/form-data] Web session fetch failed:', err instanceof Error ? err.message : err);
+    console.warn(`[quotes/form-data] Web session fetch failed operation=fetchRequestFormData ${sanitizeLogText(err instanceof Error ? err.message : err)}`);
   }
 
   // Step 2: Fallback — check D1 for stored webhook/API data
@@ -2547,18 +2569,14 @@ app.get('/jobber/requests', async (c) => {
     }
   }
 
-  let requests: JobberCustomerRequest[] = [];
-  let available = false;
+  const live = await jobberIntegration.fetchCustomerRequests();
+  const requests: JobberCustomerRequest[] = [...live.records];
+  console.log(`[quotes/requests] GraphQL status=${live.status} source=${live.source} count=${live.records.length} liveLookupFailed=${live.liveLookupFailed}`);
 
-  if (jobberIntegration.isAvailable()) {
-    requests = await jobberIntegration.fetchCustomerRequests();
-    available = jobberIntegration.isAvailable();
-    console.log(`[quotes/requests] GraphQL returned ${requests.length} requests, available=${available}`);
-  } else {
-    console.log('[quotes/requests] Jobber API not available, skipping GraphQL call');
-  }
+  let webhookRowsUsed = false;
+  let webhookReadFailed = false;
 
-  // Merge webhook data
+  // Merge webhook data. These rows are saved history, not proof the live API is up.
   try {
     const webhookService = new JobberWebhookService(db, activityLog, {
       accessToken: c.env.JOBBER_ACCESS_TOKEN || '',
@@ -2595,11 +2613,18 @@ app.get('/jobber/requests', async (c) => {
     }
 
     requests.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    if (webhookRequests.length > 0) available = true;
+    webhookRowsUsed = webhookRequests.length > 0;
   } catch (webhookErr) {
+    webhookReadFailed = true;
     console.error('[quotes/requests] Webhook enrichment failed:', webhookErr instanceof Error ? webhookErr.message : webhookErr);
-    // Webhook enrichment is best-effort
   }
+
+  const finalized = finalizeRequestListRead({
+    live: jobberReadMeta(live),
+    responseCount: requests.length,
+    webhookRowsUsed,
+    webhookReadFailed,
+  });
 
   // Background enrichment: identify incomplete requests and fetch full details from Jobber API
   const incomplete = requests.filter(
@@ -2657,14 +2682,14 @@ app.get('/jobber/requests', async (c) => {
 
             console.log(`[quotes/requests] Enriched request ${req.id}`);
           } catch (err) {
-            console.error(`[quotes/requests] Enrichment failed for ${req.id}:`, err instanceof Error ? err.message : err);
+            console.error(`[quotes/requests] Enrichment failed operation=enrichRequest requestId=${req.id} ${sanitizeLogText(err instanceof Error ? err.message : err)}`);
           }
         })
       )
     );
   }
 
-  return c.json({ requests, available });
+  return c.json({ requests, available: finalized.available, read: finalized.read });
 });
 
 /**
@@ -2683,7 +2708,8 @@ app.get('/jobber/status', async (c) => {
     webhookActive = (result?.count ?? 0) > 0;
   } catch { /* table may not exist yet */ }
 
-  return c.json({ available: jobberIntegration.isAvailable() || webhookActive, webhookActive });
+  const probe = await jobberIntegration.probeLive();
+  return c.json(jobberStatusPayload(probe, webhookActive));
 });
 
 /**

@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { MediaItem, JobberCustomerRequest } from 'shared';
+import type { MediaItem, JobberCustomerRequest, JobberReadMeta } from 'shared';
 import { buildJobberCustomerText } from 'shared';
 import { uploadMedia, generateQuote, checkJobberStatus, fetchJobberRequestFormData } from '../api';
 import RequestSelector from './RequestSelector';
@@ -47,14 +47,27 @@ export default function QuoteInputPage() {
   const [dragOver, setDragOver] = useState(false);
   const [jobberAvailable, setJobberAvailable] = useState(false);
   const [jobberChecked, setJobberChecked] = useState(false);
+  const [jobberRead, setJobberRead] = useState<JobberReadMeta | null>(null);
   const [jobberRequestId, setJobberRequestId] = useState<string | null>(null);
   const [hasLoadedFormData, setHasLoadedFormData] = useState(false);
   const [showManualForm, setShowManualForm] = useState(false);
 
   useEffect(() => {
     checkJobberStatus()
-      .then((available) => setJobberAvailable(available))
-      .catch(() => setJobberAvailable(false))
+      .then((status) => {
+        setJobberAvailable(status.available);
+        setJobberRead(status.read);
+      })
+      .catch(() => {
+        setJobberAvailable(false);
+        setJobberRead({
+          status: 'failed',
+          source: 'none',
+          fetchedAt: null,
+          liveLookupFailed: true,
+          error: { code: 'network', message: 'Jobber could not be reached.' },
+        });
+      })
       .finally(() => setJobberChecked(true));
   }, []);
 
@@ -171,15 +184,6 @@ export default function QuoteInputPage() {
     }
   };
 
-  // When Jobber is unavailable, show ManualRequestForm as the primary input method
-  if (jobberChecked && !jobberAvailable) {
-    return (
-      <div style={containerStyle}>
-        <ManualRequestForm />
-      </div>
-    );
-  }
-
   // When user has toggled to manual form mode
   if (showManualForm) {
     return (
@@ -200,18 +204,23 @@ export default function QuoteInputPage() {
     <div style={containerStyle}>
       <h1 style={titleStyle}>New Quote</h1>
 
-      {/* Jobber Request Selector */}
-      {jobberAvailable && (
-        <RequestSelector
-          onSelect={handleRequestSelect}
-          onClear={handleRequestClear}
-          selectedRequestId={jobberRequestId}
-          hasFormData={hasLoadedFormData}
-        />
+      {jobberChecked && jobberRead && (jobberRead.liveLookupFailed || jobberRead.status === 'failed') && (
+        <div style={connectionBannerStyle} role="alert">
+          <span>Jobber could not be reached. Saved requests stay in the list, and you can still type the job below.</span>
+          <span>Connection failed</span>
+        </div>
       )}
 
+      {/* Jobber Request Selector */}
+      <RequestSelector
+        onSelect={handleRequestSelect}
+        onClear={handleRequestClear}
+        selectedRequestId={jobberRequestId}
+        hasFormData={hasLoadedFormData}
+      />
+
       {/* Create Manual Request button */}
-      {jobberAvailable && (
+      {(jobberAvailable || jobberChecked) && (
         <div style={{ marginBottom: '1.25rem' }}>
           <button
             onClick={() => setShowManualForm(true)}
@@ -345,6 +354,19 @@ export default function QuoteInputPage() {
 
 const containerStyle: React.CSSProperties = { maxWidth: 700, margin: '0 auto' };
 const titleStyle: React.CSSProperties = { margin: '0 0 1.5rem', fontSize: '1.5rem' };
+const connectionBannerStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  gap: '1rem',
+  flexWrap: 'wrap',
+  background: '#fff3e0',
+  color: '#6d4c00',
+  padding: '0.75rem 1rem',
+  borderRadius: 6,
+  marginBottom: '1rem',
+  fontSize: '0.9rem',
+};
 
 const labelStyle: React.CSSProperties = {
   display: 'block',
