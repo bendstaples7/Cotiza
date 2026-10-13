@@ -74,10 +74,12 @@ describe('assistant token admin routes', () => {
   it('returns 404 when revoking another user token', async () => {
     configurePrepareResults(db, [{ run: { success: true, meta: { changes: 0 } } }]);
     const app = createOpsAssistantApp();
-    const response = await app.request('http://127.0.0.1:8787/api/assistant/tokens/missing', {
+    const response = await app.request('http://127.0.0.1:8787/api/assistant/tokens/owned-by-another-user', {
       method: 'DELETE',
       headers: { Authorization: 'Bearer cotiza-session' },
     }, env());
     expect(response.status).toBe(404);
+    expect(String(db.prepare.mock.calls[0][0])).toContain('user_id');
+    expect(db._stmts[0].bind).toHaveBeenCalledWith('owned-by-another-user', 'user-a');
   });
 });

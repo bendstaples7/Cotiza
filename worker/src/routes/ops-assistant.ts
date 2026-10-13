@@ -254,17 +254,25 @@ function loginPage(txId: string, error = '', email = ''): string {
     </div>
   </form>
   <script>
-    document.querySelector('form').addEventListener('submit', async (event) => {
+    const form = document.querySelector('form');
+    let submitting = false;
+    form.addEventListener('submit', async (event) => {
       event.preventDefault();
-      const form = event.currentTarget;
-      const response = await fetch(form.action, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams(new FormData(form)),
-      });
-      document.open();
-      document.write(await response.text());
-      document.close();
+      if (submitting) return;
+      submitting = true;
+      form.querySelectorAll('button[type="submit"]').forEach((button) => { button.disabled = true; });
+      try {
+        const response = await fetch(form.action, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams(new FormData(form)),
+        });
+        document.open();
+        document.write(await response.text());
+        document.close();
+      } catch {
+        HTMLFormElement.prototype.submit.call(form);
+      }
     });
   </script>
 </body></html>`;
