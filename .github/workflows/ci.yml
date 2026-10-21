@@ -5,6 +5,16 @@ on:
     branches: [main]
 
 jobs:
+  migration-reconciliation:
+    runs-on: ubuntu-latest
+    name: Verify migration reconciliation
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test tests/unit/deposit-reconciliation.test.mjs
+
   test:
     runs-on: ubuntu-latest
     name: Run Tests
