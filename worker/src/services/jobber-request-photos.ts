@@ -63,7 +63,8 @@ export async function downloadRequestPhoto(attachment: PhotoAttachment) {
   try {
     let response: Response;
     for (let hop = 0; ; hop++) {
-      response = await fetch(url.toString(), { redirect: 'manual', credentials: 'omit', signal: controller.signal });
+      // Workers has no ambient browser cookie jar; no auth/cookie headers are supplied.
+      response = await fetch(url.toString(), { redirect: 'manual', signal: controller.signal });
       if (![301, 302, 303, 307, 308].includes(response.status)) break;
       const location = response.headers.get('location');
       await response.body?.cancel();
