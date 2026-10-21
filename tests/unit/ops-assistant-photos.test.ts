@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OpsAssistantRead } from '../../worker/src/services/ops-assistant-read.js';
-import { downloadRequestPhoto, MAX_PHOTO_BYTES } from '../../worker/src/services/jobber-request-photos.js';
+import { downloadRequestPhoto, photoFailureReason, MAX_PHOTO_BYTES } from '../../worker/src/services/jobber-request-photos.js';
 import { handleMcpPost, readMcpJsonBody } from '../../worker/src/routes/ops-assistant.js';
 import { CallBudget } from '../../worker/src/services/assistant-access.js';
 import { createMockD1 } from './helpers/mock-d1.js';
@@ -38,7 +38,7 @@ describe('assistant request photos', () => {
     expect(JSON.stringify(body)).not.toContain('X-Amz');
     expect(JSON.stringify(db.prepare.mock.calls)).not.toContain('X-Amz');
     expect(jobber.graphqlRequest.mock.calls[0][1]).toEqual({ id: 'req-697', after: 'prior-page' });
-    expect(fetcher.mock.calls[0][1]).toMatchObject({ redirect: 'error' });
+    expect(fetcher.mock.calls[0][1]).toMatchObject({ redirect: 'manual' });
     expect(fetcher.mock.calls[0][1]).not.toHaveProperty('headers');
   });
 
@@ -58,7 +58,7 @@ describe('assistant request photos', () => {
     expect(fetcher).not.toHaveBeenCalled();
     fetcher.mockRejectedValue(new Error(`redirect failed ${signedUrl}`));
     const result = await new OpsAssistantRead(client(), createMockD1() as never).readRequestPhoto('u', { requestId: 'req-697' });
-    expect(result.outcome).toBe('failed');
+    expect(result).toMatchObject({ outcome: 'failed', failure: { code: 'photo_unavailable', reason: 'photo_download_failed' } });
     expect(JSON.stringify(result)).not.toContain('X-Amz');
   });
 
@@ -70,6 +70,36 @@ describe('assistant request photos', () => {
     await expect(downloadRequestPhoto(photo)).rejects.toThrow('unsupported_photo_type');
     fetcher.mockResolvedValueOnce(new Response('html', { headers: { 'content-type': 'image/jpeg' } }));
     await expect(downloadRequestPhoto(photo)).rejects.toThrow('invalid_photo_bytes');
+  });
+
+  it('follows a signed Jobber redirect to S3 without forwarding credentials', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: signedUrl } }))
+      .mockResolvedValueOnce(new Response(jpeg, { headers: { 'content-type': 'image/jpeg' } }));
+    vi.stubGlobal('fetch', fetcher);
+    expect((await downloadRequestPhoto({ ...photo, url: 'https://secure.getjobber.com/rails/active_storage/blobs/redirect/signed/tub.jpg' })).type).toBe('image');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher.mock.calls[1][0]).toBe(signedUrl);
+    for (const [, options] of fetcher.mock.calls) {
+      expect(options).toMatchObject({ redirect: 'manual' });
+      expect(options).not.toHaveProperty('headers');
+    }
+  });
+
+  it('validates each redirect destination and bounds redirect loops', async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(null, { status: 302, headers: { location: 'https://169.254.169.254/metadata' } }));
+    vi.stubGlobal('fetch', fetcher);
+    await expect(downloadRequestPhoto(photo)).rejects.toThrow('unsupported_photo_host');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    fetcher.mockClear().mockImplementation(async () => new Response(null, { status: 302, headers: { location: signedUrl } }));
+    await expect(downloadRequestPhoto(photo)).rejects.toThrow('photo_redirect_limit');
+    expect(fetcher).toHaveBeenCalledTimes(4);
+  });
+
+  it('returns only whitelisted failure reasons, never signed URL errors', async () => {
+    expect(photoFailureReason(new Error(`Failed to fetch ${signedUrl}`))).toBe('photo_download_failed');
+    expect(photoFailureReason(new Error('photo_http_403'))).toBe('photo_http_403');
+    expect(photoFailureReason(new DOMException('aborted', 'AbortError'))).toBe('photo_download_timeout');
   });
 
   it('distinguishes a missing request, empty attachment page and failed lookup', async () => {

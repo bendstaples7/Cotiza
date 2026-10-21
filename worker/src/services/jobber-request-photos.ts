@@ -46,15 +46,36 @@ function safePhotoUrl(value: string): URL {
   return url;
 }
 
-/** Fetch only a fresh Jobber-returned URL; never forward Jobber auth or follow redirects. */
+/** Return safe diagnostics without echoing fetch errors or signed URLs. */
+export function photoFailureReason(error: unknown): string {
+  if (error !== null && typeof error === 'object' && 'name' in error && error.name === 'AbortError') return 'photo_download_timeout';
+  const code = error instanceof Error ? error.message : '';
+  return /^(?:photo_url_missing|unsupported_photo_host|photo_download_failed|unsupported_photo_type|photo_too_large|invalid_photo_bytes|photo_redirect_limit|photo_redirect_missing|photo_http_[45]\d\d)$/.test(code)
+    ? code : 'photo_download_failed';
+}
+
+/** Fetch a fresh Jobber URL; validate every redirect and never forward auth or cookies. */
 export async function downloadRequestPhoto(attachment: PhotoAttachment) {
   if (!attachment.url) throw new Error('photo_url_missing');
-  const url = safePhotoUrl(attachment.url);
+  let url = safePhotoUrl(attachment.url);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
   try {
-    const response = await fetch(url.toString(), { redirect: 'error', signal: controller.signal });
-    if (!response.ok || !response.body) throw new Error('photo_download_failed');
+    let response: Response;
+    for (let hop = 0; ; hop++) {
+      // Workers has no ambient browser cookie jar; no auth/cookie headers are supplied.
+      response = await fetch(url.toString(), { redirect: 'manual', signal: controller.signal });
+      if (![301, 302, 303, 307, 308].includes(response.status)) break;
+      const location = response.headers.get('location');
+      await response.body?.cancel();
+      if (hop >= 3) throw new Error('photo_redirect_limit');
+      if (!location) throw new Error('photo_redirect_missing');
+      url = safePhotoUrl(new URL(location, url).toString());
+    }
+    if (!response.ok || !response.body) {
+      await response.body?.cancel();
+      throw new Error(response.status >= 400 && response.status <= 599 ? `photo_http_${response.status}` : 'photo_download_failed');
+    }
     const mimeType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) throw new Error('unsupported_photo_type');
     if (Number(response.headers.get('content-length')) > MAX_PHOTO_BYTES) {
