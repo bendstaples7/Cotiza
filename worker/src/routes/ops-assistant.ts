@@ -4,6 +4,7 @@ import { sessionMiddleware } from '../middleware/session.js';
 import { AuthService } from '../services/auth-service.js';
 import { ActivityLogService } from '../services/activity-log-service.js';
 import { openJobberIntegration } from '../services/jobber-integration.js';
+import { photoToolContent } from '../services/jobber-request-photos.js';
 import {
   ACCESS_TOKEN_TTL_MS,
   AUTH_CODE_TTL_MS,
@@ -178,7 +179,7 @@ export async function handleMcpPost(request: Request, deps: {
         jsonrpc: '2.0',
         id,
         result: {
-          content: [{ type: 'text', text: JSON.stringify(result) }],
+          content: photoToolContent(result),
           isError: outcome === 'failed' || outcome === 'invalid_request',
         },
       }, 200, headers);

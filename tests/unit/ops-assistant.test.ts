@@ -136,7 +136,7 @@ describe('ops assistant tools', () => {
     expect(response.headers.get('Content-Type')).toContain('text/event-stream');
     const body = await mcpJson(response);
     const names = body.result!.tools!.map((tool) => tool.name);
-    expect(names).toEqual(['find_requests', 'read_request', 'find_quotes', 'read_quote', 'list_request_quotes']);
+    expect(names).toEqual(['read_request_photo', 'find_requests', 'read_request', 'find_quotes', 'read_quote', 'list_request_quotes']);
     const described = body.result!.tools!.map((tool) => `${tool.name} ${tool.description}`).join('\n').toLowerCase();
     expect(described).not.toMatch(/\b(create|delete|mutation|graphql)\b/);
     for (const query of Object.values(ASSISTANT_QUERIES)) {
