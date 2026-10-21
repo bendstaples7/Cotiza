@@ -5,6 +5,7 @@ import { AuthService } from '../services/auth-service.js';
 import { ActivityLogService } from '../services/activity-log-service.js';
 import { openJobberIntegration } from '../services/jobber-integration.js';
 import { photoToolContent } from '../services/jobber-request-photos.js';
+import { PlatformError } from '../errors/index.js';
 import {
   ACCESS_TOKEN_TTL_MS,
   AUTH_CODE_TTL_MS,
@@ -73,7 +74,11 @@ export function readMcpJsonBody(text: string): unknown {
   for (const line of trimmed.split('\n')) {
     if (line.startsWith('data: ')) return JSON.parse(line.slice(6));
   }
-  throw new Error('Unrecognized MCP response body');
+  throw new PlatformError({
+    severity: 'error', component: 'OpsAssistant', operation: 'readMcpJsonBody',
+    description: 'Unrecognized MCP response body',
+    recommendedActions: ['Verify the response contains JSON or an MCP SSE data message.'],
+  });
 }
 
 function mcpEvent(body: unknown, status = 200, extra?: HeadersInit): Response {
