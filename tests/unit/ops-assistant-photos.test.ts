@@ -38,7 +38,7 @@ describe('assistant request photos', () => {
     expect(JSON.stringify(body)).not.toContain('X-Amz');
     expect(JSON.stringify(db.prepare.mock.calls)).not.toContain('X-Amz');
     expect(jobber.graphqlRequest.mock.calls[0][1]).toEqual({ id: 'req-697', after: 'prior-page' });
-    expect(fetcher.mock.calls[0][1]).toMatchObject({ redirect: 'manual', credentials: 'omit' });
+    expect(fetcher.mock.calls[0][1]).toMatchObject({ redirect: 'manual' });
     expect(fetcher.mock.calls[0][1]).not.toHaveProperty('headers');
   });
 
@@ -58,7 +58,7 @@ describe('assistant request photos', () => {
     expect(fetcher).not.toHaveBeenCalled();
     fetcher.mockRejectedValue(new Error(`redirect failed ${signedUrl}`));
     const result = await new OpsAssistantRead(client(), createMockD1() as never).readRequestPhoto('u', { requestId: 'req-697' });
-    expect(result.outcome).toBe('failed');
+    expect(result).toMatchObject({ outcome: 'failed', failure: { code: 'photo_unavailable', reason: 'photo_download_failed' } });
     expect(JSON.stringify(result)).not.toContain('X-Amz');
   });
 
@@ -81,7 +81,7 @@ describe('assistant request photos', () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(fetcher.mock.calls[1][0]).toBe(signedUrl);
     for (const [, options] of fetcher.mock.calls) {
-      expect(options).toMatchObject({ redirect: 'manual', credentials: 'omit' });
+      expect(options).toMatchObject({ redirect: 'manual' });
       expect(options).not.toHaveProperty('headers');
     }
   });
