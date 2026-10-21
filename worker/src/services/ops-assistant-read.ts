@@ -1,7 +1,7 @@
 import type { JobberReadErrorCode, JobberReadResult } from 'shared';
 import { failedJobberRead, liveJobberRead } from './jobber-read.js';
 import { sanitizeLogText } from './jobber-log-sanitize.mjs';
-import { downloadRequestPhoto, loadRequestPhotos } from './jobber-request-photos.js';
+import { downloadRequestPhoto, loadRequestPhotos, photoFailureReason } from './jobber-request-photos.js';
 
 /** One Jobber page per call. Text filters apply only to that page. */
 export const SEARCH_LIMITATIONS = {
@@ -345,9 +345,9 @@ export class OpsAssistantRead {
     try {
       const image = await downloadRequestPhoto(attachment);
       return { outcome: 'ok' as const, ...metadata, attachmentIndex: index, image };
-    } catch {
+    } catch (error) {
       // Do not echo fetch errors: they can contain the signed URL.
-      return { outcome: 'failed' as const, ...metadata, failure: { code: 'photo_unavailable', message: 'The photo could not be displayed (download failure, unsupported format/host, or larger than 4 MiB). Visual review is incomplete; this is not evidence that no photo exists.' } };
+      return { outcome: 'failed' as const, ...metadata, failure: { code: 'photo_unavailable', reason: photoFailureReason(error), message: 'The photo could not be displayed (download failure, unsupported format/host, or larger than 4 MiB). Visual review is incomplete; this is not evidence that no photo exists.' } };
     }
   }
 
