@@ -48,7 +48,7 @@ function safePhotoUrl(value: string): URL {
 
 /** Return safe diagnostics without echoing fetch errors or signed URLs. */
 export function photoFailureReason(error: unknown): string {
-  if (error instanceof Error && error.name === 'AbortError') return 'photo_download_timeout';
+  if (error !== null && typeof error === 'object' && 'name' in error && error.name === 'AbortError') return 'photo_download_timeout';
   const code = error instanceof Error ? error.message : '';
   return /^(?:photo_url_missing|unsupported_photo_host|photo_download_failed|unsupported_photo_type|photo_too_large|invalid_photo_bytes|photo_redirect_limit|photo_redirect_missing|photo_http_[45]\d\d)$/.test(code)
     ? code : 'photo_download_failed';
