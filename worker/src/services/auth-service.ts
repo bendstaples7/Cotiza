@@ -1,3 +1,4 @@
+import { verifyGoogleIdentity } from './google-identity.js';
 import { PlatformError } from '../errors/index.js';
 import type { User } from 'shared';
 
@@ -10,8 +11,9 @@ export class AuthService {
     this.db = db;
   }
 
-  async initiateAuth(email: string): Promise<{ user: User; token: string }> {
-    const trimmedEmail = (email || '').trim().toLowerCase();
+  async initiateAuth(credential: string, nonce?: string, clientId?: string): Promise<{ user: User; token: string }> {
+    const identity = await verifyGoogleIdentity(this.db, credential, nonce, clientId);
+    const trimmedEmail = identity.email;
     if (!trimmedEmail || !trimmedEmail.endsWith('@chicago-reno.com')) {
       throw new PlatformError({
         severity: 'error',

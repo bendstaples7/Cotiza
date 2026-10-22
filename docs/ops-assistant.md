@@ -155,8 +155,15 @@ Jobs, schedules, customer invoices, expense edits/deletes, and broader assistant
 
 
 
-## Release limitations and authentication prerequisite
+## Verified Google sign-in and release configuration
 
-Cotiza's current `AuthService.initiateAuth` accepts a matching email domain without verifying email ownership. This PR reuses that session model; an owner-scoped receipt check or approval is therefore **not proof of verified account identity**. Do not describe it as verified sign-in. Before treating financial receipt access/approval as production-hardened, add verified identity (or explicitly assess and accept the existing trusted-environment authentication model). This implementation does not silently replace the application's login system.
+Both Cotiza login and assistant OAuth consent now require a Google-signed ID token. The server verifies its RS256 signature using Google's fixed JWKS endpoint, issuer, audience, expiry, recent issuance, subject, authorized party when present, verified email, Workspace hosted domain `chicago-reno.com`, and a five-minute, single-use server nonce. Email-only requests fail. The nonce is consumed atomically before any session is created. No Google access or refresh token is requested or stored.
 
-Accounting-code/user/job enumeration is schema-driven and returns unavailable if Jobber does not expose it; optional IDs are not guessed. The review page pauses approval when a selected allocation cannot be resolved. Live permissions, the dedicated bucket provisioning, and the real invoice write must be checked after deployment approval. Attachment read-back remains unavailable in the confirmed public Expense schema.
+Migration 0071 deliberately revokes all existing app sessions, assistant access/refresh tokens, authorization codes, and pending OAuth transactions minted under the old email-only model. Everyone must sign in again; ChatGPT must reconnect. Jobber integration OAuth credentials are untouched.
+
+Before merging/deploying:
+1. In Google Cloud, create a **Web application** OAuth client for Google Identity Services (or configure a suitable existing client). Allow JavaScript origins `https://cotiza-e4h.pages.dev` and `https://social-media-cross-poster.chicago-reno.workers.dev`. Limit the consent audience to the Chicago Reno Workspace where supported. This popup credential flow needs no redirect URI.
+2. Set the GitHub repository Actions variable `GOOGLE_SIGNIN_CLIENT_ID` to that client's public client ID. No new client secret is needed. The worker deployment passes this variable explicitly; a pre-migration gate refuses deployment when missing. For local development set the same worker binding and register your local origins with Google.
+3. Verify Google sign-in on both origins with a real Chicago Reno account. Finish the invoice review/create flow and check the expense and receipt in Jobber. These live checks remain pending; the 20four7VA invoice has not been logged by this PR.
+
+The Jobber schema still cannot read back receipt attachments. The UI reports the URL submission honestly and requires explicit confirmation when replacing an existing expense's single receipt field. Allocation lookup availability and private R2 provisioning must also be validated in production.

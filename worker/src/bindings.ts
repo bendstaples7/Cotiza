@@ -40,6 +40,7 @@ export interface Bindings {
    */
   HEALTHCHECK_KEY?: string;
   /** Gmail API OAuth client ID for email context enrichment. */
+  GOOGLE_SIGNIN_CLIENT_ID?: string;
   GMAIL_CLIENT_ID: string;
   /** Gmail API OAuth client secret for email context enrichment. */
   GMAIL_CLIENT_SECRET: string;

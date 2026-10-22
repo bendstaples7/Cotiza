@@ -479,8 +479,8 @@ describe('oauth client registration', () => {
   });
 });
 
-describe('oauth email step', () => {
-  it('keeps a rejected email on the page', async () => {
+describe('oauth verified identity requirement', () => {
+  it('rejects the former email-only sign-in', async () => {
     const directory = fakeDirectory(null);
     directory.loadTx = async () => JSON.stringify({
       clientId: 'cotiza-ops-local',
@@ -496,9 +496,8 @@ describe('oauth email step', () => {
       body: new URLSearchParams({ tx: 'tx-1', email: 'person@gmail.com' }).toString(),
     }, { DB: {} } as never);
     const html = await response.text();
-    expect(response.status).toBe(200);
-    expect(html).toContain('value="person@gmail.com"');
-    expect(html).toContain('@chicago-reno.com');
+    expect(response.status).toBe(401);
+    expect(html).toContain('Google sign-in failed');
   });
 });
 

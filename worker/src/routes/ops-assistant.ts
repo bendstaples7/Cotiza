@@ -1,3 +1,4 @@
+import { newGoogleChallenge } from '../services/google-identity.js';
 import { expenseOptions } from '../services/assistant-expense-lookups.js';
 import { AssistantReceiptStore, ReceiptInputError, boundedBytes, MAX_RECEIPT_BYTES } from '../services/assistant-receipts.js';
 import { AssistantExpenseCreate, ExpenseInputError, validateExpenseInvoice } from '../services/assistant-expense-create.js';
@@ -245,43 +246,22 @@ function consentPage(txId: string, email: string): string {
 </body></html>`;
 }
 
-function loginPage(txId: string, error = '', email = ''): string {
-  return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Connect the assistant</title>
-<style>
-  body { font-family: Georgia, serif; margin: 2rem auto; max-width: 40rem; background: #faf7f2; color: #1c1917; }
-  header, form .row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
-  form .row label { display: flex; align-items: center; gap: 0.5rem; flex: 1; }
-  input { font: inherit; padding: 0.4rem 0.8rem; flex: 1; min-width: 16rem; }
-  button { font: inherit; padding: 0.4rem 0.8rem; }
-  header p, p.error { margin: 0; }
-  p.error { margin-top: 0.75rem; }
-</style></head>
-<body>
-  <header><h1>Connect the assistant</h1><p>Chicago Reno email</p></header>
-  ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
-  <form method="post" action="/oauth/authorize">
-    <input type="hidden" name="tx" value="${escapeHtml(txId)}">
-    <div class="row">
-      <label>Email <input name="email" type="email" autocomplete="email" required value="${escapeHtml(email)}"></label>
-      <button type="submit">Continue</button>
-    </div>
-  </form>
-  <script>
-    document.querySelector('form').addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const form = event.currentTarget;
-      const response = await fetch(form.action, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams(new FormData(form)),
-      });
-      document.open();
-      document.write(await response.text());
-      document.close();
-    });
-  </script>
-</body></html>`;
+function loginPage(txId: string, clientId: string, nonce: string): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Connect Cotiza</title></head>
+<body><h1>Connect Cotiza</h1><p>Sign in with your Chicago Reno Google account.</p>
+<div id="google-button"></div><p id="error" role="alert"></p>
+<script src="https://accounts.google.com/gsi/client" async defer onload="startGoogle()"></script>
+<script>
+function startGoogle() {
+  google.accounts.id.initialize({client_id:${JSON.stringify(clientId)},nonce:${JSON.stringify(nonce)},callback:async function(response) {
+    const body = new URLSearchParams({tx:${JSON.stringify(txId)}, credential:response.credential, nonce:${JSON.stringify(nonce)}});
+    const result = await fetch('/oauth/authorize', {method:'POST',body});
+    if (!result.ok) { document.getElementById('error').textContent='Sign-in failed. Reload and try again.'; return; }
+    document.open();document.write(await result.text());document.close();
+  }});
+  google.accounts.id.renderButton(document.getElementById('google-button'), {type:'standard',size:'large'});
+}
+</script></body></html>`;
 }
 
 async function readForm(req: { parseBody: () => Promise<Record<string, string | File>> }): Promise<URLSearchParams> {
@@ -370,7 +350,8 @@ export function createOpsAssistantApp(directoryFor?: (db: D1Database) => Assista
       state: params.state || '',
       resource: params.resource,
     }), new Date(Date.now() + 10 * 60 * 1000).toISOString());
-    return c.html(loginPage(tx));
+    if (!c.env.GOOGLE_SIGNIN_CLIENT_ID) return c.text('Google sign-in is not configured.', 503);
+    return c.html(loginPage(tx, c.env.GOOGLE_SIGNIN_CLIENT_ID, await newGoogleChallenge(c.env.DB)));
   });
 
   app.post('/oauth/authorize', async (c) => {
@@ -416,24 +397,16 @@ export function createOpsAssistantApp(directoryFor?: (db: D1Database) => Assista
       if (pending.state) back.searchParams.set('state', pending.state);
       return c.redirect(back.toString());
     }
-    const email = (form.get('email') || '').trim();
-    if (!email) {
-      return c.html(loginPage(tx, 'Type your email, then press Continue.'));
-    }
     try {
-      const auth = new AuthService(c.env.DB);
-      const session = await auth.initiateAuth(email);
+      const session = await new AuthService(c.env.DB).initiateAuth(form.get('credential') || '', form.get('nonce') || '', c.env.GOOGLE_SIGNIN_CLIENT_ID);
       pending.userId = session.user.id;
       pending.email = session.user.email;
+      // Only the OAuth consent is needed here; discard the unused app session.
+      await new AuthService(c.env.DB).logout(session.token);
       await directory.saveTx(tx, JSON.stringify(pending), new Date(Date.now() + 10 * 60 * 1000).toISOString());
       return c.html(consentPage(tx, session.user.email));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : '';
-      if (/chicago-reno\.com/i.test(message)) {
-        return c.html(loginPage(tx, 'That email has to end with @chicago-reno.com.', email));
-      }
-      console.error('[ops-assistant] sign-in failed', message.slice(0, 180));
-      return c.html(loginPage(tx, 'Sign-in did not finish. Try again.', email));
+    } catch {
+      return c.text('Google sign-in failed. Reload the connection link and try again.', 401);
     }
   });
 

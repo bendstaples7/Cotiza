@@ -1,3 +1,4 @@
+import { newGoogleChallenge } from '../services/google-identity.js';
 import { Hono } from 'hono';
 import type { Bindings } from '../bindings.js';
 import { AuthService } from '../services/auth-service.js';
@@ -13,11 +14,21 @@ function getBearerToken(c: { req: { header: (name: string) => string | undefined
  * POST /login
  * Validate email domain and create session.
  */
+app.get('/google-challenge', async (c) => {
+  if (!c.env.GOOGLE_SIGNIN_CLIENT_ID) return c.json({ error: 'Google sign-in is not configured.' }, 503);
+  c.header('Cache-Control', 'no-store');
+  return c.json({ clientId: c.env.GOOGLE_SIGNIN_CLIENT_ID, nonce: await newGoogleChallenge(c.env.DB) });
+});
+
 app.post('/login', async (c) => {
-  const body = await c.req.json() as { email?: string };
-  const authService = new AuthService(c.env.DB);
-  const result = await authService.initiateAuth(body.email ?? '');
-  return c.json({ user: result.user, token: result.token });
+  try {
+    const body = await c.req.json() as { credential?: string; nonce?: string };
+    const result = await new AuthService(c.env.DB).initiateAuth(body?.credential ?? '', body?.nonce, c.env.GOOGLE_SIGNIN_CLIENT_ID);
+    c.header('Cache-Control', 'no-store');
+    return c.json(result);
+  } catch {
+    return c.json({ error: 'Google sign-in failed. Use your Chicago Reno Google account and try again.' }, 401);
+  }
 });
 
 /**
