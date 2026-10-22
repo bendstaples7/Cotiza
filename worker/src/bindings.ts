@@ -1,6 +1,7 @@
 export interface Bindings {
   DB: D1Database;
   R2_BUCKET: R2Bucket;
+  ASSISTANT_RECEIPTS_BUCKET: R2Bucket;
   IMAGE_QUEUE: Queue;
   AI_TEXT_API_KEY: string;
   AI_TEXT_API_URL: string;
@@ -38,7 +39,9 @@ export interface Bindings {
    * the post-deploy CI smoke test). Route is skipped (503) when unset.
    */
   HEALTHCHECK_KEY?: string;
-  /** Gmail API OAuth client ID for email context enrichment. */
+  /** Optional Google Identity Services Web client override; defaults to GMAIL_CLIENT_ID. */
+  GOOGLE_SIGNIN_CLIENT_ID?: string;
+  /** Existing Google OAuth client ID for Gmail enrichment and, when configured for these origins, sign-in. */
   GMAIL_CLIENT_ID: string;
   /** Gmail API OAuth client secret for email context enrichment. */
   GMAIL_CLIENT_SECRET: string;

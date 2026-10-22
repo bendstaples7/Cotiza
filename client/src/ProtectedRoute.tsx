@@ -12,7 +12,7 @@ export default function ProtectedRoute() {
   if (!user) {
     // If the user was on a protected page, they likely had an expired session
     const isExpired = location.pathname !== '/login';
-    return <Navigate to={isExpired ? '/login?expired=1' : '/login'} replace />;
+    return <Navigate to={isExpired ? (location.pathname.startsWith('/expenses/review/') ? '/login?expired=1&returnTo=' + encodeURIComponent(location.pathname + location.search) : '/login?expired=1') : '/login'} replace />;
   }
 
   return <Outlet />;

@@ -1,3 +1,4 @@
+import ExpenseReviewPage from './pages/ExpenseReviewPage';
 import { BrowserRouter, Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom';
 import { AuthProvider } from './AuthContext';
 import { ErrorToastProvider } from './ErrorToast';
@@ -62,6 +63,7 @@ export default function App() {
                 <Route path="/quotes/drafts/:id" element={<QuoteDraftPage />} />
                 <Route path="/quotes/rules" element={<RulesPage />} />
                 <Route path="/quotes/catalog" element={<ManualFallbackPage />} />
+                <Route path="/expenses/review/:id" element={<ExpenseReviewPage />} />
                 <Route path="/quotes/assistant" element={<OpsAssistantPage />} />
               </Route>
             </Route>

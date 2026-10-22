@@ -1,3 +1,6 @@
+import { findExpenses, expenseOptions } from './assistant-expense-lookups.js';
+import { ReceiptInputError, type AssistantReceiptStore } from './assistant-receipts.js';
+import type { AssistantExpenseCreate } from './assistant-expense-create.js';
 import { inspectExpenseCapabilities } from './jobber-expense-capabilities.js';
 import type { JobberReadErrorCode, JobberReadResult } from 'shared';
 import { failedJobberRead, liveJobberRead } from './jobber-read.js';
@@ -314,6 +317,21 @@ export class OpsAssistantRead {
     private readonly db: D1Database,
   ) {}
 
+  async findExpenses(_userId: string, args: unknown) {
+    const raw = objectArgs(args); onlyKeys(raw, ['search', 'cursor']);
+    const search = optionalText(raw, 'search');
+    if (!search) throw new InvalidAssistantArgs('search is required.');
+    const page = pageArgs(raw);
+    const result = await readLive(() => findExpenses(this.jobber, search, page.after ?? undefined));
+    return result.ok ? result.value : result.body;
+  }
+  async expenseOptions(_userId: string, args: unknown) {
+    const raw = objectArgs(args); onlyKeys(raw, ['kind', 'cursor']);
+    if (!['categories', 'jobs', 'users'].includes(String(raw.kind))) throw new InvalidAssistantArgs('kind must be categories, jobs or users.');
+    const page = pageArgs(raw);
+    const result = await readLive(() => expenseOptions(this.jobber, raw.kind as 'categories' | 'jobs' | 'users', page.after ?? undefined));
+    return result.ok ? result.value : result.body;
+  }
   async inspectExpenseCapabilities(_userId: string, args: unknown) {
     onlyKeys(objectArgs(args), []);
     const result = await readLive(() => inspectExpenseCapabilities(this.jobber));
@@ -590,6 +608,41 @@ export class OpsAssistantRead {
 
 export const TOOL_DEFINITIONS = [
   {
+    name: 'stage_expense_receipt',
+    description: 'Privately stage a user-provided PDF or JPEG/PNG/WebP receipt, up to 8 MiB. Use file bytes (contentBase64) or a temporary ChatGPT file sourceUrl. Returns receiptId and a stable receiptReference for files without invoice numbers, never a public bucket URL. Does not write to Jobber. Email attachments can be uploaded as bytes. Never fabricate file bytes or fetch unrelated files.',
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    inputSchema: { type: 'object', additionalProperties: false, required: ['fileName'], properties: { fileName: { type: 'string' }, contentBase64: { type: 'string' }, sourceUrl: { type: 'string' } } },
+  },
+  {
+    name: 'prepare_expense_from_receipt',
+    description: 'Prepare exact expense details for user review. Returns a reviewUrl that the user opens to approve and submit; no Jobber write occurs here. Use the actual invoiceNumber, or the staged receiptReference when no invoice number exists. Use operation=create for a new expense or attach to SET/REPLACE the single receipt on a verified existing targetExpenseId. Attachment cannot be independently read back from the public Jobber API. Do not claim receipt verification. Use category/job/user lookup IDs rather than guessing.',
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    inputSchema: { type: 'object', additionalProperties: false, required: ['supplier', 'invoiceNumber', 'title', 'description', 'date', 'total'], properties: {
+      supplier: { type: 'string' }, invoiceNumber: { type: 'string' }, title: { type: 'string' }, description: { type: 'string' }, date: { type: 'string', description: 'YYYY-MM-DD' }, total: { type: 'number' }, receiptId: { type: 'string' }, receiptUrl: { type: 'string', description: 'Direct Square invoice PDF only; use staged receiptId for other files.' }, operation: { type: 'string', enum: ['create', 'attach'] }, targetExpenseId: { type: 'string' }, accountingCodeId: { type: 'string' }, linkedJobId: { type: 'string' }, reimbursableToId: { type: 'string' },
+    } },
+  },
+  {
+    name: 'find_expenses', description: 'Search existing Jobber expenses to avoid duplicates or select the exact existing expense for a receipt. Follow pagination. Failed lookup is not an empty result. Read-only.',
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    inputSchema: { type: 'object', additionalProperties: false, required: ['search'], properties: { search: { type: 'string' }, cursor: { type: 'string' } } },
+  },
+  {
+    name: 'expense_options', description: 'Read verified Jobber IDs for categories, jobs or reimbursement users. Unsupported schema/permission is explicit; never invent IDs. Follow pagination where returned.',
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    inputSchema: { type: 'object', additionalProperties: false, required: ['kind'], properties: { kind: { type: 'string', enum: ['categories', 'jobs', 'users'] }, cursor: { type: 'string' } } },
+  },
+  {
+    name: 'read_expense_action', description: "Read the current state of this user's prepared expense, including any recorded Jobber ID. Use after approval or an uncertain result. Does not retry writes.",
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    inputSchema: { type: 'object', additionalProperties: false, required: ['authorizationId'], properties: { authorizationId: { type: 'string' } } },
+  },
+  {
+    name: 'create_expense_from_invoice',
+    description: 'Create one expense with its invoice receipt using an unexpired, exact per-invoice authorization made through a Cotiza user session. A read token alone cannot authorize a write. Never retry unknown or review_required outcomes. receiptSubmitted means Jobber accepted receiptUrl; public expense receipt read-back is unavailable.',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    inputSchema: { type: 'object', additionalProperties: false, required: ['authorizationId'], properties: { authorizationId: { type: 'string' } } },
+  },
+  {
     name: 'inspect_expense_capabilities',
     description: 'Inspect the connected public Jobber API schema for expense queries, expense mutations and receipt inputs. Read-only diagnostic; never creates an expense or uploads a file. Missing fields may reflect permissions, not global API availability.',
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
@@ -675,8 +728,33 @@ export const TOOL_DEFINITIONS = [
   },
 ] as const;
 
-export async function callAssistantTool(read: OpsAssistantRead, userId: string, name: string, args: unknown) {
+export async function callAssistantTool(read: OpsAssistantRead, userId: string, name: string, args: unknown, write?: AssistantExpenseCreate, receipts?: AssistantReceiptStore, frontendOrigin?: string) {
   switch (name) {
+    case 'stage_expense_receipt': {
+      const raw = objectArgs(args); onlyKeys(raw, ['fileName', 'contentBase64', 'sourceUrl']);
+      if (!receipts) return { outcome: 'unavailable', message: 'Receipt storage is unavailable.' };
+      try { return { outcome: 'staged', ...await receipts.stageSource(userId, raw) }; }
+      catch (error) { if (error instanceof ReceiptInputError) throw new InvalidAssistantArgs(error.message); throw error; }
+    }
+    case 'prepare_expense_from_receipt': {
+      if (!write || !frontendOrigin) return { outcome: 'unavailable', message: 'Expense preparation is unavailable.' };
+      return write.prepare(userId, objectArgs(args), frontendOrigin);
+    }
+    case 'find_expenses': return read.findExpenses(userId, args);
+    case 'expense_options': return read.expenseOptions(userId, args);
+    case 'read_expense_action': {
+      const raw = objectArgs(args); onlyKeys(raw, ['authorizationId']);
+      const id = requireId(raw, 'authorizationId');
+      if (!write) return { outcome: 'unavailable' };
+      return (await write.review(userId, id)) ?? { outcome: 'not_found' };
+    }
+    case 'create_expense_from_invoice': {
+      const raw = objectArgs(args);
+      onlyKeys(raw, ['authorizationId']);
+      if (typeof raw.authorizationId !== 'string' || !/^[a-f0-9-]{36}$/.test(raw.authorizationId)) throw new InvalidAssistantArgs('authorizationId is not a valid id.');
+      if (!write) return { outcome: 'unauthorized', message: 'An exact per-invoice authorization is required.' };
+      return write.create(userId, raw.authorizationId);
+    }
     case 'inspect_expense_capabilities': return read.inspectExpenseCapabilities(userId, args);
     case 'read_request_photo': return read.readRequestPhoto(userId, args);
     case 'find_requests': return read.findRequests(userId, args);

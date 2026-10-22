@@ -83,11 +83,11 @@ async function handleResponseWithToast<T>(res: Response): Promise<T> {
   return res.json();
 }
 
-export async function login(email: string): Promise<{ user: User; token: string }> {
+export async function login(credential: string): Promise<{ user: User; token: string }> {
   const res = await fetch(API_BASE + '/api/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email }),
+    body: credential,
   });
   return handleResponseWithToast(res);
 }

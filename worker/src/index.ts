@@ -1,3 +1,4 @@
+import { AssistantReceiptStore } from './services/assistant-receipts.js';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { bodyLimit } from 'hono/body-limit';
@@ -190,6 +191,7 @@ export default {
     await handleImageQueue(batch, env);
   },
   async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(new AssistantReceiptStore(env.DB, env.ASSISTANT_RECEIPTS_BUCKET, '').cleanup().catch(() => { console.error('[assistant-receipts] Expired receipt cleanup failed'); }));
     await handleScheduledSync(env, ctx);
   },
 };

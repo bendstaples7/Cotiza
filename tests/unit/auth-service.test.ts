@@ -4,6 +4,8 @@ import type { MockD1Database } from './helpers/mock-d1.js';
 import { AuthService } from '../../worker/src/services/auth-service.js';
 import { PlatformError } from '../../worker/src/errors/platform-error.js';
 
+vi.mock('../../worker/src/services/google-identity.js', () => ({ verifyGoogleIdentity: vi.fn(async (_db, email) => ({ email: email.toLowerCase() })) }));
+
 describe('AuthService', () => {
   let db: MockD1Database;
   let service: AuthService;

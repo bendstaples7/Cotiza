@@ -126,7 +126,7 @@ describe('assistant auth', () => {
 });
 
 describe('ops assistant tools', () => {
-  it('lists only read tools', async () => {
+  it('lists read tools and separately authorized expense tools', async () => {
     const response = await handleMcpPost(mcp('tools/list'), {
       directory: fakeDirectory(principal),
       read: new OpsAssistantRead({ graphqlRequest: vi.fn() }, createMockD1() as never),
@@ -136,8 +136,8 @@ describe('ops assistant tools', () => {
     expect(response.headers.get('Content-Type')).toContain('text/event-stream');
     const body = await mcpJson(response);
     const names = body.result!.tools!.map((tool) => tool.name);
-    expect(names).toEqual(['inspect_expense_capabilities', 'read_request_photo', 'find_requests', 'read_request', 'find_quotes', 'read_quote', 'list_request_quotes']);
-    const described = body.result!.tools!.filter((tool) => tool.name !== 'inspect_expense_capabilities').map((tool) => `${tool.name} ${tool.description}`).join('\n').toLowerCase();
+    expect(names).toEqual(['stage_expense_receipt', 'prepare_expense_from_receipt', 'find_expenses', 'expense_options', 'read_expense_action', 'create_expense_from_invoice', 'inspect_expense_capabilities', 'read_request_photo', 'find_requests', 'read_request', 'find_quotes', 'read_quote', 'list_request_quotes']);
+    const described = body.result!.tools!.filter((tool) => !['stage_expense_receipt', 'prepare_expense_from_receipt', 'create_expense_from_invoice', 'inspect_expense_capabilities'].includes(tool.name)).map((tool) => `${tool.name} ${tool.description}`).join('\n').toLowerCase();
     expect(described).not.toMatch(/\b(create|delete|mutation|graphql)\b/);
     for (const query of Object.values(ASSISTANT_QUERIES)) {
       expect(query.toLowerCase()).not.toContain('mutation');
@@ -479,8 +479,8 @@ describe('oauth client registration', () => {
   });
 });
 
-describe('oauth email step', () => {
-  it('keeps a rejected email on the page', async () => {
+describe('oauth verified identity requirement', () => {
+  it('rejects the former email-only sign-in', async () => {
     const directory = fakeDirectory(null);
     directory.loadTx = async () => JSON.stringify({
       clientId: 'cotiza-ops-local',
@@ -496,9 +496,8 @@ describe('oauth email step', () => {
       body: new URLSearchParams({ tx: 'tx-1', email: 'person@gmail.com' }).toString(),
     }, { DB: {} } as never);
     const html = await response.text();
-    expect(response.status).toBe(200);
-    expect(html).toContain('value="person@gmail.com"');
-    expect(html).toContain('@chicago-reno.com');
+    expect(response.status).toBe(401);
+    expect(html).toContain('Google sign-in failed');
   });
 });
 
