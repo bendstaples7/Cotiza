@@ -24,6 +24,23 @@ describe('expense capability discovery', () => {
     expect(graphqlRequest.mock.calls.some(([, v]) => v?.name === 'ReceiptInput')).toBe(true);
     expect(result.assistantWritesEnabled).toBe(false);
   });
+  it('reaches creation and receipt inputs even when queries expose many pagination types', async () => {
+    const seen: string[] = [];
+    const graphqlRequest = vi.fn(async (_query: string, vars?: Record<string, unknown>): Promise<any> => {
+      if (!vars) return { __schema: {
+        queryType: { fields: Array.from({ length: 20 }, (_, i) => ({ name: `expenseQuery${i}`, type: ref(`Connection${i}`) })) },
+        mutationType: { fields: [{ name: 'expenseCreate', type: ref('ExpenseCreatePayload'), args: [{ name: 'input', type: ref('ExpenseCreateInput') }] }] },
+      } };
+      seen.push(String(vars.name));
+      if (vars.name === 'ExpenseCreateInput') return { __type: {
+        name: 'ExpenseCreateInput', kind: 'INPUT_OBJECT', inputFields: [{ name: 'receipt', type: ref('ReceiptInput') }],
+      } };
+      return { __type: null };
+    });
+    await inspectExpenseCapabilities({ graphqlRequest });
+    expect(seen.slice(0, 2)).toEqual(['ExpenseCreateInput', 'ReceiptInput']);
+    expect(seen).not.toContain('Connection0');
+  });
   it('does not mistake denied introspection for an empty capability list', async () => {
     await expect(inspectExpenseCapabilities({ graphqlRequest: vi.fn().mockResolvedValue({}) })).rejects.toThrow('unavailable');
     const read = new OpsAssistantRead({ graphqlRequest: vi.fn().mockRejectedValue(new Error('denied')) }, {} as never);

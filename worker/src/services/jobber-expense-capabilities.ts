@@ -36,9 +36,11 @@ export async function inspectExpenseCapabilities(jobber: JobberReadClient) {
   if (!root?.__schema?.queryType?.fields) throw new Error('Jobber schema introspection unavailable.');
   const queries = root.__schema.queryType.fields.filter(field => /expense/i.test(field.name)).map(publicField);
   const mutations = (root.__schema.mutationType?.fields ?? []).filter(field => /expense/i.test(field.name)).map(publicField);
-  const pending = ['Expense', ...[...queries, ...mutations].flatMap(field => [
-    named(field.type), ...(field.args ?? []).map(arg => named(arg.type)),
-  ])].filter((name): name is string => Boolean(name));
+  // Prioritize creation and receipt contracts; query pagination/scalar types must
+  // not exhaust the budget before the write input can be inspected.
+  const pending = ['ExpenseCreateInput', 'ExpenseCreatePayload', 'Expense',
+    ...mutations.flatMap(field => (field.args ?? []).map(arg => named(arg.type))),
+  ].filter((name): name is string => Boolean(name));
   const visited = new Set<string>();
   const types: SchemaType[] = [];
   // Inspect expense inputs/payloads and their nested inputs, with a strict upstream call cap.
@@ -54,7 +56,7 @@ export async function inspectExpenseCapabilities(jobber: JobberReadClient) {
     types.push({ name: type.name, kind: type.kind, ...(fields ? { fields } : {}), ...(inputFields ? { inputFields } : {}) });
     for (const field of [...(inputFields ?? []), ...(fields ?? []).filter(field => /expense|receipt|attachment|file/i.test(field.name))]) {
       const child = named(field.type);
-      if (child && !visited.has(child) && child !== name) pending.push(child);
+      if (child && !visited.has(child) && child !== name && !['String', 'Int', 'Float', 'Boolean', 'EncodedId', 'ISO8601DateTime'].includes(child)) pending.unshift(child);
     }
   }
   return {
