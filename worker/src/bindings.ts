@@ -1,6 +1,7 @@
 export interface Bindings {
   DB: D1Database;
   R2_BUCKET: R2Bucket;
+  ASSISTANT_RECEIPTS_BUCKET: R2Bucket;
   IMAGE_QUEUE: Queue;
   AI_TEXT_API_KEY: string;
   AI_TEXT_API_URL: string;

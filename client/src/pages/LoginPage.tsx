@@ -30,7 +30,8 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       await login(trimmed);
-      navigate('/dashboard', { replace: true });
+      const returnTo = searchParams.get('returnTo');
+      navigate(returnTo && /^\/expenses\/review\/[a-f0-9-]{36}$/.test(returnTo) ? returnTo : '/dashboard', { replace: true });
     } catch {
       // error is set in AuthContext
     } finally {

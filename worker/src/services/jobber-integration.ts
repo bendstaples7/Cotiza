@@ -575,7 +575,9 @@ export class JobberIntegration {
 
   /** Mutations are sent once. Never retry a timeout or uncertain result. */
   async graphqlMutation<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
-    const result = await this.executeGraphql<T>(query, variables);
+    let result = await this.executeGraphql<T>(query, variables);
+    // An HTTP 401 is a definitive rejection, not an uncertain mutation result.
+    if (result.status === 401 && this.refreshToken && await this.refreshAccessToken()) result = await this.executeGraphql<T>(query, variables);
     if (result.status !== undefined || result.throttled || !result.data) {
       throw new Error('Jobber mutation was not accepted. Do not retry automatically.');
     }
