@@ -1,3 +1,4 @@
+import type { AssistantExpenseCreate } from './assistant-expense-create.js';
 import { inspectExpenseCapabilities } from './jobber-expense-capabilities.js';
 import type { JobberReadErrorCode, JobberReadResult } from 'shared';
 import { failedJobberRead, liveJobberRead } from './jobber-read.js';
@@ -590,6 +591,12 @@ export class OpsAssistantRead {
 
 export const TOOL_DEFINITIONS = [
   {
+    name: 'create_expense_from_invoice',
+    description: 'Create one expense with its invoice receipt using an unexpired, exact per-invoice authorization made through a Cotiza user session. A read token alone cannot authorize a write. Never retry unknown or review_required outcomes. receiptSubmitted means Jobber accepted receiptUrl; public expense receipt read-back is unavailable.',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    inputSchema: { type: 'object', additionalProperties: false, required: ['authorizationId'], properties: { authorizationId: { type: 'string' } } },
+  },
+  {
     name: 'inspect_expense_capabilities',
     description: 'Inspect the connected public Jobber API schema for expense queries, expense mutations and receipt inputs. Read-only diagnostic; never creates an expense or uploads a file. Missing fields may reflect permissions, not global API availability.',
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
@@ -675,8 +682,14 @@ export const TOOL_DEFINITIONS = [
   },
 ] as const;
 
-export async function callAssistantTool(read: OpsAssistantRead, userId: string, name: string, args: unknown) {
+export async function callAssistantTool(read: OpsAssistantRead, userId: string, name: string, args: unknown, write?: AssistantExpenseCreate) {
   switch (name) {
+    case 'create_expense_from_invoice': {
+      const raw = objectArgs(args);
+      onlyKeys(raw, ['authorizationId']);
+      if (!write) return { outcome: 'unauthorized', message: 'An exact per-invoice authorization is required.' };
+      return write.create(userId, raw.authorizationId);
+    }
     case 'inspect_expense_capabilities': return read.inspectExpenseCapabilities(userId, args);
     case 'read_request_photo': return read.readRequestPhoto(userId, args);
     case 'find_requests': return read.findRequests(userId, args);
