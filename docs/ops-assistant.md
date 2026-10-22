@@ -28,7 +28,19 @@ Notes and quote messages are marked untrusted. Attachment **download URLs are no
 
 A Jobber failure uses the same read contract as the rest of Cotiza (`docs/jobber-read-contract.md`): `read.status` is `failed`, `read.liveLookupFailed` is true, and `read.error.code` is one of `auth`, `timeout`, `throttled`, `graphql`, `network`, or `unavailable`. An empty page is `read.status: "empty"` with `liveLookupFailed: false`. A missing id is `outcome: "not_found"` and is not a failed read. The error text sent to the assistant is shortened and scrubbed.
 
+## Expense integration discovery (22 Oct 2026)
+
+`inspect_expense_capabilities` uses the existing server-side public Jobber connection to inspect expense-related query/mutation signatures and their input/receipt types. It takes no arguments and never runs a mutation, downloads an invoice, uploads a receipt, changes scopes, or exposes credentials. It makes at most 13 read-only schema requests. Missing or denied introspection is an explicit failed read; absent mutations may indicate scope restrictions and do not prove global API unavailability.
+
+This is the prerequisite for implementing invoice-to-expense writes. After deployment, call the diagnostic with the existing assistant connection. Use the returned exact mutation/input schema to implement expense creation and receipt attachment. If fields are hidden, verify the app's expense permissions in Developer Center before drawing conclusions. Do not start a new GraphiQL OAuth session against the production admin: Jobber documents that doing so invalidates that admin/app refresh token.
+
+Expense creation and attachments are **not implemented** by this change. Existing `ops:read` grants must not silently become write grants. The subsequent write implementation needs separately consented expense scope, duplicate prevention keyed by source invoice, explicit partial/unknown outcomes, no automatic mutation retry after an uncertain response, attachment validation, and read-back verification. Confirm receipt support separately from generic note attachments; a note attachment is not an expense receipt.
+
+Source: https://developer.getjobber.com/docs/getting_started/ and https://developer.getjobber.com/docs/ (checked 22 Oct 2026).
+
 ## Tools
+
+- `inspect_expense_capabilities` — bounded, read-only schema inspection for the connected app's expense and receipt API contracts.
 
 - `find_requests` — customer, title, status, dates, cursor
 - `read_request` — one request, notes, attachment names
