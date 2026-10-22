@@ -119,11 +119,11 @@ A local run of `scripts/ops-assistant-exercise.mjs` on 13 Oct 2026 did use the r
 
 2. Start the worker the way you usually do (`npm run dev:worker` from the repo root).
 
-3. Run the same sign-in ChatGPT uses (authorization code and PKCE), then read one live request and its quotes. The script prints counts only. It does not print the token or customer notes.
+3. Sign in with Google in Cotiza and mint an assistant read token in Settings, then read one live request and its quotes. The script accepts an existing token; it no longer automates email-only OAuth. The script prints counts only. It does not print the token or customer notes.
 
    ```powershell
    $env:OPS_ASSISTANT_BASE_URL = "http://127.0.0.1:8787"
-   $env:OPS_ASSISTANT_EMAIL = "you@chicago-reno.com"
+   $env:OPS_ASSISTANT_TOKEN = "<your-read-token>"
    node scripts/ops-assistant-exercise.mjs
    ```
 
@@ -136,7 +136,7 @@ A local run of `scripts/ops-assistant-exercise.mjs` on 13 Oct 2026 did use the r
 3. Server URL: `https://YOUR-WORKER/mcp`
 4. Authentication: **OAuth** (not “No authentication”).
 5. ChatGPT will read `/.well-known/oauth-protected-resource`, register a client, and send the user to `/oauth/authorize`.
-6. Sign in with a `@chicago-reno.com` email and choose **Allow read access**.
+6. Sign in with your Chicago Reno Google Workspace account and choose **Allow read access**.
 
 The OAuth screens are served by the worker. They are not the main Cotiza app.
 
@@ -145,13 +145,14 @@ The OAuth screens are served by the worker. They are not the main Cotiza app.
 From `worker`, when you are ready:
 
 ```bash
+node scripts/ensure-private-receipts-bucket.mjs
 npx wrangler d1 migrations apply DB --remote
 npx wrangler deploy
 ```
 
 No new secret is required. Jobber keys stay the secrets you already have. Do not change Jobber scopes as part of the deploy.
 
-Jobs, schedules, customer invoices, expense edits/deletes, and broader assistant writes remain outside this release.
+Jobs, schedules, customer invoices, expense deletion, and broader assistant writes remain outside this release.
 
 
 
@@ -162,8 +163,12 @@ Both Cotiza login and assistant OAuth consent now require a Google-signed ID tok
 Migration 0071 deliberately revokes all existing app sessions, assistant access/refresh tokens, authorization codes, and pending OAuth transactions minted under the old email-only model. Everyone must sign in again; ChatGPT must reconnect. Jobber integration OAuth credentials are untouched.
 
 Before merging/deploying:
-1. In Google Cloud, create a **Web application** OAuth client for Google Identity Services (or configure a suitable existing client). Allow JavaScript origins `https://cotiza-e4h.pages.dev` and `https://social-media-cross-poster.chicago-reno.workers.dev`. Limit the consent audience to the Chicago Reno Workspace where supported. This popup credential flow needs no redirect URI.
-2. Set the GitHub repository Actions variable `GOOGLE_SIGNIN_CLIENT_ID` to that client's public client ID. No new client secret is needed. The worker deployment passes this variable explicitly; a pre-migration gate refuses deployment when missing. For local development set the same worker binding and register your local origins with Google.
+1. Reuse the existing `GMAIL_CLIENT_ID` by default. No duplicate client or GitHub variable is required. Confirm in Google Cloud that this existing client is a **Web application** with authorized JavaScript origins `https://cotiza-e4h.pages.dev` and `https://social-media-cross-poster.chicago-reno.workers.dev`. If origins are missing, add them to the existing client. The current environment cannot read that Google Cloud configuration; code availability is not proof the origins are allowed.
+2. Only if the Gmail client is unsuitable, configure a Web client and supply optional `GOOGLE_SIGNIN_CLIENT_ID` (worker binding or GitHub Actions repository variable). No new client secret is needed. The popup credential flow needs no redirect URI. The default deployment reuses the worker's already-installed Gmail client ID.
 3. Verify Google sign-in on both origins with a real Chicago Reno account. Finish the invoice review/create flow and check the expense and receipt in Jobber. These live checks remain pending; the 20four7VA invoice has not been logged by this PR.
+
+Use the deployment workflow, which provisions/checks private receipt storage before migrations. Equivalent direct commands are shown above; an optional Google client override must be installed as a worker binding or supplied with `wrangler deploy --var GOOGLE_SIGNIN_CLIENT_ID:<public-client-id>`. Do not deploy a new login until Google's allowed origins have been checked.
+
+Pending sign-in challenges are limited atomically to 1,000 globally and 10 per hashed source IP per five-minute expiry window. Identity rejection returns 401; verification/storage outages return 503. Verified assistant transactions use a separate table so an old worker cannot overwrite their payload during rollout.
 
 The Jobber schema still cannot read back receipt attachments. The UI reports the URL submission honestly and requires explicit confirmation when replacing an existing expense's single receipt field. Allocation lookup availability and private R2 provisioning must also be validated in production.

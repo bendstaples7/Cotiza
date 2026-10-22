@@ -3,7 +3,7 @@ import { generateKeyPair, exportJWK, SignJWT, createLocalJWKSet } from 'jose';
 import { createMockD1, configurePrepareResults } from './helpers/mock-d1.js';
 const keys = vi.hoisted(() => ({ resolver: undefined as unknown }));
 vi.mock('jose', async (original) => ({ ...await original<typeof import('jose')>(), createRemoteJWKSet: () => (...args: unknown[]) => (keys.resolver as (...args: unknown[]) => unknown)(...args) }));
-import { verifyGoogleIdentity } from '../../worker/src/services/google-identity.js';
+import { verifyGoogleIdentity, googleSignInClientId, newGoogleChallenge } from '../../worker/src/services/google-identity.js';
 let privateKey: CryptoKey;
 beforeAll(async () => {
   const pair = await generateKeyPair('RS256'); privateKey = pair.privateKey;
@@ -36,5 +36,19 @@ describe('verified Google identity', () => {
   });
   it('rejects email-only authentication and missing configuration', async () => {
     await expect(verifyGoogleIdentity({} as never, 'office@chicago-reno.com')).rejects.toThrow();
+  });
+});
+
+describe('Google sign-in configuration and challenge limits', () => {
+  it('reuses Gmail client ID unless a nonempty override is set', () => {
+    expect(googleSignInClientId({ GMAIL_CLIENT_ID: 'existing' })).toBe('existing');
+    expect(googleSignInClientId({ GMAIL_CLIENT_ID: 'existing', GOOGLE_SIGNIN_CLIENT_ID: ' ' })).toBe('existing');
+    expect(googleSignInClientId({ GMAIL_CLIENT_ID: 'existing', GOOGLE_SIGNIN_CLIENT_ID: 'dedicated' })).toBe('dedicated');
+  });
+  it('fails closed when the atomic challenge capacity check refuses insertion', async () => {
+    const db = createMockD1(); configurePrepareResults(db, [{ run: { success: true } }, { first: null }]);
+    await expect(newGoogleChallenge(db as never, '192.0.2.1')).rejects.toThrow('Too many sign-in attempts');
+    expect(db.prepare).toHaveBeenCalledWith(expect.stringContaining('COUNT(*) FROM google_signin_challenges'));
+    expect(db._stmts[1].bind).toHaveBeenCalledWith(expect.any(String), expect.any(Number), expect.not.stringContaining('192.0.2.1'), expect.any(String));
   });
 });

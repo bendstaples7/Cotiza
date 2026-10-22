@@ -38,5 +38,5 @@ export default function LoginPage() {
     document.head.appendChild(script);
     return () => { active = false; script.remove(); };
   }, [login, navigate, params]);
-  return <main style={{ maxWidth: 380, margin: '15vh auto', padding: '2rem' }}><h1>Cotiza</h1><p>Sign in with your Chicago Reno Google account.</p><div ref={button} />{error && <p role="alert">{error}</p>}</main>;
+  return <main style={{ maxWidth: 380, margin: '15vh auto', padding: '2rem' }}><h1>Cotiza</h1><p>Sign in with your Chicago Reno Google account.</p>{params.get('expired') === '1' && <p role="alert">Your session has expired. Please log in again.</p>}<div ref={button} />{error && <p role="alert">{error}</p>}</main>;
 }

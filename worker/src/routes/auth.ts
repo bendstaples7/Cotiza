@@ -1,4 +1,4 @@
-import { newGoogleChallenge } from '../services/google-identity.js';
+import { newGoogleChallenge, googleSignInClientId, GoogleIdentityRejected, GoogleChallengeLimit } from '../services/google-identity.js';
 import { Hono } from 'hono';
 import type { Bindings } from '../bindings.js';
 import { AuthService } from '../services/auth-service.js';
@@ -15,19 +15,28 @@ function getBearerToken(c: { req: { header: (name: string) => string | undefined
  * Validate email domain and create session.
  */
 app.get('/google-challenge', async (c) => {
-  if (!c.env.GOOGLE_SIGNIN_CLIENT_ID) return c.json({ error: 'Google sign-in is not configured.' }, 503);
+  if (!googleSignInClientId(c.env)) return c.json({ error: 'Google sign-in is not configured.' }, 503);
   c.header('Cache-Control', 'no-store');
-  return c.json({ clientId: c.env.GOOGLE_SIGNIN_CLIENT_ID, nonce: await newGoogleChallenge(c.env.DB) });
+  try {
+    return c.json({ clientId: googleSignInClientId(c.env), nonce: await newGoogleChallenge(c.env.DB, c.req.header('CF-Connecting-IP')) });
+  } catch (error) {
+    if (error instanceof GoogleChallengeLimit) return c.json({ error: error.message }, 429);
+    console.error('[auth] Google challenge storage unavailable');
+    return c.json({ error: 'Sign-in is temporarily unavailable.' }, 503);
+  }
 });
 
 app.post('/login', async (c) => {
+  if (!googleSignInClientId(c.env)) return c.json({ error: 'Google sign-in is not configured.' }, 503);
   try {
     const body = await c.req.json() as { credential?: string; nonce?: string };
-    const result = await new AuthService(c.env.DB).initiateAuth(body?.credential ?? '', body?.nonce, c.env.GOOGLE_SIGNIN_CLIENT_ID);
+    const result = await new AuthService(c.env.DB).initiateAuth(body?.credential ?? '', body?.nonce, googleSignInClientId(c.env));
     c.header('Cache-Control', 'no-store');
     return c.json(result);
-  } catch {
-    return c.json({ error: 'Google sign-in failed. Use your Chicago Reno Google account and try again.' }, 401);
+  } catch (error) {
+    if (error instanceof GoogleIdentityRejected || error instanceof SyntaxError) return c.json({ error: 'Google sign-in failed. Use your Chicago Reno Google account and try again.' }, 401);
+    console.error('[auth] Google verification or session storage unavailable');
+    return c.json({ error: 'Sign-in is temporarily unavailable. Please try again later.' }, 503);
   }
 });
 

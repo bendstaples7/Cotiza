@@ -28,11 +28,6 @@ jobs:
       - name: Verify deploy health gate (production-like config)
         run: npm run verify:deploy-health
 
-      - name: Require verified sign-in configuration before migrations
-        env:
-          GOOGLE_SIGNIN_CLIENT_ID: ${{ vars.GOOGLE_SIGNIN_CLIENT_ID }}
-        run: test -n "$GOOGLE_SIGNIN_CLIENT_ID"
-
       - name: Reconcile manually applied deposit migration
         run: node scripts/reconcile-deposit-migration.mjs --remote
         working-directory: worker
@@ -52,7 +47,12 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
       - name: Deploy worker to Cloudflare
-        run: npx wrangler deploy --var "GOOGLE_SIGNIN_CLIENT_ID:$GOOGLE_SIGNIN_CLIENT_ID"
+        run: |
+          if [ -n "$GOOGLE_SIGNIN_CLIENT_ID" ]; then
+            npx wrangler deploy --var "GOOGLE_SIGNIN_CLIENT_ID:$GOOGLE_SIGNIN_CLIENT_ID"
+          else
+            npx wrangler deploy
+          fi
         working-directory: worker
         env:
           GOOGLE_SIGNIN_CLIENT_ID: ${{ vars.GOOGLE_SIGNIN_CLIENT_ID }}

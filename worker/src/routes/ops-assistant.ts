@@ -1,4 +1,4 @@
-import { newGoogleChallenge } from '../services/google-identity.js';
+import { newGoogleChallenge, googleSignInClientId, GoogleIdentityRejected, GoogleChallengeLimit } from '../services/google-identity.js';
 import { expenseOptions } from '../services/assistant-expense-lookups.js';
 import { AssistantReceiptStore, ReceiptInputError, boundedBytes, MAX_RECEIPT_BYTES } from '../services/assistant-receipts.js';
 import { AssistantExpenseCreate, ExpenseInputError, validateExpenseInvoice } from '../services/assistant-expense-create.js';
@@ -324,6 +324,12 @@ export function createOpsAssistantApp(directoryFor?: (db: D1Database) => Assista
     }, 201);
   });
 
+  app.use('/oauth/*', async (c, next) => {
+    c.header('Cache-Control', 'no-store');
+    c.header('Referrer-Policy', 'no-referrer');
+    await next();
+  });
+
   app.get('/oauth/authorize', async (c) => {
     const url = new URL(c.req.url);
     const params = Object.fromEntries(url.searchParams.entries());
@@ -350,8 +356,14 @@ export function createOpsAssistantApp(directoryFor?: (db: D1Database) => Assista
       state: params.state || '',
       resource: params.resource,
     }), new Date(Date.now() + 10 * 60 * 1000).toISOString());
-    if (!c.env.GOOGLE_SIGNIN_CLIENT_ID) return c.text('Google sign-in is not configured.', 503);
-    return c.html(loginPage(tx, c.env.GOOGLE_SIGNIN_CLIENT_ID, await newGoogleChallenge(c.env.DB)));
+    if (!googleSignInClientId(c.env)) return c.text('Google sign-in is not configured.', 503);
+    try {
+      return c.html(loginPage(tx, googleSignInClientId(c.env), await newGoogleChallenge(c.env.DB, c.req.header('CF-Connecting-IP'))));
+    } catch (error) {
+      if (error instanceof GoogleChallengeLimit) return c.text(error.message, 429);
+      console.error('[ops-assistant] Google challenge storage unavailable');
+      return c.text('Sign-in is temporarily unavailable.', 503);
+    }
   });
 
   app.post('/oauth/authorize', async (c) => {
@@ -398,15 +410,17 @@ export function createOpsAssistantApp(directoryFor?: (db: D1Database) => Assista
       return c.redirect(back.toString());
     }
     try {
-      const session = await new AuthService(c.env.DB).initiateAuth(form.get('credential') || '', form.get('nonce') || '', c.env.GOOGLE_SIGNIN_CLIENT_ID);
+      const session = await new AuthService(c.env.DB).initiateAuth(form.get('credential') || '', form.get('nonce') || '', googleSignInClientId(c.env));
       pending.userId = session.user.id;
       pending.email = session.user.email;
       // Only the OAuth consent is needed here; discard the unused app session.
       await new AuthService(c.env.DB).logout(session.token);
       await directory.saveTx(tx, JSON.stringify(pending), new Date(Date.now() + 10 * 60 * 1000).toISOString());
       return c.html(consentPage(tx, session.user.email));
-    } catch {
-      return c.text('Google sign-in failed. Reload the connection link and try again.', 401);
+    } catch (error) {
+      if (error instanceof GoogleIdentityRejected) return c.text('Google sign-in failed. Reload the connection link and try again.', 401);
+      console.error('[ops-assistant] Google verification or consent storage unavailable');
+      return c.text('Sign-in is temporarily unavailable. Try again later.', 503);
     }
   });
 

@@ -261,14 +261,14 @@ export class D1AssistantDirectory implements AssistantDirectory {
 
   async saveTx(id: string, payload: string, expiresAt: string): Promise<void> {
     await this.db.prepare(
-      `INSERT INTO assistant_oauth_tx (id, payload, expires_at, identity_verified) VALUES (?, ?, ?, 1)
+      `INSERT INTO verified_assistant_oauth_tx (id, payload, expires_at, identity_verified) VALUES (?, ?, ?, 1)
        ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, expires_at = excluded.expires_at, identity_verified = 1`,
     ).bind(id, payload, expiresAt).run();
   }
 
   async loadTx(id: string, now = new Date()): Promise<string | null> {
     const row = await this.db.prepare(
-      `SELECT payload, expires_at FROM assistant_oauth_tx WHERE identity_verified = 1 AND id = ?`,
+      `SELECT payload, expires_at FROM verified_assistant_oauth_tx WHERE identity_verified = 1 AND id = ?`,
     ).bind(id).first<{ payload: string; expires_at: string }>();
     if (!row || expired(row.expires_at, now)) return null;
     return row.payload;
