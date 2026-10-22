@@ -573,6 +573,15 @@ export class JobberIntegration {
     throw new Error('Jobber API: unexpected retry loop exit');
   }
 
+  /** Mutations are sent once. Never retry a timeout or uncertain result. */
+  async graphqlMutation<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
+    const result = await this.executeGraphql<T>(query, variables);
+    if (result.status !== undefined || result.throttled || !result.data) {
+      throw new Error('Jobber mutation was not accepted. Do not retry automatically.');
+    }
+    return result.data;
+  }
+
   private async executeGraphql<T>(
     query: string,
     variables?: Record<string, unknown>,
