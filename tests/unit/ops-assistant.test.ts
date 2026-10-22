@@ -136,8 +136,8 @@ describe('ops assistant tools', () => {
     expect(response.headers.get('Content-Type')).toContain('text/event-stream');
     const body = await mcpJson(response);
     const names = body.result!.tools!.map((tool) => tool.name);
-    expect(names).toEqual(['inspect_expense_capabilities', 'read_request_photo', 'find_requests', 'read_request', 'find_quotes', 'read_quote', 'list_request_quotes']);
-    const described = body.result!.tools!.filter((tool) => tool.name !== 'inspect_expense_capabilities').map((tool) => `${tool.name} ${tool.description}`).join('\n').toLowerCase();
+    expect(names).toEqual(['create_expense_from_invoice', 'inspect_expense_capabilities', 'read_request_photo', 'find_requests', 'read_request', 'find_quotes', 'read_quote', 'list_request_quotes']);
+    const described = body.result!.tools!.filter((tool) => !['create_expense_from_invoice', 'inspect_expense_capabilities'].includes(tool.name)).map((tool) => `${tool.name} ${tool.description}`).join('\n').toLowerCase();
     expect(described).not.toMatch(/\b(create|delete|mutation|graphql)\b/);
     for (const query of Object.values(ASSISTANT_QUERIES)) {
       expect(query.toLowerCase()).not.toContain('mutation');
