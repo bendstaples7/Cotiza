@@ -60,7 +60,7 @@ export class AuthService {
     ).bind(user.id).run();
 
     await this.db.prepare(
-      'INSERT INTO sessions (id, user_id, token) VALUES (?, ?, ?)'
+      'INSERT INTO sessions (id, user_id, token, identity_verified) VALUES (?, ?, ?, 1)'
     ).bind(sessionId, user.id, token).run();
 
     return { user, token };
@@ -70,7 +70,7 @@ export class AuthService {
     if (!token) return null;
 
     const row = await this.db.prepare(
-      'SELECT s.id AS session_id, s.last_active_at, u.id, u.email, u.name, u.created_at, u.last_active_at AS user_last_active FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?'
+      'SELECT s.id AS session_id, s.last_active_at, u.id, u.email, u.name, u.created_at, u.last_active_at AS user_last_active FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.identity_verified = 1'
     ).bind(token).first() as any;
 
     if (!row) return null;

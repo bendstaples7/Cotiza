@@ -150,7 +150,7 @@ export class D1AssistantDirectory implements AssistantDirectory {
     const tokenHash = await sha256Hex(token);
     const row = await this.db.prepare(
       `SELECT id, user_id, client_id, resource, scope, kind, expires_at, revoked_at
-       FROM assistant_tokens WHERE token_hash = ?`,
+       FROM assistant_tokens WHERE identity_verified = 1 AND token_hash = ?`,
     ).bind(tokenHash).first<{
       id: string;
       user_id: string;
@@ -171,7 +171,7 @@ export class D1AssistantDirectory implements AssistantDirectory {
     const tokenHash = await sha256Hex(token);
     const row = await this.db.prepare(
       `SELECT id, user_id, client_id, resource, scope, kind, expires_at, revoked_at
-       FROM assistant_tokens WHERE token_hash = ?`,
+       FROM assistant_tokens WHERE identity_verified = 1 AND token_hash = ?`,
     ).bind(tokenHash).first<{
       id: string;
       user_id: string;
@@ -201,8 +201,8 @@ export class D1AssistantDirectory implements AssistantDirectory {
     const expiresAt = new Date(Date.now() + input.ttlMs).toISOString();
     await this.db.prepare(
       `INSERT INTO assistant_tokens
-        (id, token_hash, kind, user_id, client_id, label, resource, scope, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, token_hash, kind, user_id, client_id, label, resource, scope, expires_at, identity_verified)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
     ).bind(id, tokenHash, input.kind, input.userId, input.clientId, input.label.slice(0, 80), input.resource, SCOPE, expiresAt).run();
     return { id, token, expiresAt };
   }
@@ -261,14 +261,14 @@ export class D1AssistantDirectory implements AssistantDirectory {
 
   async saveTx(id: string, payload: string, expiresAt: string): Promise<void> {
     await this.db.prepare(
-      `INSERT INTO assistant_oauth_tx (id, payload, expires_at) VALUES (?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, expires_at = excluded.expires_at`,
+      `INSERT INTO assistant_oauth_tx (id, payload, expires_at, identity_verified) VALUES (?, ?, ?, 1)
+       ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, expires_at = excluded.expires_at, identity_verified = 1`,
     ).bind(id, payload, expiresAt).run();
   }
 
   async loadTx(id: string, now = new Date()): Promise<string | null> {
     const row = await this.db.prepare(
-      `SELECT payload, expires_at FROM assistant_oauth_tx WHERE id = ?`,
+      `SELECT payload, expires_at FROM assistant_oauth_tx WHERE identity_verified = 1 AND id = ?`,
     ).bind(id).first<{ payload: string; expires_at: string }>();
     if (!row || expired(row.expires_at, now)) return null;
     return row.payload;
@@ -278,8 +278,8 @@ export class D1AssistantDirectory implements AssistantDirectory {
     const codeHash = await sha256Hex(record.code);
     await this.db.prepare(
       `INSERT INTO assistant_auth_codes
-        (code_hash, user_id, client_id, redirect_uri, code_challenge, resource, scope, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        (code_hash, user_id, client_id, redirect_uri, code_challenge, resource, scope, expires_at, identity_verified)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
     ).bind(
       codeHash,
       record.userId,
@@ -296,7 +296,7 @@ export class D1AssistantDirectory implements AssistantDirectory {
     const codeHash = await sha256Hex(code);
     const row = await this.db.prepare(
       `SELECT user_id, client_id, redirect_uri, code_challenge, resource, scope, expires_at, used_at
-       FROM assistant_auth_codes WHERE code_hash = ?`,
+       FROM assistant_auth_codes WHERE identity_verified = 1 AND code_hash = ?`,
     ).bind(codeHash).first<{
       user_id: string;
       client_id: string;
