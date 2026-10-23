@@ -1,4 +1,5 @@
 import { readAssistantRequestContext } from './assistant-request-context.js';
+import { inspectReportingCapabilities } from './jobber-reporting-capabilities.js';
 import { inspectExpenseCapabilities } from './jobber-expense-capabilities.js';
 import type { JobberReadErrorCode, JobberReadResult } from 'shared';
 import { failedJobberRead, liveJobberRead } from './jobber-read.js';
@@ -315,6 +316,13 @@ export class OpsAssistantRead {
     private readonly db: D1Database,
   ) {}
 
+  async inspectReportingCapabilities(_userId: string, args: unknown) {
+    onlyKeys(objectArgs(args), []);
+    const result = await readLive(() => inspectReportingCapabilities(this.jobber));
+    if (!result.ok) return result.body;
+    return { outcome: 'ok' as const, ...result.value, source: source('jobber') };
+  }
+
   async inspectExpenseCapabilities(_userId: string, args: unknown) {
     onlyKeys(objectArgs(args), []);
     const result = await readLive(() => inspectExpenseCapabilities(this.jobber));
@@ -593,6 +601,12 @@ export class OpsAssistantRead {
 
 export const TOOL_DEFINITIONS = [
   {
+    name: 'inspect_reporting_capabilities',
+    description: 'Inspect connected Jobber API schema for expenses, payments, invoices and native report/export operations. Read-only diagnostic. No financial records, exports, emails or credentials.',
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
     name: 'inspect_expense_capabilities',
     description: 'Inspect the connected public Jobber API schema for expense queries, expense mutations and receipt inputs. Read-only diagnostic; never creates an expense or uploads a file. Missing fields may reflect permissions, not global API availability.',
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
@@ -680,6 +694,7 @@ export const TOOL_DEFINITIONS = [
 
 export async function callAssistantTool(read: OpsAssistantRead, userId: string, name: string, args: unknown) {
   switch (name) {
+    case 'inspect_reporting_capabilities': return read.inspectReportingCapabilities(userId, args);
     case 'inspect_expense_capabilities': return read.inspectExpenseCapabilities(userId, args);
     case 'read_request_photo': return read.readRequestPhoto(userId, args);
     case 'find_requests': return read.findRequests(userId, args);
