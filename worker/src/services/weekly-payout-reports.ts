@@ -94,7 +94,9 @@ export async function generateWeeklyReports(jobber:JobberReadClient,start:string
    'Entered by':name(r.enteredBy),'Paid by':name(r.paidBy),'Reimbursable to':name(r.reimbursableTo),'Job #':job?.jobNumber??'',
    'Client name':name(job?.client),'Job description':job?.title??''};
  });
- const paymentRows=payments.filter(r=>selected(r.entryDate)).map(r=>{
+ // Jobber includes invoice ledger entries in paymentRecords; invoice rows
+ // are read separately above and must never inflate customer receipts.
+ const paymentRows=payments.filter(r=>selected(r.entryDate)&&r.adjustmentType!=='INVOICE').map(r=>{
   const inv=r.invoice as {invoiceNumber?:string}|null;const quote=r.quote as {quoteNumber?:string}|null;
   return {'Source ID':r.id,'Client name':name(r.client),'Date':reportDate(r.entryDate),'Source date':r.entryDate,'Type':r.__typename,
    'Adjustment type':r.adjustmentType,'API Amount $':cents(r.amount)/100,'Raw amount $':cents(r.rawAmount)/100,
