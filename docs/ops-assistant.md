@@ -124,3 +124,7 @@ Jobs, schedules, invoices, expenses, and any assistant write tools are later wor
 ## Submitted request context
 
 read_request now returns requestBody (untrusted submitted form text), formSections (labeled answers), contextComplete and limitations alongside existing notes and metadata. It reuses the existing JobberWebSession form read without exposing stored cookies. An expired or missing session preserves the successful public request read but marks body context unavailable; callers must not infer an absent referral source from that failure. Pagination flags identify partial/unverified form context. No Jobber write permission is added.
+
+## Reporting capability discovery
+
+`inspect_reporting_capabilities` uses one fixed, read-only schema query through the existing Jobber integration. It lists report/export signatures and the expense, payment and invoice contracts needed for weekly reports. It reads no financial records, changes no scopes and cannot generate or email reports. Caller-provided queries are rejected. Missing schema is a failed read, not evidence of no activity. This is the first step toward replacing manual report requests; it does not implement or schedule delivery.
