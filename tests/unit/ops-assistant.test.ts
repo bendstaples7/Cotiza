@@ -242,7 +242,7 @@ describe('ops assistant tools', () => {
         },
       });
     const db = createMockD1();
-    configurePrepareResults(db, [{
+    configurePrepareResults(db, [{ first: null }, {
       all: {
         results: [
           { id: 'draft-b', user_id: 'user-b', draft_number: 2, status: 'draft', jobber_quote_id: null, jobber_request_id: 'req-1', updated_at: '2026-03-04' },
@@ -265,7 +265,7 @@ describe('ops assistant tools', () => {
       jobberQuotes: { outcome: string; items: Array<{ id: string }> };
       cotizaDrafts: { items: Array<{ id: string }> };
     };
-    expect(db._stmts[0].bind.mock.calls[0]).toEqual(['user-a', 'req-1']);
+    expect(db._stmts[1].bind.mock.calls[0]).toEqual(['user-a', 'req-1']);
     expect(linked.jobberQuotes.outcome).toBe('ok');
     expect(linked.jobberQuotes.items.map((item) => item.id)).toEqual(['quo-1']);
     expect(linked.cotizaDrafts.items.map((item) => item.id)).toEqual(['draft-a']);
