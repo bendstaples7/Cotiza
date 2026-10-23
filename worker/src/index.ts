@@ -23,6 +23,7 @@ import systemsRoutes from './routes/systems.js';
 import dashboardRoutes from './routes/dashboard.js';
 import reviewRoutes from './routes/reviews.js';
 import mediaServeRoutes from './routes/media-serve.js';
+import reportRoutes from './routes/reports.js';
 import opsAssistantRoutes from './routes/ops-assistant.js';
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -167,6 +168,7 @@ app.get('/api/admin/dev-secrets/gmail', async (c) => {
 app.route('/', opsAssistantRoutes);
 
 // API routes
+app.route('/api/reports', reportRoutes);
 app.route('/api/auth', authRoutes);
 app.route('/api/media', mediaRoutes);
 app.route('/api/posts', postRoutes);

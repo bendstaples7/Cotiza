@@ -2,7 +2,7 @@ import type { JobberReadClient } from './ops-assistant-read.js';
 import type { SchemaField, SchemaType } from './jobber-expense-capabilities.js';
 const REF = 'kind name ofType { kind name ofType { kind name ofType { kind name } } }';
 const FIELD = `name args { name type { ${REF} } } type { ${REF} }`;
-const TYPES = ['Expense', 'ExpenseFilterAttributes', 'PaymentRecord', 'PaymentRecordInterface', 'PaymentRecordFilterAttributes', 'PaymentRecordConnection', 'Invoice', 'InvoiceFilterAttributes', 'Quote', 'User', 'Name'];
+const TYPES = ['Expense', 'ExpenseFilterAttributes', 'PaymentRecord', 'PaymentRecordInterface', 'PaymentRecordFilterAttributes', 'PaymentRecordConnection', 'Invoice', 'InvoiceFilterAttributes', 'Quote', 'User', 'Name', 'Iso8601DateTimeRangeInput', 'InvoiceAmounts'];
 const QUERY = `query AssistantReportingCapabilities {
   __schema { queryType { fields { ${FIELD} } } mutationType { fields { ${FIELD} } } }
   ${TYPES.map((name, i) => `t${i}: __type(name: "${name}") {

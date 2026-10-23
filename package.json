@@ -7,7 +7,7 @@
     "worker"
   ],
   "scripts": {
-    "test": "vitest --run",
+    "test": "vitest --run && node --test tests/unit/weekly-report-runner.test.mjs",
     "test:watch": "vitest",
     "verify:deploy-health": "vitest --run tests/integration/deploy-health-gate.test.ts tests/unit/config-critical-secrets.test.ts",
     "lint": "eslint worker/src",
