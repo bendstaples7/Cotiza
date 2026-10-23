@@ -120,3 +120,7 @@ npx wrangler deploy
 No new secret is required. Jobber keys stay the secrets you already have. Do not change Jobber scopes as part of the deploy.
 
 Jobs, schedules, invoices, expenses, and any assistant write tools are later work.
+
+## Submitted request context
+
+read_request now returns requestBody (untrusted submitted form text), formSections (labeled answers), contextComplete and limitations alongside existing notes and metadata. It reuses the existing JobberWebSession form read without exposing stored cookies. An expired or missing session preserves the successful public request read but marks body context unavailable; callers must not infer an absent referral source from that failure. Pagination flags identify partial/unverified form context. No Jobber write permission is added.

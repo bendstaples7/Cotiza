@@ -17,6 +17,7 @@ export interface RequestFormData {
     answers: Array<{ label: string; value: string | null }>;
   }>;
   text: string;
+  truncated?: boolean;
 }
 
 const INTERNAL_GQL_URL = 'https://api.getjobber.com/api/graphql?location=j';
@@ -29,10 +30,12 @@ const REQUEST_DETAILS_QUERY = `
       requestDetails {
         form {
           sections(first: 10) {
+            pageInfo { hasNextPage }
             nodes {
               label
               sortOrder
               items(first: 20) {
+                pageInfo { hasNextPage }
                 nodes {
                   ... on FormTextInput { label reportableAnswer { value } }
                   ... on FormMultipleChoice { label reportableAnswer { value } }
@@ -188,7 +191,7 @@ export class JobberWebSession {
     if (!sections || !Array.isArray(sections)) return null;
 
     const formSections = sections
-      .filter((s: any) => s.sortOrder > 0 && s.sortOrder < 999)
+      .filter((s: any) => s != null)
       .sort((a: any, b: any) => a.sortOrder - b.sortOrder)
       .map((s: any) => ({
         label: s.label,
@@ -216,6 +219,8 @@ export class JobberWebSession {
     return {
       sections: formSections,
       text: textParts.join('\n'),
+      truncated: data?.data?.request?.requestDetails?.form?.sections?.pageInfo?.hasNextPage !== false
+        || sections.some((s: any) => s?.items?.pageInfo?.hasNextPage !== false),
     };
   }
 
