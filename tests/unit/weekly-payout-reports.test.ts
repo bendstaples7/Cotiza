@@ -21,6 +21,14 @@ describe('weekly payout API reports',()=>{
   expect(r.expenses[0]['Paid by']).toBe('Ivan');
   expect(r.transactions.map(x=>x.Type)).toEqual(['ZellePaymentRecord','Invoice']);
  });
+ it('excludes invoice ledger entries from payment counts and totals',async()=>{
+  const j=mock();const original=j.graphqlRequest.getMockImplementation()!;
+  j.graphqlRequest.mockImplementation(async(q:string)=>q.includes('WeeklyPayments')
+   ?{paymentRecords:conn([payment,{...payment,id:'invoice-ledger',adjustmentType:'INVOICE',amount:2060,rawAmount:2060}])}:original(q));
+  const r=await generateWeeklyReports(j as never,'2026-10-17','2026-10-23');
+  expect(r.summary.paymentCount).toBe(1);expect(r.summary.paymentApiAmount).toBe(-50);
+  expect(r.transactions).toHaveLength(2);expect(r.transactions.filter(x=>x.Type==='Invoice')).toHaveLength(1);
+ });
  it('keeps equal-valued expenses with different IDs',async()=>{
   const r=await generateWeeklyReports(mock(conn([expense('a'),expense('b')])) as never,'2026-10-17','2026-10-23');
   expect(r.summary.expenseTotal).toBe(20);

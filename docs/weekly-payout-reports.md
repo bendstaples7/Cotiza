@@ -30,3 +30,5 @@ No recurring schedule is installed. This is an on-demand report generation and c
 
 ## Validation
 Unit coverage includes permissions, invalid periods, failed/incomplete reads, pagination, duplicate source IDs, equal-valued legitimate expenses, refund signs, reimbursement identity, CSV escaping and Chicago date boundaries. The script's Node tests verify both attachments and the fixed recipient, reject foreign destinations and incomplete generation, and ensure uncertain sends are not retried. Live totals must also be compared with source exports.
+
+Live reconciliation found that paymentRecords also returns INVOICE ledger adjustments. Those are excluded from the receipt rows and summary because invoice rows are obtained separately from invoices. The October 17–23 baseline is 16 expenses totaling $2,988.24, three payments totaling $6,549, and one $2,060 invoice. Never count that invoice as cash received.
