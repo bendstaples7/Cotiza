@@ -118,7 +118,7 @@ async function main(){
  const session=readSession();
  const {default:puppeteer}=await import('puppeteer');
  const files=await run({month,outputDir,session,launch:()=>puppeteer.launch({headless:true})});
- console.log(JSON.stringify({month,files}));
+ console.log(JSON.stringify({month,downloaded:files.filter(f=>!f.skipped).length,skipped:files.filter(f=>f.skipped).length}));
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
  main().catch(()=>{console.error('Subscription receipt download failed. Check Jobber session, billing access, and receipt availability. No expense or payment was created.');process.exitCode=1;});
