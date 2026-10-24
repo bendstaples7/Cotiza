@@ -22,15 +22,15 @@ manifest.json contains the selected month's filenames, amounts and SHA-256 hashe
 Portal dates can differ by a day from Chicago charge dates; do not change expense dates
 solely to match the billing portal.
 
-## Automatic runs
-The included GitHub workflow runs on days 24–28 at 15:00 UTC after the usual renewal
-and also supports a manual month input. It reuses the same GitHub secrets as the existing
-cookie refresh workflow. The schedule becomes active only after merge to the default branch.
-Each run downloads all receipts for that month, restoring prior PDFs from a private Actions
-cache to skip duplicates. Artifacts retain the original PDFs and manifest for 90 days.
-Cache eviction only causes safe re-downloads. Artifacts are not a permanent bookkeeping archive.
-A failed or unavailable receipt causes a failed run; it is never replaced by a fabricated PDF.
-GitHub workflow failure notifications use the repository's existing notification preferences.
+## Proposed automatic runs (not installed)
+The proposed GitHub workflow checks days 24–28 at 15:00 UTC after the usual renewal
+and supports a manual month input. It would reuse existing GitHub secrets and keep
+original financial receipt PDFs in private GitHub Actions artifacts for 90 days.
+This workflow was NOT added: automatic approval review rejected financial document
+storage in that destination without explicit user authorization. No schedule is active.
+The downloader itself can run on demand with local output; it does not upload receipts.
+Do not add the artifact/cache workflow until Ben approves that specific destination.
+Artifacts would be temporary storage, not a permanent bookkeeping archive.
 
 ## Validation and remaining live check
 Node tests exercise month selection, multiple payments, invalid formats, unpaid receipts,
@@ -38,6 +38,6 @@ destination restrictions, HTML/truncated PDF rejection, file deduplication, sess
 and browser cleanup on login redirects.
 The live Jobber page was inspected: payment rows use dt/dd, paidInvoice, and Receipt buttons;
 the October Receipt button opens the verified download_invoice/transaction path.
-The standalone authenticated runner still needs its first GitHub Actions run to validate D1
+The standalone authenticated runner still needs its first authenticated run to validate D1
 access, headless Jobber access and the current PDF response headers end to end.
 No Jobber credentials were available to execute that runner locally in the authoring session.
