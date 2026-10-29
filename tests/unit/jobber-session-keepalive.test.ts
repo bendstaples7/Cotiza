@@ -34,7 +34,8 @@ describe('JobberWebSession.keepAlive', () => {
     expect(fetchMock.mock.calls[0][1].headers.Cookie).toBe('a=1; b=2');
     const update = db._stmts[1];
     expect(db.prepare.mock.calls[1][0]).toContain('UPDATE jobber_web_session');
-    expect(update.bind).toHaveBeenCalledWith('a=1; b=2', new Date(NOW.getTime() + KEEPALIVE_TTL_MS).toISOString());
+    expect(db.prepare.mock.calls[1][0]).toContain('AND cookies = ?');
+    expect(update.bind).toHaveBeenCalledWith('a=1; b=2', new Date(NOW.getTime() + KEEPALIVE_TTL_MS).toISOString(), 'a=1; b=2');
   });
 
   it('keeps a later expiry from a fresh login instead of shortening it', async () => {
@@ -44,7 +45,7 @@ describe('JobberWebSession.keepAlive', () => {
 
     await new JobberWebSession(db as never).keepAlive();
 
-    expect(db._stmts[1].bind).toHaveBeenCalledWith('a=1', '2026-10-29T15:30:00.000Z');
+    expect(db._stmts[1].bind).toHaveBeenCalledWith('a=1', '2026-10-29T15:30:00.000Z', 'a=1');
   });
 
   it('stores cookies Jobber rotates during the check', async () => {
@@ -70,7 +71,8 @@ describe('JobberWebSession.keepAlive', () => {
     const result = await new JobberWebSession(db as never).keepAlive();
 
     expect(result).toBe('expired');
-    expect(db.prepare.mock.calls[1][0]).toContain('DELETE FROM jobber_web_session');
+    expect(db.prepare.mock.calls[1][0]).toContain("DELETE FROM jobber_web_session WHERE id = 'default' AND cookies = ?");
+    expect(db._stmts[1].bind).toHaveBeenCalledWith('a=1');
   });
 
   it('leaves the session untouched when Jobber is unreachable or erroring', async () => {

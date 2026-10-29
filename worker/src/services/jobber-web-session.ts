@@ -174,26 +174,33 @@ export class JobberWebSession {
       });
 
       if (resp.status === 401 || resp.status === 403) {
-        await this.clearCookies();
+        await this.clearCookiesIfUnchanged(row.cookies);
         return 'expired';
       }
-      if (!resp.ok) return 'error';
+      if (!resp.ok) {
+        console.error(`[JobberWebSession] keepAlive failed operation=keepAlive http=${resp.status}`);
+        return 'error';
+      }
 
       const data = await resp.json() as any;
       const errorText = (data?.errors ?? []).map((e: any) => String(e?.message ?? '')).join(', ');
       if (errorText.includes('unauthenticated') || errorText.includes('hidden') || (!errorText && !data?.data?.account?.id)) {
-        await this.clearCookies();
+        await this.clearCookiesIfUnchanged(row.cookies);
         return 'expired';
       }
-      if (errorText) return 'error';
+      if (errorText) {
+        console.error(`[JobberWebSession] keepAlive failed operation=keepAlive http=${resp.status} ${summarizeUpstreamBody(JSON.stringify({ errors: data.errors }), [row.cookies])}`);
+        return 'error';
+      }
 
       const cookies = mergeSetCookies(row.cookies, readSetCookies(resp.headers));
       const currentExpiry = new Date(row.expires_at).getTime();
       const extendedExpiry = Date.now() + KEEPALIVE_TTL_MS;
       const expiresAt = new Date(Number.isFinite(currentExpiry) ? Math.max(currentExpiry, extendedExpiry) : extendedExpiry).toISOString();
+      // Only touch the row we checked: a login that landed meanwhile wins.
       await this.db.prepare(
-        "UPDATE jobber_web_session SET cookies = ?, expires_at = ?, updated_at = datetime('now') WHERE id = 'default'"
-      ).bind(cookies, expiresAt).run();
+        "UPDATE jobber_web_session SET cookies = ?, expires_at = ?, updated_at = datetime('now') WHERE id = 'default' AND cookies = ?"
+      ).bind(cookies, expiresAt, row.cookies).run();
       return 'extended';
     } catch (err) {
       console.error(`[JobberWebSession] keepAlive failed operation=keepAlive ${sanitizeLogText(err instanceof Error ? err.message : err, [row.cookies])}`);
@@ -325,6 +332,13 @@ export class JobberWebSession {
       truncated: data?.data?.request?.requestDetails?.form?.sections?.pageInfo?.hasNextPage !== false
         || sections.some((s: any) => s?.items?.pageInfo?.hasNextPage !== false),
     };
+  }
+
+  /** Clear the session only if it still holds the cookies Jobber just rejected. */
+  private async clearCookiesIfUnchanged(cookies: string): Promise<void> {
+    try {
+      await this.db.prepare("DELETE FROM jobber_web_session WHERE id = 'default' AND cookies = ?").bind(cookies).run();
+    } catch { /* ignore */ }
   }
 
   private async clearCookies(): Promise<void> {
