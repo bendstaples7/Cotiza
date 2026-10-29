@@ -116,7 +116,7 @@ describe('assistant auth', () => {
   it('publishes OAuth metadata with PKCE S256 and the read scope', () => {
     const metadata = oauthAuthorizationServerMetadata('http://127.0.0.1:8787');
     expect(metadata.code_challenge_methods_supported).toEqual(['S256']);
-    expect(metadata.scopes_supported).toEqual(['ops:read']);
+    expect(metadata.scopes_supported).toEqual(['ops:read', 'ops:expenses:write']);
     expect(metadata.token_endpoint_auth_methods_supported).toEqual(['none']);
   });
 
