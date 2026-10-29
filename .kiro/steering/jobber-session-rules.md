@@ -13,7 +13,12 @@ The Jobber public GraphQL API is **incomplete**. The following data is NOT avail
 
 The public API only exposes `notes` and `noteAttachments` on requests. For requests where the customer submitted a form but no team member manually added notes, the public API returns **no content** — even though the form data exists in Jobber's system.
 
-**The `JobberWebSession` service and `JobberCookieRefresher` exist specifically to work around this limitation.** The `JobberCookieRefresher` uses Cloudflare Browser Rendering to automatically log into Jobber and extract session cookies on-demand (during the systems check at login). Do NOT remove this system unless Jobber adds `requestDetails.form` to their public API. Any proposal to simplify the Jobber integration by removing the cookie system must account for this gap — the public API alone is insufficient for the quote generation workflow.
+**The `JobberWebSession` service and the cookie refresh system exist specifically to work around this limitation.** Do NOT remove this system unless Jobber adds `requestDetails.form` to their public API. Any proposal to simplify the Jobber integration by removing the cookie system must account for this gap — the public API alone is insufficient for the quote generation workflow.
+
+How cookies are kept fresh:
+- **Login:** `.github/workflows/refresh-jobber-cookies.yml` runs `worker/scripts/sync-cookies.mjs` (Puppeteer on a GitHub runner) and writes cookies to production D1. It is also triggered on demand by `POST /api/jobber-auth/trigger-cookie-refresh`.
+- **Keep-alive:** a Cloudflare cron (`worker/src/scheduled/jobber-session-keepalive.ts`, every 30 minutes) asks Jobber whether the stored cookies still work using a plain API call. If they do, it extends `expires_at` and saves any rotated cookies; if Jobber rejects them, it clears them so the blocking gate shows. The 4-hour `expires_at` written at login is a local estimate, not Jobber's real session lifetime.
+- `JobberCookieRefresher` (Cloudflare Browser Rendering login) is NOT used: Jobber's Auth0 login page shows a captcha to Cloudflare's browsers. Do not wire it back in without solving that.
 
 ## Jobber Session Cookies Are a BLOCKING Gate
 
