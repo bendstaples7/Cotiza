@@ -1,9 +1,26 @@
 const SCOPE = 'ops:read';
+/** Separately consented scope for the assistant's one write: logging expenses. */
+const EXPENSE_WRITE_SCOPE = 'ops:expenses:write';
+const READ_AND_EXPENSES = `${SCOPE} ${EXPENSE_WRITE_SCOPE}`;
+const GRANTABLE_SCOPES = new Set([SCOPE, READ_AND_EXPENSES]);
 const ACCESS_TTL_MS = 60 * 60 * 1000;
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CODE_TTL_MS = 5 * 60 * 1000;
 
 export const ASSISTANT_SCOPE = SCOPE;
+export const ASSISTANT_EXPENSE_WRITE_SCOPE = EXPENSE_WRITE_SCOPE;
+export const ASSISTANT_READ_AND_EXPENSES_SCOPE = READ_AND_EXPENSES;
+
+/** True when every requested scope is one this server can grant. An empty request means read-only. */
+export function scopeRequestAllowed(requested: string | undefined | null): boolean {
+  if (!requested) return true;
+  const parts = requested.split(' ').filter(Boolean);
+  return parts.length > 0 && parts.every((part) => part === SCOPE || part === EXPENSE_WRITE_SCOPE);
+}
+
+export function hasScope(principal: Pick<AssistantPrincipal, 'scope'>, scope: string): boolean {
+  return principal.scope.split(' ').includes(scope);
+}
 
 export const BUILTIN_OAUTH_CLIENTS: Record<string, { name: string; redirectUris: string[] }> = {
   'cotiza-ops-local': {
@@ -20,7 +37,8 @@ export interface AssistantPrincipal {
   userId: string;
   clientId: string;
   resource: string;
-  scope: typeof SCOPE;
+  /** `ops:read`, or `ops:read ops:expenses:write` when expense logging was granted. */
+  scope: string;
 }
 
 export interface IssuedToken {
@@ -55,6 +73,8 @@ export interface AssistantDirectory {
     clientId: string;
     kind: 'access' | 'refresh';
     ttlMs: number;
+    /** Defaults to read-only. */
+    scope?: string;
   }): Promise<IssuedToken>;
   revoke(userId: string, tokenId: string): Promise<boolean>;
   revokeByHash(token: string): Promise<boolean>;
@@ -94,7 +114,7 @@ export function oauthAuthorizationServerMetadata(origin: string) {
     grant_types_supported: ['authorization_code', 'refresh_token'],
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['none'],
-    scopes_supported: [SCOPE],
+    scopes_supported: [SCOPE, EXPENSE_WRITE_SCOPE],
     authorization_response_iss_parameter_supported: true,
   };
 }
@@ -103,7 +123,7 @@ export function oauthProtectedResourceMetadata(origin: string) {
   return {
     resource: `${origin}/mcp`,
     authorization_servers: [origin],
-    scopes_supported: [SCOPE],
+    scopes_supported: [SCOPE, EXPENSE_WRITE_SCOPE],
     resource_documentation: `${origin}/oauth/exercise-callback`,
     bearer_methods_supported: ['header'],
   };
@@ -163,9 +183,9 @@ export class D1AssistantDirectory implements AssistantDirectory {
       expires_at: string;
       revoked_at: string | null;
     }>();
-    if (!row || row.kind !== 'access' || row.revoked_at || row.scope !== SCOPE) return null;
+    if (!row || row.kind !== 'access' || row.revoked_at || !GRANTABLE_SCOPES.has(row.scope)) return null;
     if (row.resource !== resource || expired(row.expires_at, now)) return null;
-    return { tokenId: row.id, userId: row.user_id, clientId: row.client_id, resource: row.resource, scope: SCOPE };
+    return { tokenId: row.id, userId: row.user_id, clientId: row.client_id, resource: row.resource, scope: row.scope };
   }
 
   async authenticateRefreshToken(token: string, resource: string, now = new Date()): Promise<AssistantPrincipal | null> {
@@ -184,9 +204,9 @@ export class D1AssistantDirectory implements AssistantDirectory {
       expires_at: string;
       revoked_at: string | null;
     }>();
-    if (!row || row.kind !== 'refresh' || row.revoked_at || row.scope !== SCOPE) return null;
+    if (!row || row.kind !== 'refresh' || row.revoked_at || !GRANTABLE_SCOPES.has(row.scope)) return null;
     if (row.resource !== resource || expired(row.expires_at, now)) return null;
-    return { tokenId: row.id, userId: row.user_id, clientId: row.client_id, resource: row.resource, scope: SCOPE };
+    return { tokenId: row.id, userId: row.user_id, clientId: row.client_id, resource: row.resource, scope: row.scope };
   }
 
   async mintToken(input: {
@@ -196,7 +216,10 @@ export class D1AssistantDirectory implements AssistantDirectory {
     clientId: string;
     kind: 'access' | 'refresh';
     ttlMs: number;
+    scope?: string;
   }): Promise<IssuedToken> {
+    const scope = input.scope ?? SCOPE;
+    if (!GRANTABLE_SCOPES.has(scope)) throw new Error('Unsupported assistant scope.');
     const id = crypto.randomUUID();
     const token = randomToken('ctz_');
     const tokenHash = await sha256Hex(token);
@@ -205,7 +228,7 @@ export class D1AssistantDirectory implements AssistantDirectory {
       `INSERT INTO assistant_tokens
         (id, token_hash, kind, user_id, client_id, label, resource, scope, expires_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(id, tokenHash, input.kind, input.userId, input.clientId, input.label.slice(0, 80), input.resource, SCOPE, expiresAt).run();
+    ).bind(id, tokenHash, input.kind, input.userId, input.clientId, input.label.slice(0, 80), input.resource, scope, expiresAt).run();
     return { id, token, expiresAt };
   }
 
@@ -309,7 +332,7 @@ export class D1AssistantDirectory implements AssistantDirectory {
       expires_at: string;
       used_at: string | null;
     }>();
-    if (!row || row.used_at || expired(row.expires_at, now) || row.scope !== SCOPE) return null;
+    if (!row || row.used_at || expired(row.expires_at, now) || !GRANTABLE_SCOPES.has(row.scope)) return null;
     const updated = await this.db.prepare(
       `UPDATE assistant_auth_codes SET used_at = datetime('now') WHERE code_hash = ? AND used_at IS NULL`,
     ).bind(codeHash).run();
