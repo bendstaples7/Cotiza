@@ -48,6 +48,10 @@ Source: https://developer.getjobber.com/docs/getting_started/ and https://develo
 - `find_quotes` — client, quote number, status, cursor
 - `read_quote` — one quote and its line items
 - `list_request_quotes` — Jobber quotes for a request, plus **this user’s** Cotiza drafts for that request
+- `find_jobs` — one page of jobs with `startAt`/`endAt`/`completedAt`, total, linked quote, and a `visitSummary` (completed, open, overdue, unscheduled, first/last/next visit) over up to 30 visits per job; `visitSummary.truncated` flags partial counts. Client, job number and status filters run on that page only.
+- `read_job` — one job with line items, linked quote/request ids, and its visits (50 per page; follow `visitsPage.nextCursor`). Job instructions are untrusted.
+
+The job tools exist for schedule audits (quoted scope vs. scheduled length vs. actual progress, and duration forecasts from similar past jobs). They need the Jobber app's existing **read** access to jobs; an `auth` error means that read is not granted, not that there are no jobs. `inspect_reporting_capabilities` now also returns the `Job`, `Visit` and `JobFilterAttributes` schema so field drift can be checked without a new deploy.
 
 There is no tool that writes.
 
@@ -127,7 +131,7 @@ npx wrangler deploy
 
 No new secret is required. Jobber keys stay the secrets you already have. Do not change Jobber scopes as part of the deploy.
 
-Jobs, schedules, invoices, expenses, and any assistant write tools are later work.
+Invoices, expenses, and any assistant write tools are later work. Jobs and visits are readable (see Tools).
 
 ## Submitted request context
 
