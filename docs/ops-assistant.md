@@ -125,7 +125,7 @@ A local run of `scripts/ops-assistant-exercise.mjs` on 13 Oct 2026 did use the r
 3. Server URL: `https://YOUR-WORKER/mcp`
 4. Authentication: **OAuth** (not “No authentication”).
 5. ChatGPT will read `/.well-known/oauth-protected-resource`, register a client, and send the user to `/oauth/authorize`.
-6. Sign in with a `@chicago-reno.com` email and choose **Allow read access**.
+6. Sign in with a `@chicago-reno.com` email and choose **Allow read access**, or **Allow read access and expense logging** to also get `log_expense`.
 
 The OAuth screens are served by the worker. They are not the main Cotiza app.
 
