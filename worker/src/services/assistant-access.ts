@@ -76,6 +76,8 @@ export function mcpResource(requestUrl: string): string {
 export function redirectUriAllowed(uri: string): boolean {
   if (uri === 'https://chatgpt.com/connector_platform_oauth_redirect') return true;
   if (uri.startsWith('https://chatgpt.com/connector/oauth/') && uri.length <= 180) return true;
+  if (uri === 'https://claude.ai/api/mcp/auth_callback') return true;
+  if (uri === 'https://claude.com/api/mcp/auth_callback') return true;
   if (uri === 'http://127.0.0.1:8787/oauth/exercise-callback') return true;
   if (uri === 'http://localhost:8787/oauth/exercise-callback') return true;
   return false;

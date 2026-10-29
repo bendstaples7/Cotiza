@@ -107,6 +107,9 @@ describe('assistant auth', () => {
     expect(redirectUriAllowed('https://chatgpt.com/connector_platform_oauth_redirect')).toBe(true);
     expect(redirectUriAllowed('https://chatgpt.com/connector/oauth/abc')).toBe(true);
     expect(redirectUriAllowed('http://127.0.0.1:8787/oauth/exercise-callback')).toBe(true);
+    expect(redirectUriAllowed('https://claude.ai/api/mcp/auth_callback')).toBe(true);
+    expect(redirectUriAllowed('https://claude.com/api/mcp/auth_callback')).toBe(true);
+    expect(redirectUriAllowed('https://claude.ai/api/mcp/auth_callback/extra')).toBe(false);
     expect(redirectUriAllowed('https://evil.example/callback')).toBe(false);
   });
 
