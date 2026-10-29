@@ -182,6 +182,17 @@ describe('log_expense', () => {
     expect(jobber.graphqlRequest.mock.calls.some(([q]) => q === EXPENSE_QUERIES.EXPENSE_CREATE)).toBe(false);
   });
 
+  it('releases the claim when the receipt body is empty or breaks mid-download', async () => {
+    for (const body of [null, new ReadableStream({ pull(controller) { controller.error(new Error('reset')); } })]) {
+      const db = fakeWritesDb();
+      const jobber = jobberWith(created);
+      const fetcher = vi.fn(async () => new Response(body, { status: 200, headers: { 'content-type': 'application/pdf' } }));
+      const result = await new OpsAssistantExpenses(jobber, db as never, fetcher).logExpense('user-a', INPUT) as { failure: { code: string } };
+      expect(result.failure.code).toBe('receipt_unavailable');
+      expect(db.rows.has(INPUT.sourceKey)).toBe(false);
+    }
+  });
+
   it('releases the claim when Jobber rejects the input', async () => {
     const db = fakeWritesDb();
     const jobber = jobberWith({ expenseCreate: { expense: null, userErrors: [{ message: 'Total is invalid' }] } });

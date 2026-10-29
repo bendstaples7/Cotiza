@@ -15,7 +15,7 @@ Checked against OpenAI’s docs on 13 Oct 2026:
 | Piece | Choice |
 | --- | --- |
 | Transport | Streaming HTTP at `POST /mcp`. Each JSON-RPC reply is one SSE message (`event: message`, `data: {…}`). `GET /mcp` returns 405 because this server does not push messages. |
-| Assistant login | Separate from Jobber. Scope is only `ops:read`. |
+| Assistant login | Separate from Jobber. Scope is `ops:read`, or `ops:read ops:expenses:write` when the person picks **Allow read access and expense logging** on the consent page. |
 | ChatGPT | OAuth authorization-code + PKCE. Public client (`token_endpoint_auth_method=none`). Dynamic client registration is limited to ChatGPT redirect URLs. |
 | Local exercise | Mint a bearer token with your existing Cotiza session, then run `scripts/ops-assistant-exercise.mjs`. |
 | Jobber | The worker reuses `openJobberIntegration` (saved Jobber tokens in D1 / worker secrets). |
@@ -135,7 +135,8 @@ Claude uses the same `/mcp` server, OAuth flow and read-only tools as ChatGPT. R
 
 1. In Claude: **Settings → Connectors → Add custom connector**.
 2. Name: `Cotiza Jobber`. URL: `https://social-media-cross-poster.chicago-reno.workers.dev/mcp`. Leave the OAuth client ID and secret blank.
-3. Click **Connect**, sign in with a `@chicago-reno.com` email and choose **Allow read access**.
+3. Click **Connect**, sign in with a `@chicago-reno.com` email and choose **Allow read access**, or **Allow read access and expense logging** to also get `log_expense`.
+4. To add expense logging to an existing read-only connection, disconnect the connector and connect it again, choosing the expense-logging button.
 
 ## Deploy later (not part of this change)
 

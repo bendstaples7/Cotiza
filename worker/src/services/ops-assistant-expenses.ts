@@ -159,18 +159,20 @@ const MAX_REDIRECTS = 3;
 
 const defaultFetcher: ReceiptFetcher = (url) => fetch(url, { redirect: 'manual' });
 
-/** Read at most `limit` bytes; false when the body is larger. */
-async function withinLimit(body: ReadableStream<Uint8Array> | null, limit: number): Promise<boolean> {
-  if (!body) return true;
+/** Read the whole body up to `limit` bytes. */
+async function readBounded(body: ReadableStream<Uint8Array> | null, limit: number): Promise<'ok' | 'empty' | 'too_large' | 'download_failed'> {
+  if (!body) return 'empty';
   const reader = body.getReader();
   let total = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read();
-      if (done) return true;
+      if (done) return total > 0 ? 'ok' : 'empty';
       total += value.byteLength;
-      if (total > limit) return false;
+      if (total > limit) return 'too_large';
     }
+  } catch {
+    return 'download_failed';
   } finally {
     await reader.cancel().catch(() => undefined);
   }
@@ -208,7 +210,8 @@ async function checkReceipt(fetcher: ReceiptFetcher, url: string): Promise<{ ok:
       await response.body?.cancel().catch(() => undefined);
       return { ok: false, reason: 'not_a_pdf_or_image' };
     }
-    if (!(await withinLimit(response.body, MAX_RECEIPT_BYTES))) return { ok: false, reason: 'too_large' };
+    const body = await readBounded(response.body, MAX_RECEIPT_BYTES);
+    if (body !== 'ok') return { ok: false, reason: body };
     return { ok: true, contentType };
   }
   return { ok: false, reason: 'too_many_redirects' };
