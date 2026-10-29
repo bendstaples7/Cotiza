@@ -41,6 +41,6 @@ Needs Git and Node.js 20+, plus a Cloudflare API token with **Account > D1 > Edi
 4. Check the result line:
    - `[sync-cookies] Done. Cookies written to remote D1.` means the new session is saved.
    - `[sync-cookies] Valid cookies found in remote D1. Skipping.` means the stored session already works.
-   - Anything else: read the `[sync-cookies]` error lines. If Jobber shows a captcha, set `headless: false` in `scripts/sync-cookies.mjs` for that run only (don't commit it), solve the captcha in the browser window, and let the script finish.
+   - Anything else: read the `[sync-cookies]` error lines. If Jobber shows a captcha, set `headless: false` in `scripts/sync-cookies.mjs` for that run only (don't commit it), solve the captcha in the browser window, and let the script finish. The script waits only about 30 seconds after the login button is pressed, so solve it quickly or rerun.
 
 Reload Cotiza afterwards; the session gate should clear.
