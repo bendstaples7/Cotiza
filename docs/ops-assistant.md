@@ -108,6 +108,14 @@ A local run of `scripts/ops-assistant-exercise.mjs` on 13 Oct 2026 did use the r
 
 The OAuth screens are served by the worker. They are not the main Cotiza app.
 
+## Claude
+
+Claude uses the same `/mcp` server, OAuth flow and read-only tools as ChatGPT. Registration also accepts Claude's callback (`https://claude.ai/api/mcp/auth_callback`, plus the `claude.com` equivalent).
+
+1. In Claude: **Settings → Connectors → Add custom connector**.
+2. Name: `Cotiza Jobber`. URL: `https://social-media-cross-poster.chicago-reno.workers.dev/mcp`. Leave the OAuth client ID and secret blank.
+3. Click **Connect**, sign in with a `@chicago-reno.com` email and choose **Allow read access**.
+
 ## Deploy later (not part of this change)
 
 From `worker`, when you are ready:
