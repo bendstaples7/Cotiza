@@ -4,7 +4,7 @@
 CREATE TABLE IF NOT EXISTS assistant_expense_writes (
   source_key TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  status TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'created', 'unknown')),
   jobber_expense_id TEXT,
   title TEXT NOT NULL,
   total REAL NOT NULL,

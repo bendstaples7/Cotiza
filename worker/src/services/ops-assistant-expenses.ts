@@ -98,7 +98,9 @@ function text(raw: Record<string, unknown>, key: string, max: number, required: 
 
 function requireDate(raw: Record<string, unknown>, key: string): string {
   const value = text(raw, key, 10, true)!;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`))) {
+  const parsed = Date.parse(`${value}T00:00:00Z`);
+  // Date.parse rolls impossible dates (2026-02-31) forward, so compare the round trip.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(parsed) || new Date(parsed).toISOString().slice(0, 10) !== value) {
     throw new InvalidAssistantArgs(`${key} must be YYYY-MM-DD.`);
   }
   return value;
@@ -122,6 +124,10 @@ function optionalId(raw: Record<string, unknown>, key: string): string | undefin
   return value;
 }
 
+function allowedReceiptUrl(url: URL): boolean {
+  return url.protocol === 'https:' && RECEIPT_HOSTS.has(url.hostname) && !url.username && !url.password;
+}
+
 /**
  * Accept a direct receipt link or a known click-tracking wrapper around one, and
  * return the direct https URL on an allowed host. Anything else is rejected.
@@ -141,7 +147,7 @@ export function normalizeReceiptUrl(raw: string): string {
       throw new InvalidAssistantArgs('receiptUrl tracking link does not wrap a valid URL.');
     }
   }
-  if (url.protocol !== 'https:' || !RECEIPT_HOSTS.has(url.hostname) || url.username || url.password) {
+  if (!allowedReceiptUrl(url)) {
     throw new InvalidAssistantArgs(`receiptUrl must be an https link on ${[...RECEIPT_HOSTS].join(' or ')}.`);
   }
   return url.toString();
@@ -149,27 +155,75 @@ export function normalizeReceiptUrl(raw: string): string {
 
 export type ReceiptFetcher = (url: string) => Promise<Response>;
 
-const defaultFetcher: ReceiptFetcher = (url) => fetch(url, { redirect: 'follow' });
+const MAX_REDIRECTS = 3;
 
-async function checkReceipt(fetcher: ReceiptFetcher, url: string): Promise<{ ok: true; contentType: string } | { ok: false; reason: string }> {
-  let response: Response;
+const defaultFetcher: ReceiptFetcher = (url) => fetch(url, { redirect: 'manual' });
+
+/** Read at most `limit` bytes; false when the body is larger. */
+async function withinLimit(body: ReadableStream<Uint8Array> | null, limit: number): Promise<boolean> {
+  if (!body) return true;
+  const reader = body.getReader();
+  let total = 0;
   try {
-    response = await fetcher(url);
-  } catch {
-    return { ok: false, reason: 'download_failed' };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return true;
+      total += value.byteLength;
+      if (total > limit) return false;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
   }
-  try {
-    if (!response.ok) return { ok: false, reason: `http_${response.status}` };
+}
+
+/** Follow redirects by hand so every hop stays on an allowed receipt host. */
+async function checkReceipt(fetcher: ReceiptFetcher, url: string): Promise<{ ok: true; contentType: string } | { ok: false; reason: string }> {
+  let current = url;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    let response: Response;
+    try {
+      response = await fetcher(current);
+    } catch {
+      return { ok: false, reason: 'download_failed' };
+    }
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel().catch(() => undefined);
+      const location = response.headers.get('location');
+      let next: URL;
+      try {
+        next = new URL(location ?? '', current);
+      } catch {
+        return { ok: false, reason: 'bad_redirect' };
+      }
+      if (!location || !allowedReceiptUrl(next)) return { ok: false, reason: 'redirect_off_allowlist' };
+      current = next.toString();
+      continue;
+    }
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      return { ok: false, reason: `http_${response.status}` };
+    }
     const contentType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
     if (contentType !== 'application/pdf' && !contentType.startsWith('image/')) {
+      await response.body?.cancel().catch(() => undefined);
       return { ok: false, reason: 'not_a_pdf_or_image' };
     }
-    const length = Number(response.headers.get('content-length') || '0');
-    if (length > MAX_RECEIPT_BYTES) return { ok: false, reason: 'too_large' };
+    if (!(await withinLimit(response.body, MAX_RECEIPT_BYTES))) return { ok: false, reason: 'too_large' };
     return { ok: true, contentType };
-  } finally {
-    await response.body?.cancel().catch(() => undefined);
   }
+  return { ok: false, reason: 'too_many_redirects' };
+}
+
+/** True when `text` contains `key` not run into further letters or digits on either side. */
+export function mentionsSource(text: string, key: string): boolean {
+  const haystack = text.toLowerCase();
+  const needle = key.toLowerCase();
+  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
+    const before = haystack[at - 1] ?? '';
+    const after = haystack[at + needle.length] ?? '';
+    if (!/[a-z0-9]/.test(before) && !/[a-z0-9]/.test(after)) return true;
+  }
+  return false;
 }
 
 function mapExpense(node: ExpenseNode) {
@@ -198,10 +252,15 @@ function safeMessage(err: unknown): string {
   return sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 200);
 }
 
-/** Jobber rejected the request outright, so nothing was created. */
+/**
+ * Jobber refused the request before running it, so nothing was created. Other
+ * GraphQL errors can be raised after the mutation commits and stay `unknown`.
+ */
 function definitelyRejected(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
-  return /Jobber GraphQL error|Jobber API error \(4\d\d\)|Jobber API throttled|not configured|access token is unavailable/i.test(message);
+  if (/Jobber API error \(4\d\d\)|Jobber API throttled|not configured|access token is unavailable/i.test(message)) return true;
+  return /Jobber GraphQL error/i.test(message)
+    && /doesn't exist|isn't defined|was provided invalid value|Variable \$\w+ |not authorized|unauthorized|access denied|permission|scope/i.test(message);
 }
 
 interface WriteRow {
@@ -309,9 +368,8 @@ export class OpsAssistantExpenses {
         EXPENSES_QUERY,
         { first: 20, after: null, searchTerm: sourceKey },
       );
-      const needle = sourceKey.toLowerCase();
       const match = (existing.expenses?.edges ?? []).map((edge) => edge.node).find((node) =>
-        `${node.title ?? ''}\n${node.description ?? ''}`.toLowerCase().includes(needle));
+        mentionsSource(`${node.title ?? ''}\n${node.description ?? ''}`, sourceKey));
       if (match) {
         await mark('created', match.id ?? null);
         return { outcome: 'duplicate' as const, sourceKey, expenseId: match.id ?? null, expense: mapExpense(match), message: 'Jobber already has an expense mentioning this source. Nothing was created.' };

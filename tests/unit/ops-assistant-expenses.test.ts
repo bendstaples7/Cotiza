@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { EXPENSE_QUERIES, OpsAssistantExpenses, normalizeReceiptUrl } from '../../worker/src/services/ops-assistant-expenses.js';
+import { EXPENSE_QUERIES, OpsAssistantExpenses, mentionsSource, normalizeReceiptUrl } from '../../worker/src/services/ops-assistant-expenses.js';
 import { OpsAssistantRead } from '../../worker/src/services/ops-assistant-read.js';
 import { CallBudget, hasScope, scopeRequestAllowed } from '../../worker/src/services/assistant-access.js';
 import type { AssistantDirectory, AssistantPrincipal } from '../../worker/src/services/assistant-access.js';
@@ -88,6 +88,34 @@ describe('receipt url', () => {
   });
 });
 
+describe('find_expenses', () => {
+  it('maps one page and passes the search term and cursor through', async () => {
+    const jobber = { graphqlRequest: vi.fn(async () => ({ expenses: {
+      edges: [{ node: { id: 'exp-1', title: '24/7 VA', description: 'weekly', total: 216.2, date: '2026-10-22T12:00:00Z', linkedJob: null, reimbursableTo: null } }],
+      pageInfo: { hasNextPage: true, endCursor: 'cur-2' },
+    } })) };
+    const result = await new OpsAssistantExpenses(jobber, fakeWritesDb() as never).findExpenses('user-a', { searchTerm: 'VA', limit: 5, cursor: 'cur-1' }) as Record<string, any>;
+    expect(jobber.graphqlRequest).toHaveBeenCalledWith(EXPENSE_QUERIES.EXPENSES_QUERY, { first: 5, after: 'cur-1', searchTerm: 'VA' });
+    expect(result.outcome).toBe('ok');
+    expect(result.items[0]).toMatchObject({ id: 'exp-1', title: '24/7 VA', total: 216.2 });
+    expect(result.page).toEqual({ limit: 5, hasNextPage: true, nextCursor: 'cur-2' });
+  });
+
+  it('reports a failed read instead of an empty list', async () => {
+    const jobber = { graphqlRequest: vi.fn(async () => { throw new Error('Jobber API error (500): down'); }) };
+    const result = await new OpsAssistantExpenses(jobber, fakeWritesDb() as never).findExpenses('user-a', {}) as Record<string, any>;
+    expect(result.outcome).toBe('failed');
+    expect(result.failure.message).toContain('not an empty list');
+  });
+});
+
+describe('source matching', () => {
+  it('matches a whole reference but not a longer one', () => {
+    expect(mentionsSource('Paid invoice #5511-R-0024.', '#5511-R-0024')).toBe(true);
+    expect(mentionsSource('Paid invoice #5511-R-00241', '#5511-R-0024')).toBe(false);
+  });
+});
+
 describe('log_expense', () => {
   it('creates once with the unwrapped receipt and reads it back', async () => {
     const db = fakeWritesDb();
@@ -129,6 +157,31 @@ describe('log_expense', () => {
     expect(jobber.graphqlRequest.mock.calls.filter(([q]) => q === EXPENSE_QUERIES.EXPENSE_CREATE)).toHaveLength(1);
   });
 
+  it('treats a generic GraphQL error from the mutation as unknown', async () => {
+    const db = fakeWritesDb();
+    const jobber = jobberWith(() => { throw new Error('Jobber GraphQL error: {"errors":[{"message":"Internal server error"}]}'); });
+    const result = await new OpsAssistantExpenses(jobber, db as never, pdfFetcher).logExpense('user-a', INPUT) as Record<string, unknown>;
+    expect(result.outcome).toBe('unknown');
+    expect(db.rows.get(INPUT.sourceKey)?.status).toBe('unknown');
+  });
+
+  it('releases the claim when Jobber denies permission before running the mutation', async () => {
+    const db = fakeWritesDb();
+    const jobber = jobberWith(() => { throw new Error('Jobber GraphQL error: {"errors":[{"message":"Access denied for expenseCreate"}]}'); });
+    const result = await new OpsAssistantExpenses(jobber, db as never, pdfFetcher).logExpense('user-a', INPUT) as Record<string, unknown>;
+    expect(result.outcome).toBe('failed');
+    expect(db.rows.has(INPUT.sourceKey)).toBe(false);
+  });
+
+  it('refuses a receipt that redirects off Square', async () => {
+    const db = fakeWritesDb();
+    const jobber = jobberWith(created);
+    const redirecting = vi.fn(async () => new Response(null, { status: 302, headers: { location: 'https://evil.example/r.pdf' } }));
+    const result = await new OpsAssistantExpenses(jobber, db as never, redirecting).logExpense('user-a', INPUT) as { failure: { message: string } };
+    expect(result.failure.message).toContain('redirect_off_allowlist');
+    expect(jobber.graphqlRequest.mock.calls.some(([q]) => q === EXPENSE_QUERIES.EXPENSE_CREATE)).toBe(false);
+  });
+
   it('releases the claim when Jobber rejects the input', async () => {
     const db = fakeWritesDb();
     const jobber = jobberWith({ expenseCreate: { expense: null, userErrors: [{ message: 'Total is invalid' }] } });
@@ -155,6 +208,7 @@ describe('log_expense', () => {
     await expect(tools.logExpense('user-a', { ...INPUT, total: 216.205 })).rejects.toThrow(/two decimal/);
     await expect(tools.logExpense('user-a', { ...INPUT, total: -1 })).rejects.toThrow(/positive/);
     await expect(tools.logExpense('user-a', { ...INPUT, extra: 1 })).rejects.toThrow(/Unknown field/);
+    await expect(tools.logExpense('user-a', { ...INPUT, date: '2026-02-31' })).rejects.toThrow(/YYYY-MM-DD/);
     expect(jobber.graphqlRequest).not.toHaveBeenCalled();
   });
 });

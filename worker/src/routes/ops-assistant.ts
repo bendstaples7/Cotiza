@@ -220,6 +220,16 @@ export async function handleMcpPost(request: Request, deps: {
         }, 200, headers);
       }
       await audit(deps.db, principal.userId, name, `tool=${name} outcome=failed`, 'error');
+      if (name === EXPENSE_WRITE_TOOL.name) {
+        return mcpEvent({
+          jsonrpc: '2.0',
+          id,
+          result: {
+            content: [{ type: 'text', text: JSON.stringify({ outcome: 'unknown', message: 'The expense write did not finish cleanly and may or may not exist in Jobber. Check Jobber by hand; do not retry automatically.' }) }],
+            isError: true,
+          },
+        }, 200, headers);
+      }
       return mcpEvent({
         jsonrpc: '2.0',
         id,
