@@ -58,6 +58,7 @@ describe('JobberWebSession.keepAlive', () => {
     await new JobberWebSession(db as never).keepAlive();
 
     expect(db._stmts[1].bind.mock.calls[0][0]).toBe('_session=new; keep=y');
+    expect(db._stmts[1].bind.mock.calls[0][2]).toBe('_session=old; old=x; keep=y');
   });
 
   it.each([

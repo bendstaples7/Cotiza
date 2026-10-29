@@ -243,7 +243,7 @@ export class JobberWebSession {
 
       if (result.authFailed) {
         // Cookies expired — clear them so sync-cookies.mjs refreshes on next dev start
-        await this.clearCookies();
+        await this.clearCookiesIfUnchanged(cookies);
         return { formData: null, sessionExpired: true };
       }
 
@@ -338,12 +338,6 @@ export class JobberWebSession {
   private async clearCookiesIfUnchanged(cookies: string): Promise<void> {
     try {
       await this.db.prepare("DELETE FROM jobber_web_session WHERE id = 'default' AND cookies = ?").bind(cookies).run();
-    } catch { /* ignore */ }
-  }
-
-  private async clearCookies(): Promise<void> {
-    try {
-      await this.db.prepare("DELETE FROM jobber_web_session WHERE id = 'default'").run();
     } catch { /* ignore */ }
   }
 
