@@ -50,6 +50,51 @@ const REQUEST_DETAILS_QUERY = `
   }
 `;
 
+const ACCOUNT_PROBE_QUERY = '{ account { id } }';
+
+/**
+ * How long a successful keep-alive check keeps the session marked valid.
+ * The cron runs every 30 minutes, so this survives a couple of missed runs.
+ */
+export const KEEPALIVE_TTL_MS = 2 * 60 * 60 * 1000;
+
+export type KeepAliveResult = 'extended' | 'expired' | 'missing' | 'error';
+
+/** Read Set-Cookie headers individually (a joined header breaks on Expires dates). */
+function readSetCookies(headers: Headers): string[] {
+  const getSetCookie = (headers as Headers & { getSetCookie?: () => string[] }).getSetCookie;
+  return typeof getSetCookie === 'function' ? getSetCookie.call(headers) : [];
+}
+
+/**
+ * Apply Set-Cookie updates to a "name=value; name2=value2" cookie string so a
+ * session Jobber rotates on use stays current. Cookies Jobber deletes are dropped.
+ */
+export function mergeSetCookies(cookieString: string, setCookies: string[]): string {
+  const jar = new Map<string, string>();
+  for (const part of cookieString.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq > 0) jar.set(part.slice(0, eq).trim(), part.slice(eq + 1).trim());
+  }
+  for (const header of setCookies) {
+    const [pair, ...attributes] = header.split(';');
+    const eq = pair.indexOf('=');
+    if (eq <= 0) continue;
+    const name = pair.slice(0, eq).trim();
+    const value = pair.slice(eq + 1).trim();
+    const deleted = value === '' || attributes.some((a) => {
+      const [key, raw] = a.split('=');
+      const attr = key.trim().toLowerCase();
+      if (attr === 'max-age') return Number(raw) <= 0;
+      if (attr === 'expires') return new Date(a.slice(a.indexOf('=') + 1).trim()).getTime() <= Date.now();
+      return false;
+    });
+    if (deleted) jar.delete(name);
+    else jar.set(name, value);
+  }
+  return Array.from(jar, ([name, value]) => `${name}=${value}`).join('; ');
+}
+
 export class JobberWebSession {
   private db: D1Database;
 
@@ -101,6 +146,71 @@ export class JobberWebSession {
   }
 
   /**
+   * Ask Jobber whether the stored cookies still work, and extend the local
+   * expiry when they do. Our 4-hour expiry is a local guess, not Jobber's;
+   * this runs on a Cloudflare cron so a still-valid session is not thrown
+   * away and a dead one is cleared instead of trusted until its timestamp.
+   * Uses plain API calls only (no browser), so Jobber's login captcha is not involved.
+   */
+  async keepAlive(): Promise<KeepAliveResult> {
+    let row: { cookies: string; expires_at: string } | null;
+    try {
+      row = await this.db.prepare(
+        "SELECT cookies, expires_at FROM jobber_web_session WHERE id = 'default'"
+      ).first() as { cookies: string; expires_at: string } | null;
+    } catch {
+      return 'error';
+    }
+    if (!row?.cookies) return 'missing';
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    try {
+      const resp = await fetch(INTERNAL_GQL_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Cookie': row.cookies },
+        body: JSON.stringify({ query: ACCOUNT_PROBE_QUERY }),
+        signal: controller.signal,
+      });
+
+      if (resp.status === 401 || resp.status === 403) {
+        await this.clearCookiesIfUnchanged(row.cookies);
+        return 'expired';
+      }
+      if (!resp.ok) {
+        console.error(`[JobberWebSession] keepAlive failed operation=keepAlive http=${resp.status}`);
+        return 'error';
+      }
+
+      const data = await resp.json() as any;
+      const errorText = (data?.errors ?? []).map((e: any) => String(e?.message ?? '')).join(', ');
+      if (errorText.includes('unauthenticated') || errorText.includes('hidden') || (!errorText && !data?.data?.account?.id)) {
+        await this.clearCookiesIfUnchanged(row.cookies);
+        return 'expired';
+      }
+      if (errorText) {
+        console.error(`[JobberWebSession] keepAlive failed operation=keepAlive http=${resp.status} ${summarizeUpstreamBody(JSON.stringify({ errors: data.errors }), [row.cookies])}`);
+        return 'error';
+      }
+
+      const cookies = mergeSetCookies(row.cookies, readSetCookies(resp.headers));
+      const currentExpiry = new Date(row.expires_at).getTime();
+      const extendedExpiry = Date.now() + KEEPALIVE_TTL_MS;
+      const expiresAt = new Date(Number.isFinite(currentExpiry) ? Math.max(currentExpiry, extendedExpiry) : extendedExpiry).toISOString();
+      // Only touch the row we checked: a login that landed meanwhile wins.
+      await this.db.prepare(
+        "UPDATE jobber_web_session SET cookies = ?, expires_at = ?, updated_at = datetime('now') WHERE id = 'default' AND cookies = ?"
+      ).bind(cookies, expiresAt, row.cookies).run();
+      return 'extended';
+    } catch (err) {
+      console.error(`[JobberWebSession] keepAlive failed operation=keepAlive ${sanitizeLogText(err instanceof Error ? err.message : err, [row.cookies])}`);
+      return 'error';
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  /**
    * Load valid (non-expired) cookies from D1.
    */
   async loadCookies(): Promise<string | null> {
@@ -133,7 +243,7 @@ export class JobberWebSession {
 
       if (result.authFailed) {
         // Cookies expired — clear them so sync-cookies.mjs refreshes on next dev start
-        await this.clearCookies();
+        await this.clearCookiesIfUnchanged(cookies);
         return { formData: null, sessionExpired: true };
       }
 
@@ -224,9 +334,10 @@ export class JobberWebSession {
     };
   }
 
-  private async clearCookies(): Promise<void> {
+  /** Clear the session only if it still holds the cookies Jobber just rejected. */
+  private async clearCookiesIfUnchanged(cookies: string): Promise<void> {
     try {
-      await this.db.prepare("DELETE FROM jobber_web_session WHERE id = 'default'").run();
+      await this.db.prepare("DELETE FROM jobber_web_session WHERE id = 'default' AND cookies = ?").bind(cookies).run();
     } catch { /* ignore */ }
   }
 

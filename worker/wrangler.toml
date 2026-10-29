@@ -55,5 +55,7 @@ GITHUB_REPO = "bendstaples7/chicago-reno-social-generator"
 # GMAIL_REFRESH_TOKEN      — OAuth refresh token with https://www.googleapis.com/auth/gmail.readonly scope (email context enrichment)
 
 [triggers]
-# Run corpus sync daily at 3:00 AM UTC to keep quote history and quantity data fresh
-crons = ["0 3 * * *"]
+# Run corpus sync daily at 3:00 AM UTC to keep quote history and quantity data fresh.
+# Every 30 minutes, check the Jobber web session with Jobber and extend it while it still works
+# (src/scheduled/jobber-session-keepalive.ts; keep the two cron strings in sync).
+crons = ["0 3 * * *", "*/30 * * * *"]
