@@ -162,6 +162,27 @@ describe('finance:read scope', () => {
     }
   });
 
+  it('reports a failed account lookup as a failed read, and hides the tool from the list', async () => {
+    const failing = () => {
+      const db = createMockD1();
+      const original = db.prepare.getMockImplementation()!;
+      let first = true;
+      db.prepare.mockImplementation((sql: string) => {
+        const stmt = original(sql);
+        if (first) { first = false; stmt.first.mockRejectedValue(new Error('D1 down')); }
+        return stmt;
+      });
+      return db;
+    };
+    const jobber = jobberMock();
+    const { isError, payload } = await toolPayload(await handleMcpPost(mcp('tools/call', { name: 'weekly_payout_report', arguments: PERIOD }), deps(financePrincipal, failing(), jobber)));
+    expect(isError).toBe(true);
+    expect(payload.outcome).toBe('failed');
+    expect((payload.failure as { code: string }).code).toBe('live_read_failed');
+    expect(jobber.graphqlRequest).not.toHaveBeenCalled();
+    expect(await toolNames(await handleMcpPost(mcp('tools/list'), deps(financePrincipal, failing())))).not.toContain('weekly_payout_report');
+  });
+
   it('rejects invalid periods and extra fields before reading Jobber', async () => {
     for (const args of [
       { start: '2026-02-30', end: '2026-03-01' },
@@ -171,10 +192,12 @@ describe('finance:read scope', () => {
       { start: '2026-10-17' },
     ]) {
       const jobber = jobberMock();
-      const { isError, payload } = await toolPayload(await handleMcpPost(mcp('tools/call', { name: 'weekly_payout_report', arguments: args }), deps(financePrincipal, dbFor(OFFICE), jobber)));
+      const db = dbFor(OFFICE);
+      const { isError, payload } = await toolPayload(await handleMcpPost(mcp('tools/call', { name: 'weekly_payout_report', arguments: args }), deps(financePrincipal, db, jobber)));
       expect(isError).toBe(true);
       expect(payload.outcome).toBe('invalid_request');
       expect(jobber.graphqlRequest).not.toHaveBeenCalled();
+      expect(db._stmts.some((stmt) => stmt.bind.mock.calls.some((call) => call.some((arg: unknown) => String(arg).includes('outcome=invalid_request token=tok-fin'))))).toBe(true);
     }
   });
 
