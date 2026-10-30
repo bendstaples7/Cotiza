@@ -6,7 +6,7 @@ POST /api/reports/weekly with the existing Cotiza session bearer token and JSON:
 ```json
 {"start":"2026-10-17","end":"2026-10-23"}
 ```
-Only the office@chicago-reno.com account can call this route. The old ops:read MCP grant does not gain financial record access or email permissions; connector access needs the separate finance:read consent described below. Periods are limited to 31 days; reads stop with an error rather than returning partial data after 50 pages per collection. All source collections must succeed.
+Only the office@chicago-reno.com account can call this route. The old ops:read MCP grant does not gain financial record access or email permissions; connector access needs the separate finance:read consent described below. The account rule is only as strong as sign-in, and `initiateAuth` checks the `@chicago-reno.com` suffix without verifying that the person owns the address, so do not treat it as a hard control. Periods are limited to 31 days; reads stop with an error rather than returning partial data after 50 pages per collection. All source collections must succeed.
 
 The response contains complete:true, period, summary, expense and transaction rows, two CSV files, source and limitations. API-level schema/permission failures are explicit errors. Tokens stay server-side. No email is sent by the route.
 
@@ -17,7 +17,7 @@ Expense reports preserve Entered by, Paid by and Reimbursable to separately, plu
 ## Connector tool
 The Cotiza MCP connector ("Chicago Reno Jobber Connection") exposes the same report as the read-only tool `weekly_payout_report` with input `{"start":"YYYY-MM-DD","end":"YYYY-MM-DD"}` and no other fields. It calls the same generator, so the same guarantees apply: America/Chicago dates, 31-day maximum, all collections must succeed, and any failure is an explicit error with no rows. The result holds period, summary, expense and transaction rows with source IDs, and limitations; the CSV file bodies are left out. Nothing is emailed.
 
-The tool is listed and callable only when the connection holds the separate `finance:read` scope **and** the connected Cotiza user is office@chicago-reno.com. A connection without the scope gets an explicit `insufficient_scope` refusal; any other user gets `forbidden_user`. Calls are written to the activity log with the token ID.
+`find_expenses` (see [ops-assistant.md](ops-assistant.md#tools)) sits behind the same two checks. The tool is listed and callable only when the connection holds the separate `finance:read` scope **and** the connected Cotiza user is office@chicago-reno.com. A connection without the scope gets an explicit `insufficient_scope` refusal; any other user gets `forbidden_user`. Calls are written to the activity log with the token ID.
 
 To enable it, disconnect the connector in Claude, connect it again, sign in as office@chicago-reno.com, and tick "Also allow reading weekly payout reports (expenses and payments)". The tick is only shown to the office account. Existing connections keep their old scope: `ops:read` alone, or `ops:read review:write`, still has no financial record access, and refreshing a token never adds scopes.
 
