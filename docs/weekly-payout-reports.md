@@ -6,7 +6,7 @@ POST /api/reports/weekly with the existing Cotiza session bearer token and JSON:
 ```json
 {"start":"2026-10-17","end":"2026-10-23"}
 ```
-Only the office@chicago-reno.com account can call this route. An ops:read MCP grant gains no email permissions, and its only financial read is `find_expenses`, limited to this same account. Periods are limited to 31 days; reads stop with an error rather than returning partial data after 50 pages per collection. All source collections must succeed.
+Only the office@chicago-reno.com account can call this route. An ops:read MCP grant gains no email permissions, and its only expense-record read is `find_expenses`, limited to this same account. Quote and job tools already show monetary amounts. Periods are limited to 31 days; reads stop with an error rather than returning partial data after 50 pages per collection. All source collections must succeed.
 
 The response contains complete:true, period, summary, expense and transaction rows, two CSV files, source and limitations. API-level schema/permission failures are explicit errors. Tokens stay server-side. No email is sent by the route.
 

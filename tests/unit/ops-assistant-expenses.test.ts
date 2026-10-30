@@ -93,6 +93,8 @@ describe('find_expenses', () => {
   it('rejects bad dates and unknown fields', async () => {
     const read = new OpsAssistantRead({ graphqlRequest: vi.fn() }, office());
     await expect(callAssistantTool(read, 'u', 'find_expenses', { onOrAfter: 'Oct 29' })).rejects.toThrow(/YYYY-MM-DD/);
+    await expect(callAssistantTool(read, 'u', 'find_expenses', { onOrAfter: '2026-02-30' })).rejects.toThrow(/real calendar date/);
+    await expect(callAssistantTool(read, 'u', 'find_expenses', { onOrAfter: '2026-10-30', onOrBefore: '2026-10-29' })).rejects.toThrow(/must not be later/);
     await expect(callAssistantTool(read, 'u', 'find_expenses', { query: '{ x }' })).rejects.toThrow(/Unknown field/);
   });
 });

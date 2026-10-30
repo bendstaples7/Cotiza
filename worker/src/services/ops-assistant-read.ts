@@ -6,7 +6,7 @@ import { failedJobberRead, liveJobberRead } from './jobber-read.js';
 import { sanitizeLogText } from './jobber-log-sanitize.mjs';
 import { downloadRequestPhoto, loadRequestPhotos, photoFailureReason } from './jobber-request-photos.js';
 import { DETAIL_VISITS_PER_PAGE, JOB_QUERIES, JOB_STATUSES, mapVisit, summarizeVisits, type VisitNode } from './ops-assistant-jobs.js';
-import { EXPENSE_ACCOUNT, EXPENSE_QUERIES, expenseDateFilter } from './ops-assistant-expenses.js';
+import { EXPENSE_ACCOUNT, EXPENSE_QUERIES, expenseDateFilter, isCalendarDate } from './ops-assistant-expenses.js';
 import { reportDate } from './weekly-payout-reports.js';
 
 /** One Jobber page per call. Text filters apply only to that page. */
@@ -646,6 +646,12 @@ export class OpsAssistantRead {
     const searchTerm = optionalText(raw, 'searchTerm');
     const onOrAfter = optionalDate(raw, 'onOrAfter');
     const onOrBefore = optionalDate(raw, 'onOrBefore');
+    for (const date of [onOrAfter, onOrBefore]) {
+      if (date && !isCalendarDate(date)) throw new InvalidAssistantArgs(`${date} is not a real calendar date.`);
+    }
+    if (onOrAfter && onOrBefore && onOrAfter > onOrBefore) {
+      throw new InvalidAssistantArgs('onOrAfter must not be later than onOrBefore.');
+    }
     const user = await this.db.prepare('SELECT email FROM users WHERE id = ?').bind(userId).first<{ email: string }>();
     if (user?.email?.toLowerCase() !== EXPENSE_ACCOUNT) {
       return { outcome: 'failed' as const, items: [] as unknown[], failure: { code: 'office_account_required', message: `Only ${EXPENSE_ACCOUNT} can read expenses. This is not an empty result.` } };

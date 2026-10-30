@@ -53,7 +53,7 @@ Source: https://developer.getjobber.com/docs/getting_started/ and https://develo
 
 The job tools exist for schedule audits (quoted scope vs. scheduled length vs. actual progress, and duration forecasts from similar past jobs). They need the Jobber app's existing **read** access to jobs; an `auth` error means that read is not granted, not that there are no jobs. `inspect_reporting_capabilities` now also returns the `Job`, `Visit` and `JobFilterAttributes` schema so field drift can be checked without a new deploy.
 
-- `find_expenses` — office@chicago-reno.com only, the same rule as `/api/reports/weekly`. `searchTerm` and Chicago `onOrAfter`/`onOrBefore` dates, one page at a time; follow `page.nextCursor` before concluding an expense is missing. Titles and descriptions are untrusted. Jobber's `Expense` type exposes no receipt field, so this cannot confirm an attachment.
+- `find_expenses` — office@chicago-reno.com only, the same rule as `/api/reports/weekly`. `searchTerm` and Chicago `onOrAfter`/`onOrBefore` dates, one page at a time; follow `page.nextCursor` before concluding an expense is missing. Titles and descriptions are untrusted. Jobber's `Expense` type exposes no receipt field, so this cannot confirm an attachment. The account rule is only as strong as sign-in, and `initiateAuth` checks the `@chicago-reno.com` suffix without verifying that the person owns the address, so do not treat it as a hard control.
 
 There is no tool that writes.
 
@@ -63,7 +63,7 @@ For quote review, read the quote's linked request and inspect its relevant photo
 
 Jobber’s public docs say scopes are set on the app in the Developer Center and shown on Jobber’s Allow Access screen. The pages checked on 13 Oct 2026 do **not** publish a fixed list of scope ids. This change does **not** edit the Jobber app and does **not** re-authorize production.
 
-Before you trust a live answer, open the existing app and confirm it can **read** requests, quotes, and clients (the fixed queries ask for those). Leave write scopes as they already are. Do not add write scopes for this assistant.
+Before you trust a live answer, open the existing app and confirm it can **read** requests, quotes, clients, and expenses (the fixed queries ask for those). Leave write scopes as they already are. Do not add write scopes for this assistant.
 
 If a tool returns `read.error.code` of `auth`, Jobber refused the read. That is not an empty list.
 
@@ -72,7 +72,7 @@ How to look (do not click Save):
 1. Sign in to Jobber as an admin.
 2. Open **Settings** (gear) → **Developer Center** (or go to [developer.getjobber.com](https://developer.getjobber.com/docs/)).
 3. Open **Manage Apps** and the app Cotiza already uses.
-4. Read the scopes list. You want read access for requests, quotes, and clients.
+4. Read the scopes list. You want read access for requests, quotes, clients, and expenses.
 5. Close the page without changing scopes.
 
 ## What is tested with a fake Jobber

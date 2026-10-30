@@ -27,7 +27,16 @@ const EXPENSES_QUERY = `
 
 export const EXPENSE_QUERIES = { EXPENSES_QUERY };
 
-/** Widens by a day either side; callers re-check each date in Chicago time. */
+export function isCalendarDate(value: string): boolean {
+  const parsed = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 10) === value;
+}
+
+/**
+ * Widens the UTC range; callers re-check each date in Chicago time. The upper
+ * bound is two days past onOrBefore's midnight, not one: `before` is exclusive
+ * and a Chicago evening falls on the next UTC day.
+ */
 export function expenseDateFilter(onOrAfter?: string, onOrBefore?: string) {
   const date: { after?: string; before?: string } = {};
   if (onOrAfter) date.after = new Date(Date.parse(`${onOrAfter}T00:00:00Z`) - 86_400_000).toISOString();
