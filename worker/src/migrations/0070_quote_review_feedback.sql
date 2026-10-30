@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS quote_review_feedback (
   written_via TEXT NOT NULL CHECK (written_via IN ('assistant', 'import')),
   written_by_user_id TEXT,
   written_by_token_id TEXT,
-  written_by_client_id TEXT
+  written_by_client_id TEXT,
+  CHECK (written_via <> 'assistant' OR (written_by_user_id IS NOT NULL AND written_by_token_id IS NOT NULL AND written_by_client_id IS NOT NULL))
 );
 CREATE INDEX IF NOT EXISTS idx_quote_review_feedback_quote ON quote_review_feedback(quote_number, seq);
 CREATE INDEX IF NOT EXISTS idx_quote_review_feedback_supersedes ON quote_review_feedback(supersedes);
@@ -37,7 +38,8 @@ CREATE TABLE IF NOT EXISTS quote_review_records (
   written_via TEXT NOT NULL CHECK (written_via IN ('assistant', 'import')),
   written_by_user_id TEXT,
   written_by_token_id TEXT,
-  written_by_client_id TEXT
+  written_by_client_id TEXT,
+  CHECK (written_via <> 'assistant' OR (written_by_user_id IS NOT NULL AND written_by_token_id IS NOT NULL AND written_by_client_id IS NOT NULL))
 );
 CREATE INDEX IF NOT EXISTS idx_quote_review_records_quote ON quote_review_records(quote_number, seq);
 

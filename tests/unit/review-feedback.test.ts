@@ -89,6 +89,7 @@ describe('review:write scope', () => {
     expect(normalizeScope('review:write')).toBe('ops:read review:write');
     expect(normalizeScope('review:write  ops:read')).toBe('ops:read review:write');
     expect(normalizeScope('ops:read jobber:write')).toBeNull();
+    expect(normalizeScope(['review:write'])).toBeNull();
     expect(hasScope('ops:read', 'review:write')).toBe(false);
     expect(hasScope('ops:read review:write', 'review:write')).toBe(true);
   });
@@ -236,7 +237,7 @@ describe('append-only ledger', () => {
   it('only ever inserts, and the migration blocks updates and deletes', async () => {
     const db = createMockD1();
     configurePrepareResults(db, [
-      { first: { id: 'F002' } },
+      { first: { id: 'F002', quote_number: '706' } },
       { first: { id: 'F074', created_at: 'now' } },
       { first: { id: 'QR-706-2', created_at: 'now', supersedes: 'QR-706-1' } },
     ]);
@@ -264,6 +265,36 @@ describe('append-only ledger', () => {
     configurePrepareResults(db, [{ first: null }]);
     await expect(new ReviewFeedbackStore(db as never).recordFeedback(writePrincipal, { ...goodEntry, supersedes: 'F999' })).rejects.toThrow(/no entry/);
     expect(sqlOf(db).some((sql) => sql.includes('INSERT'))).toBe(false);
+  });
+
+  it('keeps a supersede from hiding an entry from other quotes', async () => {
+    const attempt = async (targetQuote: string | null, quoteNumber: string | null) => {
+      const db = createMockD1();
+      configurePrepareResults(db, [{ first: { id: 'F002', quote_number: targetQuote } }, { first: { id: 'F074', created_at: 'now' } }]);
+      return new ReviewFeedbackStore(db as never).recordFeedback(writePrincipal, { ...goodEntry, quoteNumber, supersedes: 'F002' });
+    };
+    await expect(attempt(null, '706')).rejects.toThrow(/all quotes/);
+    await expect(attempt('669', '706')).rejects.toThrow(/quote 669/);
+    await expect(attempt('706', '706')).resolves.toMatchObject({ outcome: 'recorded' });
+    await expect(attempt('706', null)).resolves.toMatchObject({ outcome: 'recorded' });
+    await expect(attempt(null, null)).resolves.toMatchObject({ outcome: 'recorded' });
+  });
+
+  it('refuses contact details in text and under any key spelling', async () => {
+    const store = new ReviewFeedbackStore(createMockD1() as never);
+    await expect(store.recordFeedback(writePrincipal, { ...goodEntry, excerpt: 'call 3125550100' })).rejects.toThrow(/contact details/);
+    await expect(store.recordFeedback(writePrincipal, { ...goodEntry, rule: 'email pat@example.com' })).rejects.toThrow(/contact details/);
+    const record = (body: Record<string, unknown>) => store.recordQuoteReview(writePrincipal, { author: 'Ben', source: 's', quoteNumber: '706', record: body });
+    await expect(record({ customerName: 'Pat' })).rejects.toThrow(/contact/);
+    await expect(record({ emailAddress: 'x' })).rejects.toThrow(/contact/);
+    await expect(record({ notes: ['call 312-555-0100'] })).rejects.toThrow(/contact/);
+  });
+
+  it('allows the company email in text', async () => {
+    const db = createMockD1();
+    configurePrepareResults(db, [{ first: { id: 'F074', created_at: 'now' } }]);
+    const saved = await new ReviewFeedbackStore(db as never).recordFeedback(writePrincipal, { ...goodEntry, rule: 'Send to office@chicago-reno.com' });
+    expect(saved).toMatchObject({ outcome: 'recorded' });
   });
 
   it('validates fields, lengths and statuses', async () => {
@@ -329,6 +360,13 @@ describe('read_review_feedback pagination', () => {
     await expect(store.read({ cursor: 'abc' })).rejects.toThrow(/cursor/);
     await expect(store.read({ quote: '706' })).rejects.toThrow(/Unknown field/);
 
+    const partial = createMockD1();
+    partial.prepare
+      .mockImplementationOnce(() => ({ bind: () => ({ all: async () => ({ results: [row(1)] }) }) }))
+      .mockImplementationOnce(() => { throw new Error('D1 down'); });
+    const noRecord = await new ReviewFeedbackStore(partial as never).read({ quoteNumber: '706' }) as { outcome: string };
+    expect(noRecord.outcome).toBe('failed');
+
     const empty = await store.read({}) as { outcome: string; items: unknown[] };
     expect(empty).toMatchObject({ outcome: 'ok', items: [] });
 
@@ -353,13 +391,13 @@ describe('feedback.json import', () => {
     updated_on: '2026-10-29',
     feedback_entries: [
       { id: 'F001', date: '2026-10-20', author: 'Ben', source: 'Current conversation', quote: null, status: 'confirmed', scope: 'all reviews', excerpt: 'keep a ledger', rule: 'Consult the ledger.' },
-      { id: 'F002', date: '2026-10-21', author: 'Ben', source: 'WhatsApp', quote: '702', status: 'confirmed direction; assistant specifics remain proposed', scope: 'quote 702', excerpt: "Call Pat Example at 312-555-0100 or pat@example.com, it's fine", rule: 'Use office@chicago-reno.com for follow-up.' },
+      { id: 'F002', date: '2026-10-21', author: 'Ben', source: 'WhatsApp', quote: '702', status: 'confirmed direction; assistant specifics remain proposed for Pat Example', scope: 'quote 702', excerpt: "Call PAT EXAMPLE at 312-555-0100, 3125550101 or pat@example.com, it's fine", rule: 'Use office@chicago-reno.com for follow-up.' },
       { id: 'F-CAPACITY-PRICING-20261023', date: '2026-10-23', author: 'Ben', source: 'chat', quote: 'all', status: 'accepted/closed', excerpt: 'x', rule: 'y' },
     ],
     calibration: { quote: '669', observed_on: '2026-10-20', edit_register: [{ id: '669-E01' }] },
     quote_697: { observed_on: '2026-10-21', verification: ['ok'] },
     quote_reviews: {
-      702: { observed_on: '2026-10-22', client: 'Pat Example', edit_register: [{ id: '702-E01', action: 'Tell Pat Example the price', name: 'Tile: Install' }], closed_findings: ['done'] },
+      702: { observed_on: '2026-10-22', client: 'Pat Example', 'client-name': 'Pat Example', customerName: 'Pat Example', edit_register: [{ id: '702-E01', action: 'Tell Pat Example the price', name: 'Tile: Install' }], closed_findings: ['done'] },
     },
   };
 
@@ -372,16 +410,16 @@ describe('feedback.json import', () => {
 
   it('converts entries and per-quote records without contact details', () => {
     const { entries, records } = ledgerToRows(ledger);
-    expect(entries.map((e: { seq: number; id: string }) => [e.seq, e.id])).toEqual([[1, 'F001'], [2, 'F002'], [3, 'F-CAPACITY-PRICING-20261023']]);
+    expect(entries.map((e: { id: string }) => e.id)).toEqual(['F001', 'F002', 'F-CAPACITY-PRICING-20261023']);
     expect(entries[0].quote_number).toBeNull();
     expect(entries[2].quote_number).toBeNull();
-    expect(entries[1]).toMatchObject({ quote_number: '702', status: 'confirmed', status_detail: 'confirmed direction; assistant specifics remain proposed' });
-    expect(entries[1].excerpt).not.toMatch(/312-555-0100|pat@example\.com|Pat Example/);
+    expect(entries[1]).toMatchObject({ quote_number: '702', status: 'confirmed', status_detail: 'confirmed direction; assistant specifics remain proposed for the customer' });
+    expect(entries[1].excerpt).not.toMatch(/312-555-0100|3125550101|pat@example\.com|pat example/i);
     expect(entries[1].rule).toContain('office@chicago-reno.com');
 
     expect(records.map((r: { id: string }) => r.id)).toEqual(['QR-669-1', 'QR-697-1', 'QR-702-1']);
     const r702 = JSON.parse(records[2].record);
-    expect(r702.client).toBeUndefined();
+    expect(Object.keys(r702).sort()).toEqual(['closed_findings', 'edit_register', 'observed_on']);
     expect(JSON.stringify(r702)).not.toContain('Pat Example');
     expect(r702.edit_register[0].name).toBe('Tile: Install');
     expect(r702.closed_findings).toEqual(['done']);
@@ -391,6 +429,7 @@ describe('feedback.json import', () => {
     expect(sql.match(/INSERT OR IGNORE INTO quote_review_records/g)).toHaveLength(3);
     expect(sql).toContain("it''s fine");
     expect(sql).not.toMatch(/\b(UPDATE|DELETE)\b/);
+    expect(sql).not.toMatch(/\(seq,/);
   });
 
   it('uses the same contact-key rule as the worker', () => {

@@ -13,8 +13,9 @@ export const REVIEW_WRITE_SCOPE = REVIEW_WRITE;
  * Canonical scope string for a request: `ops:read` is always included, unknown scopes
  * make the whole request invalid (null), and order is fixed so stored values compare.
  */
-export function normalizeScope(raw: string | null | undefined): string | null {
-  const parts = new Set((raw || '').split(/\s+/).filter(Boolean));
+export function normalizeScope(raw: unknown): string | null {
+  if (raw !== null && raw !== undefined && typeof raw !== 'string') return null;
+  const parts = new Set(((raw as string | null | undefined) || '').split(/\s+/).filter(Boolean));
   for (const part of parts) {
     if (!(KNOWN_SCOPES as readonly string[]).includes(part)) return null;
   }

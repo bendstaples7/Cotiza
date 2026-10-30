@@ -24,7 +24,11 @@ export const REVIEW_FEEDBACK_LIMITS = {
 } as const;
 
 /** Keys that would hold customer contact details. Rejected on write, dropped on import. */
-export const CONTACT_KEY_RE = /^(client|client_name|customer|customer_name|contact|contact_name|email|emails|phone|phones|mobile|address|street|property_address|service_address)$/i;
+export const CONTACT_KEY_RE = /^(client|client_name|customer|customer_name|contact|contact_name|email|emails|email_address|phone|phones|phone_number|mobile|address|street|street_address|property_address|service_address)$/;
+
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+const PHONE_RE = /(?:\+?1[-. ]?)?\(?\b\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}\b/;
+const COMPANY_EMAIL_RE = /@chicago-reno\.com$/i;
 
 const QUOTE_NUMBER_RE = /^\d{1,10}$/;
 const ENTRY_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
@@ -48,12 +52,26 @@ function cleanText(value: string): string {
   return value.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim();
 }
 
+/** customerName, client-name and CLIENT_NAME all compare as client_name. */
+function contactKey(key: string): string {
+  return key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').replace(/[^A-Za-z0-9_]/g, '_').toLowerCase();
+}
+
+/** Company addresses are fine; any other email or a phone number is refused, not silently stored. */
+function rejectContactDetails(text: string, label: string) {
+  const emails = text.match(EMAIL_RE) ?? [];
+  if (emails.some((email) => !COMPANY_EMAIL_RE.test(email)) || PHONE_RE.test(text)) {
+    throw new InvalidAssistantArgs(`${label} must not hold customer contact details (email or phone).`);
+  }
+}
+
 function requiredText(raw: Record<string, unknown>, key: string, max: number): string {
   const value = raw[key];
   if (typeof value !== 'string') throw new InvalidAssistantArgs(`${key} is required text.`);
   const text = cleanText(value);
   if (!text) throw new InvalidAssistantArgs(`${key} must not be empty.`);
   if (text.length > max) throw new InvalidAssistantArgs(`${key} must be ${max} characters or fewer.`);
+  rejectContactDetails(text, key);
   return text;
 }
 
@@ -105,10 +123,12 @@ export function validateQuoteRecord(value: unknown): Record<string, unknown> {
     } else if (node && typeof node === 'object') {
       for (const [key, child] of Object.entries(node)) {
         if (!RECORD_KEY_RE.test(key)) throw new InvalidAssistantArgs(`record key "${key.slice(0, 64)}" must be letters, digits or underscores.`);
-        if (CONTACT_KEY_RE.test(key)) throw new InvalidAssistantArgs(`record must not hold customer contact details ("${key}").`);
+        if (CONTACT_KEY_RE.test(contactKey(key))) throw new InvalidAssistantArgs(`record must not hold customer contact details ("${key}").`);
         walk(child, depth + 1, `${path}.${key}`);
       }
-    } else if (!['string', 'number', 'boolean'].includes(typeof node) && node !== null) {
+    } else if (typeof node === 'string') {
+      rejectContactDetails(node, path);
+    } else if (!['number', 'boolean'].includes(typeof node) && node !== null) {
       throw new InvalidAssistantArgs(`record holds an unsupported value at ${path}.`);
     }
   };
@@ -238,7 +258,8 @@ export class ReviewFeedbackStore {
         ).bind(quoteNumber).first<QuoteRecordRow>();
         quoteRecord = row ? { outcome: 'ok', ...mapRecord(row) } : { outcome: 'not_found' };
       } catch (err) {
-        quoteRecord = storedFailure('read', err);
+        // Without the record the review would look unreviewed, so the whole read fails.
+        return storedFailure('read', err);
       }
     }
 
@@ -287,9 +308,14 @@ export class ReviewFeedbackStore {
     try {
       if (supersedes) {
         const target = await this.db.prepare(
-          `SELECT id FROM quote_review_feedback WHERE id = ?`,
-        ).bind(supersedes).first<{ id: string }>();
+          `SELECT id, quote_number FROM quote_review_feedback WHERE id = ?`,
+        ).bind(supersedes).first<{ id: string; quote_number: string | null }>();
         if (!target) throw new InvalidAssistantArgs(`supersedes: no entry has id "${supersedes}".`);
+        // A quote entry replacing a general rule would hide that rule from every other quote.
+        // Promoting a quote entry to a general rule is fine: its readers still see the new one.
+        if (quoteNumber !== null && target.quote_number !== quoteNumber) {
+          throw new InvalidAssistantArgs(`supersedes: ${supersedes} applies to ${target.quote_number ? `quote ${target.quote_number}` : 'all quotes'}, not quote ${quoteNumber}.`);
+        }
       }
       const createdAt = new Date().toISOString();
       const inserted = await this.db.prepare(
