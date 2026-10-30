@@ -3,11 +3,11 @@ import type { User } from 'shared';
 import type { Bindings } from '../bindings.js';
 import { sessionMiddleware } from '../middleware/session.js';
 import { openJobberIntegration } from '../services/jobber-integration.js';
-import { generateWeeklyReports, validateReportPeriod } from '../services/weekly-payout-reports.js';
+import { generateWeeklyReports, isPayoutReportUser, validateReportPeriod } from '../services/weekly-payout-reports.js';
 const app=new Hono<{Bindings:Bindings;Variables:{user:User}}>();
 app.use('*',sessionMiddleware);
 app.use('*',async(c,next)=>{
- if(c.get('user').email.toLowerCase()!=='office@chicago-reno.com')return c.json({error:'Only the Chicago Reno office account can generate payout reports.'},403);
+ if(!isPayoutReportUser(c.get('user').email))return c.json({error:'Only the Chicago Reno office account can generate payout reports.'},403);
  await next();
 });
 app.post('/weekly',async c=>{

@@ -6,13 +6,20 @@ POST /api/reports/weekly with the existing Cotiza session bearer token and JSON:
 ```json
 {"start":"2026-10-17","end":"2026-10-23"}
 ```
-Only the office@chicago-reno.com account can call this route. The old ops:read MCP grant does not gain financial record access or email permissions. Periods are limited to 31 days; reads stop with an error rather than returning partial data after 50 pages per collection. All source collections must succeed.
+Only the office@chicago-reno.com account can call this route. The old ops:read MCP grant does not gain financial record access or email permissions; connector access needs the separate finance:read consent described below. Periods are limited to 31 days; reads stop with an error rather than returning partial data after 50 pages per collection. All source collections must succeed.
 
 The response contains complete:true, period, summary, expense and transaction rows, two CSV files, source and limitations. API-level schema/permission failures are explicit errors. Tokens stay server-side. No email is sent by the route.
 
 The reports are **Cotiza API reports, not native Jobber exports**. One row represents each payment record; native exports may split a receipt across invoice allocations. Keep source IDs, API signs and adjustment types. Invoice rows are not cash receipts. Processor status/fees do not establish bank settlement. Equal-valued source records with different IDs remain separate; repeated IDs or stuck pagination fail.
 
 Expense reports preserve Entered by, Paid by and Reimbursable to separately, plus original descriptions, IDs and job references. Do not infer personal-card payment merely from an entry user's name. Do not invent missing expense categories. Null financial amounts fail rather than becoming zero. CSV text cells are protected against spreadsheet formula injection.
+
+## Connector tool
+The Cotiza MCP connector ("Chicago Reno Jobber Connection") exposes the same report as the read-only tool `weekly_payout_report` with input `{"start":"YYYY-MM-DD","end":"YYYY-MM-DD"}` and no other fields. It calls the same generator, so the same guarantees apply: America/Chicago dates, 31-day maximum, all collections must succeed, and any failure is an explicit error with no rows. The result holds period, summary, expense and transaction rows with source IDs, and limitations; the CSV file bodies are left out. Nothing is emailed.
+
+The tool is listed and callable only when the connection holds the separate `finance:read` scope **and** the connected Cotiza user is office@chicago-reno.com. A connection without the scope gets an explicit `insufficient_scope` refusal; any other user gets `forbidden_user`. Calls are written to the activity log with the token ID.
+
+To enable it, disconnect the connector in Claude, connect it again, sign in as office@chicago-reno.com, and tick "Also allow reading weekly payout reports (expenses and payments)". The tick is only shown to the office account. Existing connections keep their old scope: `ops:read` alone, or `ops:read review:write`, still has no financial record access, and refreshing a token never adds scopes.
 
 ## Script and email handoff
 `scripts/weekly-payout-reports.mjs` exports runWeeklyReports. Supply a current Cotiza session and reporting dates. In the assistant workflow, bind its sendEmail callback to the connected **office Gmail** send action. The destination is fixed to office@chicago-reno.com. The callback receives Gmail's structured subject/to/MIME payload, with both CSVs attached. It is invoked once, only after complete generation.

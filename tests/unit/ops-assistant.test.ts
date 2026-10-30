@@ -113,10 +113,10 @@ describe('assistant auth', () => {
     expect(redirectUriAllowed('https://evil.example/callback')).toBe(false);
   });
 
-  it('publishes OAuth metadata with PKCE S256 and the read and review-write scopes', () => {
+  it('publishes OAuth metadata with PKCE S256 and the read, review-write and finance-read scopes', () => {
     const metadata = oauthAuthorizationServerMetadata('http://127.0.0.1:8787');
     expect(metadata.code_challenge_methods_supported).toEqual(['S256']);
-    expect(metadata.scopes_supported).toEqual(['ops:read', 'review:write']);
+    expect(metadata.scopes_supported).toEqual(['ops:read', 'review:write', 'finance:read']);
     expect(metadata.token_endpoint_auth_methods_supported).toEqual(['none']);
   });
 
