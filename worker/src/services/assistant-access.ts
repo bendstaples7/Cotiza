@@ -1,9 +1,34 @@
 const SCOPE = 'ops:read';
+/** Append-only writes to the quote-review ledger. Granted only by a separate consent tick. */
+const REVIEW_WRITE = 'review:write';
+const KNOWN_SCOPES = [SCOPE, REVIEW_WRITE] as const;
 const ACCESS_TTL_MS = 60 * 60 * 1000;
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CODE_TTL_MS = 5 * 60 * 1000;
 
 export const ASSISTANT_SCOPE = SCOPE;
+export const REVIEW_WRITE_SCOPE = REVIEW_WRITE;
+
+/**
+ * Canonical scope string for a request: `ops:read` is always included, unknown scopes
+ * make the whole request invalid (null), and order is fixed so stored values compare.
+ */
+export function normalizeScope(raw: string | null | undefined): string | null {
+  const parts = new Set((raw || '').split(/\s+/).filter(Boolean));
+  for (const part of parts) {
+    if (!(KNOWN_SCOPES as readonly string[]).includes(part)) return null;
+  }
+  parts.add(SCOPE);
+  return KNOWN_SCOPES.filter((scope) => parts.has(scope)).join(' ');
+}
+
+export function hasScope(scope: string, wanted: string): boolean {
+  return scope.split(' ').includes(wanted);
+}
+
+function storedScopeValid(scope: string): boolean {
+  return normalizeScope(scope) === scope;
+}
 
 export const BUILTIN_OAUTH_CLIENTS: Record<string, { name: string; redirectUris: string[] }> = {
   'cotiza-ops-local': {
@@ -20,7 +45,8 @@ export interface AssistantPrincipal {
   userId: string;
   clientId: string;
   resource: string;
-  scope: typeof SCOPE;
+  /** Space-separated granted scopes, e.g. `ops:read` or `ops:read review:write`. */
+  scope: string;
 }
 
 export interface IssuedToken {
@@ -55,6 +81,8 @@ export interface AssistantDirectory {
     clientId: string;
     kind: 'access' | 'refresh';
     ttlMs: number;
+    /** Defaults to `ops:read`. */
+    scope?: string;
   }): Promise<IssuedToken>;
   revoke(userId: string, tokenId: string): Promise<boolean>;
   revokeByHash(token: string): Promise<boolean>;
@@ -94,7 +122,7 @@ export function oauthAuthorizationServerMetadata(origin: string) {
     grant_types_supported: ['authorization_code', 'refresh_token'],
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['none'],
-    scopes_supported: [SCOPE],
+    scopes_supported: [...KNOWN_SCOPES],
     authorization_response_iss_parameter_supported: true,
   };
 }
@@ -103,7 +131,7 @@ export function oauthProtectedResourceMetadata(origin: string) {
   return {
     resource: `${origin}/mcp`,
     authorization_servers: [origin],
-    scopes_supported: [SCOPE],
+    scopes_supported: [...KNOWN_SCOPES],
     resource_documentation: `${origin}/oauth/exercise-callback`,
     bearer_methods_supported: ['header'],
   };
@@ -163,9 +191,9 @@ export class D1AssistantDirectory implements AssistantDirectory {
       expires_at: string;
       revoked_at: string | null;
     }>();
-    if (!row || row.kind !== 'access' || row.revoked_at || row.scope !== SCOPE) return null;
+    if (!row || row.kind !== 'access' || row.revoked_at || !storedScopeValid(row.scope)) return null;
     if (row.resource !== resource || expired(row.expires_at, now)) return null;
-    return { tokenId: row.id, userId: row.user_id, clientId: row.client_id, resource: row.resource, scope: SCOPE };
+    return { tokenId: row.id, userId: row.user_id, clientId: row.client_id, resource: row.resource, scope: row.scope };
   }
 
   async authenticateRefreshToken(token: string, resource: string, now = new Date()): Promise<AssistantPrincipal | null> {
@@ -184,9 +212,9 @@ export class D1AssistantDirectory implements AssistantDirectory {
       expires_at: string;
       revoked_at: string | null;
     }>();
-    if (!row || row.kind !== 'refresh' || row.revoked_at || row.scope !== SCOPE) return null;
+    if (!row || row.kind !== 'refresh' || row.revoked_at || !storedScopeValid(row.scope)) return null;
     if (row.resource !== resource || expired(row.expires_at, now)) return null;
-    return { tokenId: row.id, userId: row.user_id, clientId: row.client_id, resource: row.resource, scope: SCOPE };
+    return { tokenId: row.id, userId: row.user_id, clientId: row.client_id, resource: row.resource, scope: row.scope };
   }
 
   async mintToken(input: {
@@ -196,7 +224,10 @@ export class D1AssistantDirectory implements AssistantDirectory {
     clientId: string;
     kind: 'access' | 'refresh';
     ttlMs: number;
+    scope?: string;
   }): Promise<IssuedToken> {
+    const scope = input.scope ?? SCOPE;
+    if (!storedScopeValid(scope)) throw new Error('Unknown assistant scope');
     const id = crypto.randomUUID();
     const token = randomToken('ctz_');
     const tokenHash = await sha256Hex(token);
@@ -205,7 +236,7 @@ export class D1AssistantDirectory implements AssistantDirectory {
       `INSERT INTO assistant_tokens
         (id, token_hash, kind, user_id, client_id, label, resource, scope, expires_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(id, tokenHash, input.kind, input.userId, input.clientId, input.label.slice(0, 80), input.resource, SCOPE, expiresAt).run();
+    ).bind(id, tokenHash, input.kind, input.userId, input.clientId, input.label.slice(0, 80), input.resource, scope, expiresAt).run();
     return { id, token, expiresAt };
   }
 
@@ -309,7 +340,7 @@ export class D1AssistantDirectory implements AssistantDirectory {
       expires_at: string;
       used_at: string | null;
     }>();
-    if (!row || row.used_at || expired(row.expires_at, now) || row.scope !== SCOPE) return null;
+    if (!row || row.used_at || expired(row.expires_at, now) || !storedScopeValid(row.scope)) return null;
     const updated = await this.db.prepare(
       `UPDATE assistant_auth_codes SET used_at = datetime('now') WHERE code_hash = ? AND used_at IS NULL`,
     ).bind(codeHash).run();
