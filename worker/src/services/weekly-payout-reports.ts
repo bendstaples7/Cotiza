@@ -2,6 +2,11 @@ import type { JobberReadClient } from './ops-assistant-read.js';
 type Row = Record<string, unknown>;
 type Connection = { nodes?: Row[]; edges?: {node:Row}[]; pageInfo?: {hasNextPage:boolean;endCursor:string|null} };
 const ZONE='America/Chicago';
+/** The only Cotiza account allowed to read payout reports, by session or by connector. */
+export const PAYOUT_REPORT_EMAIL='office@chicago-reno.com';
+export function isPayoutReportUser(email: unknown): boolean {
+ return typeof email==='string'&&email.toLowerCase()===PAYOUT_REPORT_EMAIL;
+}
 const REF='kind name ofType { kind name ofType { kind name } }';
 const PREFLIGHT=`query WeeklyReportSchema {
  range: __type(name:"Iso8601DateTimeRangeInput") { inputFields { name } }

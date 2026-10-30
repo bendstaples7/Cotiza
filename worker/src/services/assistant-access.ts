@@ -1,13 +1,16 @@
 const SCOPE = 'ops:read';
 /** Append-only writes to the quote-review ledger. Granted only by a separate consent tick. */
 const REVIEW_WRITE = 'review:write';
-const KNOWN_SCOPES = [SCOPE, REVIEW_WRITE] as const;
+/** Weekly payout report reads (expenses and payments). Granted only by a separate consent tick. */
+const FINANCE_READ = 'finance:read';
+const KNOWN_SCOPES = [SCOPE, REVIEW_WRITE, FINANCE_READ] as const;
 const ACCESS_TTL_MS = 60 * 60 * 1000;
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CODE_TTL_MS = 5 * 60 * 1000;
 
 export const ASSISTANT_SCOPE = SCOPE;
 export const REVIEW_WRITE_SCOPE = REVIEW_WRITE;
+export const FINANCE_READ_SCOPE = FINANCE_READ;
 
 /**
  * Canonical scope string for a request: `ops:read` is always included, unknown scopes
@@ -46,7 +49,7 @@ export interface AssistantPrincipal {
   userId: string;
   clientId: string;
   resource: string;
-  /** Space-separated granted scopes, e.g. `ops:read` or `ops:read review:write`. */
+  /** Space-separated granted scopes, e.g. `ops:read`, `ops:read review:write` or `ops:read finance:read`. */
   scope: string;
 }
 

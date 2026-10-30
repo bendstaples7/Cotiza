@@ -13,7 +13,7 @@ Checked against OpenAI’s docs on 13 Oct 2026:
 | Piece | Choice |
 | --- | --- |
 | Transport | Streaming HTTP at `POST /mcp`. Each JSON-RPC reply is one SSE message (`event: message`, `data: {…}`). `GET /mcp` returns 405 because this server does not push messages. |
-| Assistant login | Separate from Jobber. Scope is `ops:read`, plus `review:write` only when the person ticks it on the consent screen. |
+| Assistant login | Separate from Jobber. Scope is `ops:read`, plus `review:write` and/or `finance:read` only when the person ticks the matching box on the consent screen. |
 | ChatGPT | OAuth authorization-code + PKCE. Public client (`token_endpoint_auth_method=none`). Dynamic client registration is limited to ChatGPT redirect URLs. |
 | Local exercise | Mint a bearer token with your existing Cotiza session, then run `scripts/ops-assistant-exercise.mjs`. |
 | Jobber | The worker reuses `openJobberIntegration` (saved Jobber tokens in D1 / worker secrets). |
@@ -53,7 +53,7 @@ Source: https://developer.getjobber.com/docs/getting_started/ and https://develo
 
 The job tools exist for schedule audits (quoted scope vs. scheduled length vs. actual progress, and duration forecasts from similar past jobs). They need the Jobber app's existing **read** access to jobs; an `auth` error means that read is not granted, not that there are no jobs. `inspect_reporting_capabilities` now also returns the `Job`, `Visit` and `JobFilterAttributes` schema so field drift can be checked without a new deploy.
 
-- `find_expenses` — office@chicago-reno.com only, the same rule as `/api/reports/weekly`. `searchTerm` and Chicago `onOrAfter`/`onOrBefore` dates, one page at a time; follow `page.nextCursor` before concluding an expense is missing. Titles and descriptions are untrusted. Jobber's `Expense` type exposes no receipt field, so this cannot confirm an attachment. The account rule is only as strong as sign-in, and `initiateAuth` checks the `@chicago-reno.com` suffix without verifying that the person owns the address, so do not treat it as a hard control.
+- `find_expenses` — needs `finance:read` and office@chicago-reno.com, the same rule as `weekly_payout_report`. `searchTerm` and Chicago `onOrAfter`/`onOrBefore` dates, one page at a time; follow `page.nextCursor` before concluding an expense is missing. Titles and descriptions are untrusted. Jobber's `Expense` type exposes no receipt field, so this cannot confirm an attachment. The account rule is only as strong as sign-in, and `initiateAuth` checks the `@chicago-reno.com` suffix without verifying that the person owns the address, so do not treat it as a hard control.
 - `read_review_feedback` — quote-review ledger: general rules, plus entries and the newest review record for one quote number. Paginated. Available to every token.
 - `record_review_feedback` / `record_quote_review` — append to the ledger. Listed and callable only with `review:write`. See below.
 
@@ -83,6 +83,10 @@ Both tables are **append-only**. The code only inserts, and database triggers ab
 - The box is offered when the client asks for `review:write` or asks for no scope. Check that the box appears when you reconnect Claude. A client that asks for exactly `ops:read` (ChatGPT, `scripts/ops-assistant-exercise.mjs`) never sees it.
 - A read-only token does not see the write tools in `tools/list`. Calling one anyway returns `outcome: "forbidden"`, `insufficient_scope`, and nothing is written.
 - A session-minted local token can ask for it: `POST /api/assistant/tokens` with `{"scope": "ops:read review:write"}`.
+
+### The `finance:read` scope
+
+Grants the read-only `weekly_payout_report` and `find_expenses` tools, and only for the office@chicago-reno.com user. It is offered and granted exactly like `review:write` (separate unticked box, never added by refresh, never offered to a client that asked for exactly `ops:read`), and the box is shown only to the office account. Without the scope the tools are hidden and a call returns `insufficient_scope`. See [weekly-payout-reports.md](weekly-payout-reports.md#connector-tool).
 
 ### One-time import from feedback.json
 

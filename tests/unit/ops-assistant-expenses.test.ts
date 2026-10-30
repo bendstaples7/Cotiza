@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { OpsAssistantRead, TOOL_DEFINITIONS, callAssistantTool } from '../../worker/src/services/ops-assistant-read.js';
+import { FINANCE_READ_TOOLS } from '../../worker/src/services/weekly-payout-tool.js';
 import { createMockD1, configurePrepareResults } from './helpers/mock-d1.js';
 
 function expense(overrides: Record<string, unknown> = {}) {
@@ -29,9 +30,10 @@ function page(nodes: unknown[], pageInfo = { hasNextPage: false, endCursor: null
 }
 
 describe('find_expenses', () => {
-  it('is registered as read-only', () => {
-    const def = TOOL_DEFINITIONS.find((t) => t.name === 'find_expenses') as { annotations?: { readOnlyHint?: boolean } } | undefined;
-    expect(def?.annotations?.readOnlyHint).toBe(true);
+  it('is registered as a read-only finance tool, not an ops:read one', () => {
+    const def = FINANCE_READ_TOOLS.find((t) => t.name === 'find_expenses');
+    expect(def?.annotations.readOnlyHint).toBe(true);
+    expect(TOOL_DEFINITIONS.some((t) => t.name === 'find_expenses')).toBe(false);
   });
 
   it('refuses every account except the office one, without calling Jobber', async () => {
