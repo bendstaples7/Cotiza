@@ -113,10 +113,10 @@ describe('assistant auth', () => {
     expect(redirectUriAllowed('https://evil.example/callback')).toBe(false);
   });
 
-  it('publishes OAuth metadata with PKCE S256 and the read scope', () => {
+  it('publishes OAuth metadata with PKCE S256 and the read and review-write scopes', () => {
     const metadata = oauthAuthorizationServerMetadata('http://127.0.0.1:8787');
     expect(metadata.code_challenge_methods_supported).toEqual(['S256']);
-    expect(metadata.scopes_supported).toEqual(['ops:read']);
+    expect(metadata.scopes_supported).toEqual(['ops:read', 'review:write']);
     expect(metadata.token_endpoint_auth_methods_supported).toEqual(['none']);
   });
 
@@ -139,7 +139,7 @@ describe('ops assistant tools', () => {
     expect(response.headers.get('Content-Type')).toContain('text/event-stream');
     const body = await mcpJson(response);
     const names = body.result!.tools!.map((tool) => tool.name);
-    expect(names).toEqual(['inspect_reporting_capabilities', 'inspect_expense_capabilities', 'read_request_photo', 'find_requests', 'read_request', 'find_quotes', 'read_quote', 'list_request_quotes', 'find_jobs', 'read_job']);
+    expect(names).toEqual(['inspect_reporting_capabilities', 'inspect_expense_capabilities', 'read_request_photo', 'find_requests', 'read_request', 'find_quotes', 'read_quote', 'list_request_quotes', 'find_jobs', 'read_job', 'read_review_feedback']);
     const described = body.result!.tools!.filter((tool) => tool.name !== 'inspect_expense_capabilities').map((tool) => `${tool.name} ${tool.description}`).join('\n').toLowerCase();
     expect(described).not.toMatch(/\b(create|delete|mutation|graphql)\b/);
     for (const query of Object.values(ASSISTANT_QUERIES)) {

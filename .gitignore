@@ -43,3 +43,6 @@ worker/.wrangler/
 .auth/
 playwright-report/
 test-results/
+
+# One-time quote-review ledger import output (scripts/import-review-feedback.mjs)
+review-feedback-import.sql
