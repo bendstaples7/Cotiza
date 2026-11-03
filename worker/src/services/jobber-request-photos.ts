@@ -14,8 +14,8 @@ export const REQUEST_PHOTOS_QUERY = `query AssistantRequestPhotos($id: EncodedId
 
 /** Largest image returned to the assistant (MCP image block). */
 export const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
-/** Largest original accepted for scaling down (full-resolution phone photos are ~3-12 MB). */
-export const MAX_SOURCE_PHOTO_BYTES = 25 * 1024 * 1024;
+/** Largest original accepted for scaling down: the Cloudflare Images input limit (20 MB). Phone photos are ~3-12 MB. */
+export const MAX_SOURCE_PHOTO_BYTES = 20 * 1000 * 1000;
 /** Long-edge size for scaled-down photos; the assistant views images at about this size anyway. */
 export const RESIZED_PHOTO_EDGE = 2000;
 
@@ -92,7 +92,9 @@ export async function downloadRequestPhoto(attachment: PhotoAttachment, resizer?
     }
     const mimeType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) throw new Error('unsupported_photo_type');
-    if (Number(response.headers.get('content-length')) > MAX_SOURCE_PHOTO_BYTES) {
+    // Without a resizer nothing over 4 MiB can be returned, so stop reading at that point.
+    const limit = resizer ? MAX_SOURCE_PHOTO_BYTES : MAX_PHOTO_BYTES;
+    if (Number(response.headers.get('content-length')) > limit) {
       await response.body.cancel();
       throw new Error('photo_too_large');
     }
@@ -104,7 +106,7 @@ export async function downloadRequestPhoto(attachment: PhotoAttachment, resizer?
         const { done, value } = await reader.read();
         if (done) break;
         size += value.byteLength;
-        if (size > MAX_SOURCE_PHOTO_BYTES) throw new Error('photo_too_large');
+        if (size > limit) throw new Error('photo_too_large');
         chunks.push(value);
       }
     } finally {

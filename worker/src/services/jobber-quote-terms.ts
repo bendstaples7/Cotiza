@@ -14,7 +14,7 @@ export const QUOTE_TERMS_QUERY = `query AssistantQuoteTerms($id: EncodedId!) {
     id
     contractDisclaimer
     amounts { subtotal discountAmount taxAmount total depositAmount }
-    depositRecords(first: 20) { nodes { amount entryDate } }
+    depositRecords(first: 20) { nodes { amount entryDate } pageInfo { hasNextPage } totalCount }
   }
 }`;
 
@@ -31,7 +31,7 @@ const MAX_TEXT = 4000;
 interface RawTerms {
   contractDisclaimer?: string | null;
   amounts?: Record<string, unknown> | null;
-  depositRecords?: { nodes?: Array<{ amount?: unknown; entryDate?: unknown }> } | null;
+  depositRecords?: { nodes?: Array<{ amount?: unknown; entryDate?: unknown }>; pageInfo?: { hasNextPage?: boolean }; totalCount?: number } | null;
 }
 
 function num(value: unknown): number | null {
@@ -54,8 +54,8 @@ function mapTerms(raw: RawTerms, minimal: boolean, message: string | null) {
   const depositAmount = num(amounts.depositAmount);
   const disclaimer = typeof raw.contractDisclaimer === 'string' ? raw.contractDisclaimer : null;
   const milestoneLines = [
-    ...extractMilestoneLines(message).map((text) => ({ text, from: 'quote message' as const })),
-    ...extractMilestoneLines(disclaimer).map((text) => ({ text, from: 'contract disclaimer' as const })),
+    ...extractMilestoneLines(message).map((text) => ({ text, from: 'quote message' as const, untrusted: true as const })),
+    ...extractMilestoneLines(disclaimer).map((text) => ({ text, from: 'contract disclaimer' as const, untrusted: true as const })),
   ];
   return {
     availability: 'present' as const,
@@ -79,6 +79,8 @@ function mapTerms(raw: RawTerms, minimal: boolean, message: string | null) {
       : {
         availability: 'present' as const,
         records: (raw.depositRecords?.nodes ?? []).map((node) => ({ amount: num(node.amount), entryDate: typeof node.entryDate === 'string' ? node.entryDate : null })),
+        totalCount: typeof raw.depositRecords?.totalCount === 'number' ? raw.depositRecords.totalCount : null,
+        truncated: raw.depositRecords?.pageInfo?.hasNextPage === true,
       },
     query: minimal ? 'minimal' as const : 'full' as const,
     notes: [
@@ -94,7 +96,10 @@ export async function loadQuoteTerms(jobber: JobberReadClient, quoteId: string, 
     const data = await jobber.graphqlRequest<{ quote?: RawTerms | null }>(QUOTE_TERMS_QUERY, { id: quoteId });
     if (data.quote) return mapTerms(data.quote, false, message);
   } catch (err) {
-    console.warn('[ops-assistant] full quote terms read failed', sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 160));
+    const text = sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 160);
+    console.warn('[ops-assistant] full quote terms read failed', text);
+    // Only a schema rejection is worth a second request; timeouts, throttling and outages are not.
+    if (!/field|schema|argument|selection/i.test(text)) return unavailable(message);
   }
   try {
     const data = await jobber.graphqlRequest<{ quote?: RawTerms | null }>(QUOTE_TERMS_FALLBACK_QUERY, { id: quoteId });
@@ -102,9 +107,13 @@ export async function loadQuoteTerms(jobber: JobberReadClient, quoteId: string, 
   } catch (err) {
     console.warn('[ops-assistant] minimal quote terms read failed', sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 160));
   }
+  return unavailable(message);
+}
+
+function unavailable(message: string | null) {
   return {
     availability: 'unavailable' as const,
     reason: 'Jobber payment terms could not be read. This is not evidence that the quote has no deposit or milestones.',
-    milestoneLines: extractMilestoneLines(message).map((text) => ({ text, from: 'quote message' as const })),
+    milestoneLines: extractMilestoneLines(message).map((text) => ({ text, from: 'quote message' as const, untrusted: true as const })),
   };
 }

@@ -24,7 +24,7 @@ describe('read_quote payment terms', () => {
     const jobber = jobberWith({ quote: {
       id: 'q-715', contractDisclaimer: disclaimer,
       amounts: { subtotal: 6110, discountAmount: 0, taxAmount: 0, total: 6110, depositAmount: 3055 },
-      depositRecords: { nodes: [] },
+      depositRecords: { nodes: [], pageInfo: { hasNextPage: false }, totalCount: 0 },
     } });
     const result = await new OpsAssistantRead(jobber, createMockD1() as never).readQuote('u', { quoteId: 'q-715' });
     expect(jobber.graphqlRequest.mock.calls[1][0]).toBe(QUOTE_TERMS_QUERY);
@@ -33,7 +33,7 @@ describe('read_quote payment terms', () => {
       availability: 'present', query: 'full',
       amounts: { total: 6110, requiredDepositAmount: 3055, requiredDepositPercentOfTotal: 50 },
       contractDisclaimer: { availability: 'present', untrusted: true },
-      depositsCollected: { availability: 'present', records: [] },
+      depositsCollected: { availability: 'present', records: [], truncated: false, totalCount: 0 },
     });
     expect((terms.milestoneLines as Array<{ text: string }>).map((m) => m.text)).toEqual([
       '50% deposit due upon acceptance', '40% due at start of tile work', '10% final balance due upon completion',
@@ -47,10 +47,11 @@ describe('read_quote payment terms', () => {
     expect(result).toMatchObject({ outcome: 'ok', quote: { paymentTerms: { query: 'minimal', contractDisclaimer: { availability: 'empty' }, depositsCollected: { availability: 'unavailable' } } } });
   });
 
-  it('keeps read_quote working and marks terms unavailable when both reads fail', async () => {
-    const jobber = jobberWith(new Error('timeout'), new Error('timeout'));
+  it('keeps read_quote working and marks terms unavailable when Jobber times out, without a second request', async () => {
+    const jobber = jobberWith(new Error('Request timed out'), new Error('unused'));
     const result = await new OpsAssistantRead(jobber, createMockD1() as never).readQuote('u', { quoteId: 'q-715' });
     expect(result).toMatchObject({ outcome: 'ok', quote: { quoteNumber: { value: '715' }, paymentTerms: { availability: 'unavailable' } } });
+    expect(jobber.graphqlRequest).toHaveBeenCalledTimes(2);
   });
 
   it('only extracts lines that look like payment milestones', () => {
