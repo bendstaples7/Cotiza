@@ -64,7 +64,11 @@ describe('assistant request photos', () => {
 
   it('rejects oversized streams, non-images and mismatched image bytes', async () => {
     const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher);
-    fetcher.mockResolvedValueOnce(new Response(new Uint8Array(MAX_PHOTO_BYTES + 1), { headers: { 'content-type': 'image/jpeg' } }));
+    // Over 4 MiB with no Images binding to scale it down: refused, as before.
+    const oversized = new Uint8Array(MAX_PHOTO_BYTES + 1); oversized.set([255, 216, 255, 224]);
+    fetcher.mockResolvedValueOnce(new Response(oversized, { headers: { 'content-type': 'image/jpeg' } }));
+    await expect(downloadRequestPhoto(photo)).rejects.toThrow('photo_too_large');
+    fetcher.mockResolvedValueOnce(new Response(new Uint8Array(MAX_SOURCE_PHOTO_BYTES + 1), { headers: { 'content-type': 'image/jpeg' } }));
     await expect(downloadRequestPhoto(photo)).rejects.toThrow('photo_too_large');
     fetcher.mockResolvedValueOnce(new Response('html', { headers: { 'content-type': 'text/html' } }));
     await expect(downloadRequestPhoto(photo)).rejects.toThrow('unsupported_photo_type');
