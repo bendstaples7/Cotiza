@@ -12,7 +12,21 @@ export const REQUEST_PHOTOS_QUERY = `query AssistantRequestPhotos($id: EncodedId
   }
 }`;
 
+/** Largest image returned to the assistant (MCP image block). */
 export const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
+/** Largest original accepted for scaling down (full-resolution phone photos are ~3-12 MB). */
+export const MAX_SOURCE_PHOTO_BYTES = 25 * 1024 * 1024;
+/** Long-edge size for scaled-down photos; the assistant views images at about this size anyway. */
+export const RESIZED_PHOTO_EDGE = 2000;
+
+/** Minimal shape of the Cloudflare Images binding used here (env.IMAGES). */
+export interface PhotoResizer {
+  input(stream: ReadableStream<Uint8Array>): {
+    transform(options: { width: number; height: number; fit: 'scale-down' }): {
+      output(options: { format: 'image/jpeg'; quality: number }): Promise<{ response(): Response }>;
+    };
+  };
+}
 export interface PhotoAttachment { url?: string; fileName?: string; contentType?: string }
 
 /** Images must be MCP image blocks, never base64 embedded in the JSON text block. */
@@ -50,12 +64,12 @@ function safePhotoUrl(value: string): URL {
 export function photoFailureReason(error: unknown): string {
   if (error !== null && typeof error === 'object' && 'name' in error && error.name === 'AbortError') return 'photo_download_timeout';
   const code = error instanceof Error ? error.message : '';
-  return /^(?:photo_url_missing|unsupported_photo_host|photo_download_failed|unsupported_photo_type|photo_too_large|invalid_photo_bytes|photo_redirect_limit|photo_redirect_missing|photo_http_[45]\d\d)$/.test(code)
+  return /^(?:photo_url_missing|unsupported_photo_host|photo_download_failed|unsupported_photo_type|photo_too_large|photo_resize_failed|invalid_photo_bytes|photo_redirect_limit|photo_redirect_missing|photo_http_[45]\d\d)$/.test(code)
     ? code : 'photo_download_failed';
 }
 
 /** Fetch a fresh Jobber URL; validate every redirect and never forward auth or cookies. */
-export async function downloadRequestPhoto(attachment: PhotoAttachment) {
+export async function downloadRequestPhoto(attachment: PhotoAttachment, resizer?: PhotoResizer) {
   if (!attachment.url) throw new Error('photo_url_missing');
   let url = safePhotoUrl(attachment.url);
   const controller = new AbortController();
@@ -78,7 +92,7 @@ export async function downloadRequestPhoto(attachment: PhotoAttachment) {
     }
     const mimeType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) throw new Error('unsupported_photo_type');
-    if (Number(response.headers.get('content-length')) > MAX_PHOTO_BYTES) {
+    if (Number(response.headers.get('content-length')) > MAX_SOURCE_PHOTO_BYTES) {
       await response.body.cancel();
       throw new Error('photo_too_large');
     }
@@ -90,7 +104,7 @@ export async function downloadRequestPhoto(attachment: PhotoAttachment) {
         const { done, value } = await reader.read();
         if (done) break;
         size += value.byteLength;
-        if (size > MAX_PHOTO_BYTES) throw new Error('photo_too_large');
+        if (size > MAX_SOURCE_PHOTO_BYTES) throw new Error('photo_too_large');
         chunks.push(value);
       }
     } finally {
@@ -105,10 +119,34 @@ export async function downloadRequestPhoto(attachment: PhotoAttachment) {
     const webp = size >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF'
       && String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP';
     if (!(mimeType === 'image/jpeg' ? jpeg : mimeType === 'image/png' ? png : webp)) throw new Error('invalid_photo_bytes');
-    let binary = '';
-    for (let i = 0; i < size; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
-    return { type: 'image' as const, mimeType, data: btoa(binary) };
+    if (size <= MAX_PHOTO_BYTES) return { type: 'image' as const, mimeType, data: toBase64(bytes) };
+    if (!resizer) throw new Error('photo_too_large');
+    const resized = await scaleDownPhoto(bytes, resizer);
+    return { type: 'image' as const, mimeType: 'image/jpeg', data: toBase64(resized), resized: true as const };
   } finally {
     clearTimeout(timer);
   }
+}
+
+function toBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  return btoa(binary);
+}
+
+/** Scale an oversized photo to a JPEG no larger than RESIZED_PHOTO_EDGE on its long side. Nothing is written back to Jobber. */
+async function scaleDownPhoto(bytes: Uint8Array, resizer: PhotoResizer): Promise<Uint8Array> {
+  let out: Uint8Array;
+  try {
+    const source = new Response(bytes).body!;
+    const result = await resizer.input(source)
+      .transform({ width: RESIZED_PHOTO_EDGE, height: RESIZED_PHOTO_EDGE, fit: 'scale-down' })
+      .output({ format: 'image/jpeg', quality: 82 });
+    out = new Uint8Array(await result.response().arrayBuffer());
+  } catch {
+    throw new Error('photo_resize_failed');
+  }
+  if (!(out[0] === 0xff && out[1] === 0xd8 && out[2] === 0xff)) throw new Error('photo_resize_failed');
+  if (out.length > MAX_PHOTO_BYTES) throw new Error('photo_too_large');
+  return out;
 }

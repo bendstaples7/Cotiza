@@ -2,6 +2,8 @@ export interface Bindings {
   DB: D1Database;
   R2_BUCKET: R2Bucket;
   IMAGE_QUEUE: Queue;
+  /** Cloudflare Images binding used to scale down large Jobber request photos for the assistant. Optional: photos over 4 MiB are refused without it. */
+  IMAGES?: import('./services/jobber-request-photos.js').PhotoResizer;
   AI_TEXT_API_KEY: string;
   AI_TEXT_API_URL: string;
   FB_PAGE_ACCESS_TOKEN: string;

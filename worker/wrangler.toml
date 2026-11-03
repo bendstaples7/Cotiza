@@ -14,6 +14,10 @@ binding = "R2_BUCKET"
 bucket_name = "chicago-reno-media"
 preview_bucket_name = "chicago-reno-media-preview"
 
+# Cloudflare Images: scales down large Jobber request photos for the quote-review assistant.
+[images]
+binding = "IMAGES"
+
 [[queues.producers]]
 binding = "IMAGE_QUEUE"
 queue = "image-generation-queue"

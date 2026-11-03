@@ -635,7 +635,7 @@ export function createOpsAssistantApp(directoryFor?: (db: D1Database) => Assista
 
   app.post('/mcp', async (c) => {
     const { jobberIntegration } = await openJobberIntegration(c.env.DB, c.env);
-    const read = new OpsAssistantRead(jobberIntegration, c.env.DB);
+    const read = new OpsAssistantRead(jobberIntegration, c.env.DB, c.env.IMAGES);
     const reviews = new ReviewFeedbackStore(c.env.DB);
     return handleMcpPost(c.req.raw, { directory: directoryOf(c.env.DB), read, db: c.env.DB, budget, reviews, jobber: jobberIntegration });
   });
