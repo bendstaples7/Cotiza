@@ -341,6 +341,12 @@ describe('RequestQueuePage', () => {
     expect(screen.getByText('Newest First')).toBeInTheDocument();
   });
 
+  it('defaults to oldest first', async () => {
+    mockFetchRequestQueue.mockResolvedValue(queue([]));
+    renderQueue();
+    await waitFor(() => expect(mockFetchRequestQueue).toHaveBeenCalledWith('age_asc'));
+  });
+
   it('clicking sort toggle navigates with correct sort param', async () => {
     mockFetchRequestQueue.mockResolvedValue(queue([]));
     renderQueue(['/requests?sort=age_asc']);

@@ -108,10 +108,10 @@ export default function RequestQueuePage() {
     return () => clearInterval(interval);
   }, []);
 
-  // Default to newest first unless sort=age_asc is explicitly set
+  // Default to oldest first, so the lead waiting longest is worked first, unless sort=age_desc is set
   const sortParam = searchParams.get('sort');
   const currentSort: 'age_asc' | 'age_desc' =
-    sortParam === 'age_asc' ? 'age_asc' : 'age_desc';
+    sortParam === 'age_desc' ? 'age_desc' : 'age_asc';
 
   const loadRequests = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent ?? false;

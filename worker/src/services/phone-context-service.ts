@@ -52,6 +52,10 @@ interface OpenPhoneCallSummary {
   nextSteps: string[] | null;
 }
 
+interface OpenPhoneNumber {
+  id: string;
+}
+
 interface ApiListResponse<T> {
   data: T[];
   totalItems: number;
@@ -66,6 +70,8 @@ export class PhoneContextService {
   private activityLog?: ActivityLogService;
   /** Set when a Quo call fails, so callers can tell a failed read from an empty history. */
   private lastReadFailed = false;
+  /** Our Quo number ids: the configured one, or every number in the workspace (looked up once). */
+  private numberIds: Promise<string[]> | null = null;
 
   constructor(
     apiKey: string,
@@ -114,6 +120,25 @@ export class PhoneContextService {
     }
   }
 
+  /**
+   * The Quo numbers to search. QUO_PHONE_NUMBER_ID is optional: without it, every number in the
+   * workspace is used (GET /phone-numbers). A failed lookup marks the read as failed.
+   */
+  protected ourNumberIds(): Promise<string[]> {
+    if (this.phoneNumberId) return Promise.resolve([this.phoneNumberId]);
+    if (!this.numberIds) {
+      this.numberIds = this.apiFetch<{ data?: OpenPhoneNumber[] }>('/phone-numbers').then((result) => {
+        if (!result || !Array.isArray(result.data)) {
+          this.lastReadFailed = true;
+          this.numberIds = null; // try again on the next read rather than caching a failure
+          return [];
+        }
+        return result.data.map((n) => n.id).filter((id): id is string => typeof id === 'string' && id.length > 0);
+      });
+    }
+    return this.numberIds;
+  }
+
   // ── Fetch conversations ────────────────────────────────────────
 
   /**
@@ -137,18 +162,17 @@ export class PhoneContextService {
    * Fetch recent text messages between our OpenPhone number and the customer.
    * Requires phoneNumberId (our OpenPhone number's ID) to be configured.
    */
-  private async fetchMessages(customerPhone: string): Promise<OpenPhoneMessage[]> {
-    if (!this.phoneNumberId) return [];
-
-    const result = await this.apiFetch<ApiListResponse<OpenPhoneMessage>>(
+  protected async fetchMessages(customerPhone: string): Promise<OpenPhoneMessage[]> {
+    const ids = await this.ourNumberIds();
+    const pages = await Promise.all(ids.map((phoneNumberId) => this.apiFetch<ApiListResponse<OpenPhoneMessage>>(
       '/messages',
       {
-        phoneNumberId: this.phoneNumberId,
+        phoneNumberId,
         participants: JSON.stringify([customerPhone]),
         maxResults: '20',
       },
-    );
-    return result?.data ?? [];
+    )));
+    return newestFirst(pages.flatMap((page) => page?.data ?? [])).slice(0, 20);
   }
 
   // ── Fetch calls ────────────────────────────────────────────────
@@ -156,18 +180,17 @@ export class PhoneContextService {
   /**
    * Fetch recent calls between our OpenPhone number and the customer.
    */
-  private async fetchCalls(customerPhone: string): Promise<OpenPhoneCall[]> {
-    if (!this.phoneNumberId) return [];
-
-    const result = await this.apiFetch<ApiListResponse<OpenPhoneCall>>(
+  protected async fetchCalls(customerPhone: string): Promise<OpenPhoneCall[]> {
+    const ids = await this.ourNumberIds();
+    const pages = await Promise.all(ids.map((phoneNumberId) => this.apiFetch<ApiListResponse<OpenPhoneCall>>(
       '/calls',
       {
-        phoneNumberId: this.phoneNumberId,
+        phoneNumberId,
         participants: JSON.stringify([customerPhone]),
         maxResults: '10',
       },
-    );
-    return result?.data ?? [];
+    )));
+    return newestFirst(pages.flatMap((page) => page?.data ?? [])).slice(0, 10);
   }
 
   // ── Fetch transcripts and summaries for completed calls ────────
@@ -258,7 +281,8 @@ export class PhoneContextService {
       return '';
     }
 
-    const normalizedPhone = customerPhone.startsWith('+') ? customerPhone : `+${customerPhone}`;
+    const normalizedPhone = toE164(customerPhone);
+    if (!normalizedPhone) return '';
 
     const [conversations, messages, calls] = await Promise.all([
       this.fetchConversations(normalizedPhone),
@@ -306,4 +330,26 @@ export class PhoneContextService {
     const text = await this.fetchContext(customerPhone);
     return this.lastReadFailed ? { status: 'failed' } : { status: 'ok', text };
   }
+}
+
+/** Newest first by createdAt; entries without a date go last. */
+function newestFirst<T extends { createdAt?: string | null }>(items: T[]): T[] {
+  const at = (item: T) => {
+    const ms = Date.parse(item.createdAt ?? '');
+    return Number.isFinite(ms) ? ms : -Infinity;
+  };
+  return [...items].sort((a, b) => at(b) - at(a));
+}
+
+/**
+ * A US phone number as Quo expects it (+1XXXXXXXXXX). Jobber stores numbers like "(773) 555-0100";
+ * numbers already in +E.164 form are kept. Returns null when no usable number is left.
+ */
+export function toE164(raw: string): string | null {
+  const trimmed = raw.trim();
+  const digits = trimmed.replace(/\D/g, '');
+  if (trimmed.startsWith('+')) return digits.length >= 8 ? `+${digits}` : null;
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+  return digits.length >= 8 ? `+${digits}` : null;
 }

@@ -142,7 +142,7 @@ describe('lead connector tools', () => {
     expect(read.items[0]).toMatchObject({ createdVia: 'assistant', untrusted: true });
   });
 
-  it('lists open Jobber leads live from Jobber, newest first, with checklist summaries', async () => {
+  it('lists open Jobber leads live from Jobber, oldest first, with checklist summaries', async () => {
     const { d1 } = sqliteD1();
     await callLeadTool(d1, principal, 'set_lead_info', { requestId: REQ, add: [{ question: 'Tile size?' }] });
     const now = Date.parse('2026-11-04T12:00:00Z');
@@ -159,8 +159,8 @@ describe('lead connector tools', () => {
     expect(graphqlRequest).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({ outcome: 'ok', total: 2, totalIsComplete: true });
     expect(result.leads.map((l) => [l.requestId, l.client, l.title, l.jobberStatus, l.ageDays, l.infoNeeded.total])).toEqual([
-      [REQ, 'Keeley Sorokti', 'Shower', 'new', 2, 1],
       [OTHER, null, 'Shower', 'assessment_completed', 15, 0],
+      [REQ, 'Keeley Sorokti', 'Shower', 'new', 2, 1],
     ]);
     await expect(callLeadTool(d1, principal, 'list_open_leads', { limit: 0 }, { graphqlRequest } as never)).rejects.toThrow('limit');
     await expect(callLeadTool(d1, principal, 'list_open_leads', { days: 0 }, { graphqlRequest } as never)).rejects.toThrow('days');
