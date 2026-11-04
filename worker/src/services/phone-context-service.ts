@@ -403,7 +403,8 @@ export class PhoneContextService {
 }
 
 /** Maps a Quo HTTP status to a reason the team can act on. */
-export function quoFailureReason(status: number): string {
+export function quoFailureReason(status: number | undefined): string {
+  if (typeof status !== 'number') return 'Quo refused the request.';
   if (status === 401 || status === 403) return `Quo rejected the API key (HTTP ${status}). Check QUO_API_KEY on the Cotiza worker.`;
   if (status === 402) return 'Quo says the plan does not include API access (HTTP 402).';
   if (status === 429) return 'Quo is rate-limiting Cotiza (HTTP 429). Try again in a minute.';

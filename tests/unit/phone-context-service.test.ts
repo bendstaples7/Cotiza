@@ -163,15 +163,24 @@ describe('PhoneContextService', () => {
       expect(new URL(firstCallUrl).searchParams.getAll('phoneNumbers')).toEqual(['+15551234567']);
     });
 
-    it('sends participants as a plain list and reports why a read failed', async () => {
+    it('sends participants as a plain list', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ data: [], totalItems: 0, nextPageToken: null }) });
+      vi.stubGlobal('fetch', fetchMock);
+      await new PhoneContextService('sk-test-key', 'PN123').fetchActivityResult('(773) 555-0100');
+      const urls = fetchMock.mock.calls.map((c) => new URL(String(c[0])));
+      const withParticipants = urls.filter((u) => u.searchParams.has('participants'));
+      expect(withParticipants.length).toBeGreaterThan(0);
+      for (const u of withParticipants) expect(u.searchParams.getAll('participants')).toEqual(['+17735550100']);
+    });
+
+    it('reports why a read failed', async () => {
       const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({}) });
       vi.stubGlobal('fetch', fetchMock);
       const service = new PhoneContextService('sk-bad-key', 'PN123');
       const result = await service.fetchContextResult('(773) 555-0100');
       expect(result).toEqual({ status: 'failed', reason: expect.stringContaining('rejected the API key (HTTP 401)') });
       const urls = fetchMock.mock.calls.map((c) => String(c[0]));
-      const withParticipants = urls.find((u) => u.includes('participants'));
-      if (withParticipants) expect(new URL(withParticipants).searchParams.getAll('participants')).toEqual(['+17735550100']);
+      expect(urls.some((u) => u.includes('%5B'))).toBe(false);
       expect(JSON.stringify(result)).not.toContain('sk-bad-key');
     });
 
@@ -229,9 +238,9 @@ describe('PhoneContextService', () => {
       const fetchMock = route({ '/phone-numbers': 'fail' });
       vi.stubGlobal('fetch', fetchMock);
       const service = new PhoneContextService('sk-test-key');
-      expect(await service.fetchContextResult('+15551234567')).toEqual({ status: 'failed' });
+      expect(await service.fetchContextResult('+15551234567')).toMatchObject({ status: 'failed', reason: expect.any(String) });
       // A failed lookup is not cached: the next read asks Quo again.
-      expect(await service.fetchContextResult('+15551234567')).toEqual({ status: 'failed' });
+      expect(await service.fetchContextResult('+15551234567')).toMatchObject({ status: 'failed', reason: expect.any(String) });
       const lookups = fetchMock.mock.calls.filter(([u]) => new URL(u as string).pathname === '/v1/phone-numbers');
       expect(lookups).toHaveLength(2);
     });
