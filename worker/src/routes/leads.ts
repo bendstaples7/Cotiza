@@ -14,6 +14,8 @@
  * POST   /api/leads/:requestId/send-text  send one confirmed text through Quo and log it
  * POST   /api/leads/jobber-notes/:noteId/retry  try again to add a Cotiza note to the Jobber request
  * POST   /api/leads/:requestId/quotes/:quoteId/review-request  the team sent a draft quote to Ben for review
+ * POST   /api/leads/:requestId/close     close a lead with a reason (postponed: with a check-back date)
+ * POST   /api/leads/:requestId/reopen    reopen a closed lead
  *
  * Logging a contact, sending a text through Quo and the not-a-lead mark also add a short
  * "Cotiza · …" note to the Jobber request (jobber-request-notes.ts), so the team records each
@@ -35,6 +37,7 @@ import { gatherLeadWorkflow, type RequestDetail } from '../services/lead-contact
 import { formatJobberNote, JobberNoteWriter, NOTE_ID_RE, noteKey, requestKeyPart, stepLabel, type JobberNoteRecord, type NoteAction } from '../services/jobber-request-notes.js';
 import { ActivityLogService } from '../services/activity-log-service.js';
 import { gatherQuoteStage, requestReview, type QuoteRef, type QuoteStage } from '../services/lead-quote-stage.js';
+import { setRequestArchived } from '../services/jobber-request-archive.js';
 
 type Env = { Bindings: Bindings; Variables: { user: { id: string; email: string } } };
 const app = new Hono<Env>();
@@ -273,7 +276,9 @@ app.post('/:requestId/contacts', async (c) => {
     const jobberNote = await addJobberNote(c.env, userId, noteKey('contact', contact.id), requestId, {
       kind: 'contact', channel: contact.channel, direction: contact.direction, note: contact.note, stepLabel: stepLabel(contact.step),
     });
-    return c.json({ contact, jobberNote }, 201);
+    // Checking back in on a postponed lead sets the next check-back three months on.
+    const checkBackOn = contact.step === 'check_back' ? await new LeadContactService(c.env.DB).pushCheckBack(requestId) : null;
+    return c.json({ contact, jobberNote, ...(checkBackOn ? { checkBackOn } : {}) }, 201);
   } catch (err) {
     const bad = badRequest(err);
     if (bad) return c.json(bad, 400);
@@ -373,6 +378,65 @@ app.post('/:requestId/quotes/:quoteId/review-request', async (c) => {
     kind: 'review_requested', quoteNumber: quote.number,
   });
   return c.json({ requestedAt, quoteStage: await gatherQuoteStage(c.env.DB, requestId, known), jobberNote });
+});
+
+/**
+ * Close a lead with a reason. Writes "Cotiza · Lead closed by …" to Jobber and, unless the lead is
+ * postponed (it stays open in Jobber to come back), archives the Jobber request when Jobber lets
+ * Cotiza do that. Trello is outside Cotiza: the response reminds the team to move the card.
+ */
+app.post('/:requestId/close', async (c) => {
+  let requestId: string;
+  try { requestId = requireRequestId(c.req.param('requestId')); } catch (err) { return c.json(badRequest(err), 400); }
+  const userId = c.get('user').id;
+  const contacts = new LeadContactService(c.env.DB);
+  const body = await c.req.json().catch(() => null);
+  let result: Awaited<ReturnType<LeadContactService['closeLead']>>;
+  try {
+    result = await contacts.closeLead(requestId, body, userId);
+  } catch (err) {
+    const bad = badRequest(err);
+    if (bad) return c.json(bad, 400);
+    throw err;
+  }
+  const { closure, changed } = result;
+  // Already closed (a repeat or double click): nothing more is written anywhere.
+  if (!changed) return c.json({ closure, alreadyClosed: true, jobberNote: null, jobberArchive: { status: 'skipped', message: 'The lead was already closed.' }, trelloReminder: true });
+  const jobberNote = await addJobberNote(c.env, userId, noteKey('close', `${await requestKeyPart(requestId)}_${Date.parse(closure.closedAt) || Date.now()}`), requestId, {
+    kind: 'lead_closed', reason: closure.label, note: closure.note, checkBackOn: closure.checkBackOn,
+  });
+  let jobberArchive: { status: string; message?: string };
+  if (closure.reason === 'postponed') {
+    jobberArchive = { status: 'skipped', message: 'Postponed leads stay open in Jobber so they can come back.' };
+  } else {
+    const { jobberIntegration } = await openJobberIntegration(c.env.DB, c.env).catch(() => ({ jobberIntegration: null }));
+    jobberArchive = await setRequestArchived(jobberIntegration, requestId, true);
+    if (jobberArchive.status === 'archived') await contacts.setJobberArchived(requestId, true).catch(() => undefined);
+    await new ActivityLogService(c.env.DB).log({ userId, component: 'LeadHub', operation: 'jobber_archive', severity: jobberArchive.status === 'failed' ? 'error' : 'info', description: `request archive outcome=${jobberArchive.status}`.slice(0, 240) });
+  }
+  return c.json({ closure: jobberArchive.status === 'archived' ? { ...closure, jobberArchived: true } : closure, jobberNote, jobberArchive, trelloReminder: true });
+});
+
+app.post('/:requestId/reopen', async (c) => {
+  let requestId: string;
+  try { requestId = requireRequestId(c.req.param('requestId')); } catch (err) { return c.json(badRequest(err), 400); }
+  const userId = c.get('user').id;
+  const contacts = new LeadContactService(c.env.DB);
+  const cleared = await contacts.reopenLead(requestId, userId);
+  // Already open. If Cotiza archived the request and a past unarchive failed, try it again.
+  const leftoverArchive = !cleared && await contacts.jobberArchived(requestId).catch(() => false);
+  if (!cleared && !leftoverArchive) return c.json({ reopened: false, jobberNote: null, jobberArchive: null });
+  const jobberNote = cleared
+    ? await addJobberNote(c.env, userId, noteKey('close', `${await requestKeyPart(requestId)}_reopen_${Date.now()}`), requestId, { kind: 'lead_reopened' })
+    : null;
+  let jobberArchive: { status: string; message?: string } | null = null;
+  if (cleared?.jobberArchived || leftoverArchive) {
+    const { jobberIntegration } = await openJobberIntegration(c.env.DB, c.env).catch(() => ({ jobberIntegration: null }));
+    jobberArchive = await setRequestArchived(jobberIntegration, requestId, false);
+    // The flag is cleared only once Jobber has unarchived it, so a failure can be retried.
+    if (jobberArchive.status === 'unarchived') await contacts.setJobberArchived(requestId, false).catch(() => undefined);
+  }
+  return c.json({ reopened: Boolean(cleared), jobberNote, jobberArchive, trelloReminder: Boolean(cleared) });
 });
 
 app.post('/jobber-notes/:noteId/retry', async (c) => {

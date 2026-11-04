@@ -86,6 +86,7 @@ export function buildOutreach(input: { clientName: string | null; title: string 
  * - reply: thanks them for getting back to us, then any asks.
  * - quote_update: the handbook's "quote still being created" update.
  * - quote_follow_up: the handbook's "quote sent, follow up" check-in.
+ * - check_back: the postponed lead's check-in (every 3 months).
  * - draft_quote / ben_edits / wait_review / send_quote / review / none: no customer message.
  */
 export function buildActionMessage(kind: LeadActionKind, input: { clientName: string | null; title: string | null; items: LeadInfoItem[] }): OutreachMessages | null {
@@ -123,6 +124,24 @@ export function buildActionMessage(kind: LeadActionKind, input: { clientName: st
         `Hi ${name},`,
         `Just checking in to make sure you received our quote for your ${project} okay (sometimes they go to spam).`,
         `Please let us know if you have any questions, or if anything needs to be clarified!`,
+        'Best,\nChicago Reno',
+      ].join('\n\n'),
+    };
+  }
+  if (kind === 'check_back') {
+    // A postponed project, checked on every 3 months.
+    return {
+      ...base,
+      text: [
+        `Hi ${name}, this is Chicago Reno checking in on your ${project}.`,
+        `You mentioned you wanted to hold off for a bit. Are you ready to move forward, or would you like us to check back later? Happy to answer any questions.`,
+        '— Chicago Reno',
+      ].join('\n\n'),
+      emailSubject: `Checking in on your ${project}`,
+      emailBody: [
+        `Hi ${name},`,
+        `Checking in on your ${project}. You mentioned you wanted to hold off for a bit. Are you ready to move forward, or would you like us to check back later?`,
+        `Happy to answer any questions in the meantime.`,
         'Best,\nChicago Reno',
       ].join('\n\n'),
     };

@@ -776,7 +776,9 @@ export async function fetchManualRequest(id: string): Promise<ManualRequest> {
 }
 
 /** Whether the queue's Jobber cards came from Jobber's live open leads. */
-export type JobberQueueStatus = { status: 'live'; days: number; complete: boolean } | { status: 'unavailable'; days: number };
+export type JobberQueueStatus =
+  | { status: 'live'; days: number; complete: boolean; closuresUnavailable?: boolean; postponedUnavailable?: boolean }
+  | { status: 'unavailable'; days: number };
 
 /** The request queue: manual requests plus Jobber's open leads, with whether Jobber could be read. */
 export async function fetchRequestQueue(sortBy?: 'age_asc' | 'age_desc'): Promise<{ requests: ManualRequestWithDeathclock[]; jobber: JobberQueueStatus }> {
@@ -1429,8 +1431,8 @@ export interface LeadContactStatus {
   workflow?: LeadWorkflow | null;
 }
 
-export type LeadBucket = 'do_now' | 'waiting' | 'review';
-export type LeadActionKind = 'intro_text' | 'reply' | 'ask_info' | 'quote_update' | 'draft_quote' | 'ben_edits' | 'wait_review' | 'send_quote' | 'quote_follow_up' | 'follow_up' | 'review' | 'none';
+export type LeadBucket = 'do_now' | 'waiting' | 'review' | 'closed';
+export type LeadActionKind = 'intro_text' | 'reply' | 'ask_info' | 'quote_update' | 'draft_quote' | 'ben_edits' | 'wait_review' | 'send_quote' | 'quote_follow_up' | 'follow_up' | 'check_back' | 'review' | 'none';
 export type LeadProgress = 'lead_in' | 'getting_info' | 'ready_to_quote' | 'quote_drafted' | 'ben_review' | 'ready_to_send' | 'quote_sent';
 
 /** Where a drafted quote is, so the team knows whose move it is (worker: lead-quote-stage.ts). */
@@ -1464,6 +1466,48 @@ export interface LeadWorkflow {
   plan: Array<{ label: string; detail: string; state: 'done' | 'missed' | 'due' | 'upcoming' }>;
   /** Where the quote is once one is drafted; null before that. */
   quoteStage?: LeadQuoteStage | null;
+  /** The team closed this lead; null while open. */
+  closed?: LeadClosure | null;
+}
+
+export type LeadCloseReason = 'went_elsewhere' | 'too_small' | 'no_response' | 'postponed' | 'other';
+export const LEAD_CLOSE_REASONS: Array<{ value: LeadCloseReason; label: string }> = [
+  { value: 'went_elsewhere', label: 'Went with someone else' },
+  { value: 'too_small', label: 'Too small or not our work' },
+  { value: 'no_response', label: 'No response' },
+  { value: 'postponed', label: 'Postponed' },
+  { value: 'other', label: 'Other' },
+];
+
+export interface LeadClosure {
+  reason: LeadCloseReason;
+  label: string;
+  note: string | null;
+  checkBackOn: string | null;
+  closedAt: string;
+  jobberArchived: boolean;
+}
+
+export interface JobberArchiveOutcome { status: 'archived' | 'unarchived' | 'not_offered' | 'failed' | 'skipped'; message?: string }
+
+/** Closes a lead with a reason. Postponed leads take a check-back date (default 3 months). */
+export async function closeLead(requestId: string, input: { reason: LeadCloseReason; note?: string; checkBackOn?: string }): Promise<{
+  closure: LeadClosure; alreadyClosed?: boolean; jobberNote: JobberNoteStatus | null; jobberArchive: JobberArchiveOutcome; trelloReminder: boolean;
+}> {
+  const res = await fetch(API_BASE + '/api/leads/' + encodeURIComponent(requestId) + '/close', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(input),
+  });
+  return handleResponseWithToast(res);
+}
+
+export async function reopenLead(requestId: string): Promise<{ reopened: boolean; jobberNote: JobberNoteStatus | null; jobberArchive: JobberArchiveOutcome | null; trelloReminder?: boolean }> {
+  const res = await fetch(API_BASE + '/api/leads/' + encodeURIComponent(requestId) + '/reopen', {
+    method: 'POST',
+    headers: { ...authHeaders() },
+  });
+  return handleResponseWithToast(res);
 }
 
 export interface LoggedLeadContact {

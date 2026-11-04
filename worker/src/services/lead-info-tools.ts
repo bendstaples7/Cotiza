@@ -11,6 +11,7 @@ import { gatherLeadWorkflow, type RequestDetail } from './lead-contact-status.js
 import type { EmailContextService } from './email-context-service.js';
 import type { PhoneContextService } from './phone-context-service.js';
 import type { LeadWorkflow } from './lead-workflow.js';
+import { applyClosuresToOpenLeads } from './lead-closures.js';
 import { LEAD_MAX_PAGES, LEAD_PAGE_SIZE, leadClientName, loadOpenLeads, OPEN_LEAD_DAYS, type LeadNode } from './open-leads.js';
 import { sanitizeLogText } from './jobber-log-sanitize.mjs';
 import { applyChange, LeadInfoError, LeadInfoService, type LeadInfoItem, MAX_ITEMS_PER_LEAD, questionKey, requireRequestId, summarize, validateQuestion } from './lead-info-service.js';
@@ -27,7 +28,7 @@ function objectArgs(raw: unknown, allowed: string[]): Record<string, unknown> {
 export const LEAD_READ_TOOLS = [
   {
     name: 'list_open_leads',
-    description: 'List open leads: Jobber requests from the last N days that are still new or in assessment (not converted to a quote or job, not archived), oldest first (the lead waiting longest comes first), with each one\'s Jobber status, info-needed counts and next step: where it sits in the handbook follow-up cadence, when the next contact is due, and the one action the team should take. Next steps here use Jobber notes and contacts logged in Cotiza only (not Quo or email). Read live from Jobber. No contact details. Read-only. A failed lookup is not an empty list.',
+    description: 'List open leads: Jobber requests from the last N days that are still new or in assessment (not converted to a quote or job, not archived), leaving out leads the team closed in Cotiza and adding back postponed leads whose check-back date has come (even from before the window), oldest first (the lead waiting longest comes first), with each one\'s Jobber status, info-needed counts and next step: where it sits in the handbook follow-up cadence, when the next contact is due, and the one action the team should take. Next steps here use Jobber notes and contacts logged in Cotiza only (not Quo or email). Read live from Jobber. No contact details. Read-only. A failed lookup is not an empty list.',
     inputSchema: {
       type: 'object', additionalProperties: false,
       properties: {
@@ -138,15 +139,18 @@ export async function callLeadTool(db: D1Database, principal: AssistantPrincipal
         console.error(`[lead-info] ${sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 180)}`);
         return { outcome: 'failed' as const, leads: [], failure: { code: 'jobber_read_failed', message: 'Jobber requests could not be read. This is not an empty list.' } };
       }
-      // Jobber is read newest first; the team works the lead waiting longest first.
-      const oldestFirst = [...loaded.open].reverse();
+      // Closed leads leave the list; a postponed one returns on its check-back date.
+      const applied = await applyClosuresToOpenLeads(db, jobber, loaded.open, now);
+      // The team works the lead waiting longest first.
+      const ms = (n: LeadNode) => { const t = Date.parse(n.createdAt ?? ''); return Number.isFinite(t) ? t : Infinity; };
+      const oldestFirst = [...applied.open].sort((a, b) => ms(a) - ms(b));
       const page = oldestFirst.slice(0, limit);
       const itemsById = await info.listMany(page.map((node) => node.id));
       const nextSteps = await leadNextSteps(db, jobber, principal.userId, page.map((node) => node.id), itemsById, now);
       return {
         outcome: 'ok' as const,
-        total: loaded.open.length,
-        totalIsComplete: loaded.complete,
+        total: applied.open.length,
+        totalIsComplete: loaded.complete && !applied.postponedUnavailable && !applied.closuresUnavailable,
         days,
         leads: page.map((node) => {
           const created = Date.parse(node.createdAt ?? '');
@@ -165,6 +169,9 @@ export async function callLeadTool(db: D1Database, principal: AssistantPrincipal
         notes: [
           'Open means Jobber still shows the request as new or in assessment; converted (quote or job made) and archived requests are left out.',
           'A lead with no checklist has total 0 and is not ready to quote.',
+          'Leads the team closed in Cotiza are left out; a postponed one is listed again from its check-back date.',
+          ...(applied.closuresUnavailable ? ['Closed leads could not be read, so some leads listed here may already be closed.'] : []),
+          ...(applied.postponedUnavailable ? ['Some postponed leads due a check-back could not be read from Jobber and are missing from this list.'] : []),
           'nextStep uses Jobber notes and contacts logged in Cotiza; texts, calls and emails that only live in Quo or Gmail are not counted here (the Cotiza request queue counts them). nextStep is null when it could not be worked out.',
           ...(loaded.complete ? [] : [`Only the newest ${LEAD_PAGE_SIZE * LEAD_MAX_PAGES} requests were checked; older ones in the window were not.`]),
         ],
