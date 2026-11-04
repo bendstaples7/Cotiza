@@ -12,6 +12,7 @@ import { CLIENT_HISTORY_LIMIT, CLIENT_HISTORY_QUERIES, CLIENT_HISTORY_TOOL, summ
 import { DETAIL_VISITS_PER_PAGE, JOB_QUERIES, JOB_STATUSES, mapVisit, summarizeVisits, type VisitNode } from './ops-assistant-jobs.js';
 import { EXPENSE_ACCOUNT, EXPENSE_QUERIES, expenseDateFilter, isCalendarDate } from './ops-assistant-expenses.js';
 import { reportDate } from './weekly-payout-reports.js';
+import { PRODUCTS_MAX_RESULTS, PRODUCTS_TOOL, loadCatalog, matchCatalog } from './ops-assistant-products.js';
 
 /** One Jobber page per call. Text filters apply only to that page. */
 export const SEARCH_LIMITATIONS = {
@@ -621,6 +622,32 @@ export class OpsAssistantRead {
     };
   }
 
+  async findProducts(_userId: string, args: unknown) {
+    const raw = objectArgs(args);
+    onlyKeys(raw, ['query']);
+    const query = optionalText(raw, 'query');
+    const lookup = await readLive(() => loadCatalog(this.jobber));
+    if (!lookup.ok) return lookup.body;
+    const matches = matchCatalog(lookup.value.items, query);
+    const items = matches.slice(0, PRODUCTS_MAX_RESULTS).map((p) => ({
+      id: p.id,
+      name: p.name,
+      defaultUnitPrice: present(p.defaultUnitCost),
+      description: present(p.description),
+      category: present(p.category),
+    }));
+    return {
+      outcome: 'ok' as const,
+      read: liveJobberRead(lookup.value.items),
+      items,
+      totalMatches: matches.length,
+      catalogSize: lookup.value.items.length,
+      truncated: matches.length > PRODUCTS_MAX_RESULTS,
+      catalogComplete: lookup.value.complete,
+      source: source('jobber'),
+    };
+  }
+
   async findJobs(_userId: string, args: unknown) {
     const raw = objectArgs(args);
     onlyKeys(raw, ['client', 'jobNumber', 'status', 'cursor', 'limit']);
@@ -960,6 +987,7 @@ export const TOOL_DEFINITIONS = [
     },
   },
   CLIENT_HISTORY_TOOL,
+  PRODUCTS_TOOL,
 ] as const;
 
 export async function callAssistantTool(read: OpsAssistantRead, userId: string, name: string, args: unknown) {
@@ -975,6 +1003,7 @@ export async function callAssistantTool(read: OpsAssistantRead, userId: string, 
     case 'find_jobs': return read.findJobs(userId, args);
     case 'read_job': return read.readJob(userId, args);
     case 'read_client_history': return read.readClientHistory(userId, args);
+    case 'find_products': return read.findProducts(userId, args);
     case 'find_expenses': return read.findExpenses(userId, args);
     default: return null;
   }
