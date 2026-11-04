@@ -282,21 +282,33 @@ async function planCatalogSaves(jobber: JobberReadClient, creates: CreateLine[],
   } catch {
     return { toSave: new Set(), report: { requested, skippedExisting: [], notSaved: 'Products & Services could not be read to rule out duplicates, so nothing was saved to it. The quote lines were still applied.' } };
   }
-  const skippedExisting = wanted.filter((l) => existing.has(catalogKey(l.name))).map((l) => l.name);
-  const toSave = new Set(wanted.filter((l) => !existing.has(catalogKey(l.name))));
+  // A name already in the catalog, or repeated earlier in this same request, is saved at most once.
+  const skippedExisting: string[] = [];
+  const toSave = new Set<CreateLine>();
+  for (const l of wanted) {
+    const key = catalogKey(l.name);
+    if (existing.has(key)) { skippedExisting.push(l.name); continue; }
+    existing.add(key);
+    toSave.add(l);
+  }
   return { toSave, report: { requested, skippedExisting } };
 }
 
 /** Reread the catalog and report which saved names are now there. */
-async function verifyCatalogSaves(jobber: JobberReadClient, plan: CatalogPlan, created: boolean) {
+async function verifyCatalogSaves(jobber: JobberReadClient, plan: CatalogPlan, createAttempted: boolean) {
   const report = plan.report!;
+  if (report.notSaved) return { ...report, saved: [] as string[], verified: false };
   const attempted = [...plan.toSave].map((l) => l.name);
-  if (!attempted.length || !created) return { ...report, saved: [] as string[], verified: attempted.length === 0 };
+  if (!attempted.length) return { ...report, saved: [] as string[], verified: true };
+  if (!createAttempted) return { ...report, saved: [] as string[], attempted, verified: false, note: 'The new lines were not created, so nothing was saved to Products & Services.' };
   try {
-    const { items } = await loadCatalog(jobber);
+    const { items, complete } = await loadCatalog(jobber);
     const names = new Set(items.map((i) => catalogKey(i.name)));
     const saved = attempted.filter((n) => names.has(catalogKey(n)));
     const missing = attempted.filter((n) => !names.has(catalogKey(n)));
+    if (missing.length && !complete) {
+      return { ...report, saved, unconfirmed: missing, verified: false, note: 'The catalog is larger than the read limit, so some saves could not be confirmed.' };
+    }
     return { ...report, saved, verified: missing.length === 0, ...(missing.length ? { missing } : {}) };
   } catch {
     return { ...report, saved: [] as string[], attempted, verified: false, note: 'Products & Services could not be reread to confirm the save.' };
@@ -368,6 +380,7 @@ export async function applyQuoteEdits(jobber: JobberReadClient, rawArgs: unknown
   const catalog = await planCatalogSaves(jobber, plan.creates, schema.create.fields.has('saveToProductsAndServices'));
 
   const applied = { updated: 0, created: 0, deleted: 0 };
+  let createAttempted = false;
   let failure: string | null = null;
   try {
     if (plan.updates.length) {
@@ -378,6 +391,8 @@ export async function applyQuoteEdits(jobber: JobberReadClient, rawArgs: unknown
       applied.updated = plan.updates.length;
     }
     if (plan.creates.length) {
+      // Set before the call: a create can take effect and still return userErrors.
+      createAttempted = true;
       await runMutation(jobber, schema.create, args.quoteId, plan.creates.map((l) => ({
         name: l.name, quantity: l.quantity, unitPrice: l.unitPrice,
         ...(schema.create.fields.has('description') ? { description: l.description } : {}),
@@ -413,7 +428,7 @@ export async function applyQuoteEdits(jobber: JobberReadClient, rawArgs: unknown
     ...(problems.length ? { mismatches: problems } : {}),
     subtotal: after ? subtotal(afterLines) : null,
     version: afterVersion,
-    ...(catalog.report ? { catalog: await verifyCatalogSaves(jobber, catalog, applied.created > 0) } : {}),
+    ...(catalog.report ? { catalog: await verifyCatalogSaves(jobber, catalog, createAttempted) } : {}),
     ...(failure || problems.length ? { warning: changed === false
       ? 'Nothing was changed.'
       : changed === 'unknown'

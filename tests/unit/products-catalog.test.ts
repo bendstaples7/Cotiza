@@ -32,7 +32,7 @@ const schema = {
 const product = (name: string, defaultUnitCost = 100, description = ''): Record<string, unknown> => ({ id: `p-${name}`, name, description, defaultUnitCost, category: 'SERVICE' });
 
 /** Fake Jobber with a quote and a Products & Services catalog paged two items at a time. */
-function fakeJobber(initial: QuoteLine[], catalog: Array<Record<string, unknown>>, opts: { failCatalog?: boolean } = {}) {
+function fakeJobber(initial: QuoteLine[], catalog: Array<Record<string, unknown>>, opts: { failCatalog?: boolean; nullCatalog?: boolean; rejectCreate?: boolean } = {}) {
   let lines = [...initial];
   const products = [...catalog];
   let next = 1;
@@ -40,8 +40,9 @@ function fakeJobber(initial: QuoteLine[], catalog: Array<Record<string, unknown>
   const graphqlRequest = vi.fn(async (query: string, vars?: Record<string, unknown>) => {
     if (query === PRODUCTS_QUERY) {
       if (opts.failCatalog) throw new Error('403 forbidden');
+      if (opts.nullCatalog) return { productOrServices: null };
       const start = vars?.after ? Number(vars.after) : 0;
-      const page = products.slice(start, start + 2);
+      const page = products.slice(start, start + (vars?.first as number));
       const end = start + page.length;
       return { productOrServices: { edges: page.map((node) => ({ node })), pageInfo: { hasNextPage: end < products.length, endCursor: String(end) } } };
     }
@@ -49,12 +50,14 @@ function fakeJobber(initial: QuoteLine[], catalog: Array<Record<string, unknown>
     if (query === QUOTE_EDIT_SCHEMA_QUERY) return schema;
     const items = (vars?.items ?? []) as Array<Record<string, unknown>>;
     if (query.includes('quoteCreateLineItems(')) {
+      const reject = opts.rejectCreate;
       for (const i of items) {
         created.push(i);
         lines.push(line(`newLine${next++}`, i.name as string, i.quantity as number, i.unitPrice as number, i.description as string));
         if (i.saveToProductsAndServices === true) products.push(product(i.name as string, i.unitPrice as number, i.description as string));
       }
-      return { quoteCreateLineItems: { userErrors: [] } };
+      // rejectCreate: the lines are saved but Jobber still answers with an error.
+      return { quoteCreateLineItems: { userErrors: reject ? [{ message: 'Something went wrong' }] : [] } };
     }
     if (query.includes('quoteEditLineItems(')) return { quoteEditLineItems: { userErrors: [] } };
     if (query.includes('quoteDeleteLineItems(')) {
@@ -78,12 +81,39 @@ describe('find_products', () => {
   it('reads every page and filters on all words', async () => {
     const jobber = fakeJobber([], [product('Drywall: Patches', 65), product('Plumbing: Hot Water Heater Flushing', 75), product('Materials: Drywall', 100, 'Drywall, tape and mud'), product('Electrical: Swap Light Fixture', 150)]);
     const read = new OpsAssistantRead(jobber, {} as never);
-    const result = await callAssistantTool(read, 'u', 'find_products', { query: 'drywall' }) as { outcome: string; items: Array<{ name: string; defaultUnitPrice: { value?: number } }>; totalMatches: number; catalogSize: number; catalogComplete: boolean };
+    const result = await callAssistantTool(read, 'u', 'find_products', { query: 'drywall' }) as { outcome: string; items: Array<{ name: { value?: string; untrusted?: boolean }; defaultUnitPrice: { value?: number } }>; totalMatches: number; catalogSize: number; catalogComplete: boolean };
     expect(result.outcome).toBe('ok');
     expect(result.catalogSize).toBe(4);
     expect(result.catalogComplete).toBe(true);
-    expect(result.items.map((i) => i.name)).toEqual(['Drywall: Patches', 'Materials: Drywall']);
+    expect(result.items.map((i) => i.name.value)).toEqual(['Drywall: Patches', 'Materials: Drywall']);
+    expect(result.items[0].name.untrusted).toBe(true);
     expect(result.items[0].defaultUnitPrice.value).toBe(65);
+  });
+
+  it('reads past the first page and stops at the 2,000-item cap', async () => {
+    const big = Array.from({ length: 2001 }, (_, i) => product(`Item ${i}`));
+    const read = new OpsAssistantRead(fakeJobber([], big), {} as never);
+    const result = await callAssistantTool(read, 'u', 'find_products', {}) as { catalogSize: number; catalogComplete: boolean; items: unknown[]; totalMatches: number; truncated: boolean };
+    expect(result.catalogSize).toBe(2000);
+    expect(result.catalogComplete).toBe(false);
+    expect(result.totalMatches).toBe(2000);
+    expect(result.items).toHaveLength(100);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('returns 100 of 101 matches and says it is truncated', async () => {
+    const read = new OpsAssistantRead(fakeJobber([], Array.from({ length: 101 }, (_, i) => product(`Tile ${i}`))), {} as never);
+    const result = await callAssistantTool(read, 'u', 'find_products', { query: 'tile' }) as { items: unknown[]; totalMatches: number; truncated: boolean; catalogComplete: boolean };
+    expect(result.catalogComplete).toBe(true);
+    expect(result.totalMatches).toBe(101);
+    expect(result.items).toHaveLength(100);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('treats a missing catalog list as a failed read, not an empty catalog', async () => {
+    const read = new OpsAssistantRead(fakeJobber([], [], { nullCatalog: true }), {} as never);
+    const result = await callAssistantTool(read, 'u', 'find_products', {}) as { outcome: string };
+    expect(result.outcome).toBe('failed');
   });
 
   it('reports a failed read, never an empty catalog', async () => {
@@ -100,6 +130,8 @@ describe('find_products', () => {
   it('matches names regardless of case, spacing and dash style', () => {
     expect(catalogKey('Plumbing:  Replace Shower Valve Cartridge')).toBe(catalogKey('plumbing: replace shower valve cartridge'));
     expect(catalogKey('A – B')).toBe(catalogKey('a - b'));
+    expect(catalogKey('A—B')).toBe(catalogKey('a - b'));
+    expect(catalogKey('A \u2212 B')).toBe(catalogKey('a-b'));
     const items: CatalogItem[] = [{ id: '1', name: 'Shower Valve', description: 'cartridge swap', defaultUnitCost: 1, category: null }];
     expect(matchCatalog(items, 'valve cartridge')).toHaveLength(1);
     expect(matchCatalog(items, 'valve tile')).toHaveLength(0);
@@ -153,6 +185,7 @@ describe('apply_quote_edits saveToCatalog', () => {
     expect(result.outcome).toBe('ok');
     expect(result.catalog.saved).toEqual([]);
     expect(result.catalog.notSaved).toMatch(/could not be read/);
+    expect((result.catalog as { verified?: boolean }).verified).toBe(false);
     expect(jobber.created[0].saveToProductsAndServices).toBe(false);
   });
 
@@ -165,5 +198,33 @@ describe('apply_quote_edits saveToCatalog', () => {
     }) as Record<string, unknown>;
     expect(result.catalog).toBeUndefined();
     expect(jobber.graphqlRequest.mock.calls.some(([q]) => q === PRODUCTS_QUERY)).toBe(false);
+  });
+
+  it('saves a name repeated in one request only once', async () => {
+    const jobber = fakeJobber([A], []);
+    const version = await quoteVersion('draft', [A]);
+    const result = await applyQuoteEdits(jobber, {
+      quoteId: 'q123', quoteVersion: version,
+      lines: [
+        { id: 'lineA', name: A.name, quantity: 4, unitPrice: 65 },
+        { name: 'Paint: Touch-Up', quantity: 1, unitPrice: 65, saveToCatalog: true },
+        { name: 'paint: touch - up', quantity: 2, unitPrice: 65, saveToCatalog: true },
+      ],
+    }) as { catalog: { saved: string[]; skippedExisting: string[] } };
+    expect(result.catalog.saved).toEqual(['Paint: Touch-Up']);
+    expect(result.catalog.skippedExisting).toEqual(['paint: touch - up']);
+    expect(jobber.created.filter((c) => c.saveToProductsAndServices === true)).toHaveLength(1);
+  });
+
+  it('still checks the catalog when the create call errors after saving', async () => {
+    const jobber = fakeJobber([A], [], { rejectCreate: true });
+    const version = await quoteVersion('draft', [A]);
+    const result = await applyQuoteEdits(jobber, {
+      quoteId: 'q123', quoteVersion: version,
+      lines: [{ id: 'lineA', name: A.name, quantity: 4, unitPrice: 65 }, { name: 'New line', quantity: 1, unitPrice: 10, saveToCatalog: true }],
+    }) as { outcome: string; catalog: { saved: string[]; verified: boolean } };
+    expect(result.outcome).toBe('failed');
+    expect(result.catalog.saved).toEqual(['New line']);
+    expect(result.catalog.verified).toBe(true);
   });
 });
