@@ -80,4 +80,15 @@ describe('assistant token admin routes', () => {
     }, env());
     expect(response.status).toBe(404);
   });
+
+  it('refuses quote:write tokens for anyone but the office account', async () => {
+    const app = createOpsAssistantApp();
+    const response = await app.request('http://127.0.0.1:8787/api/assistant/tokens', {
+      method: 'POST',
+      headers: AUTH,
+      body: JSON.stringify({ scope: 'ops:read quote:write' }),
+    }, env());
+    expect(response.status).toBe(403);
+    expect(db.prepare).not.toHaveBeenCalled();
+  });
 });

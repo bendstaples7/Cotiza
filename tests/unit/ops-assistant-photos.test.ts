@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OpsAssistantRead } from '../../worker/src/services/ops-assistant-read.js';
-import { downloadRequestPhoto, photoFailureReason, MAX_PHOTO_BYTES } from '../../worker/src/services/jobber-request-photos.js';
+import { downloadRequestPhoto, photoFailureReason, MAX_PHOTO_BYTES, MAX_SOURCE_PHOTO_BYTES, RESIZED_PHOTO_EDGE, type PhotoResizer } from '../../worker/src/services/jobber-request-photos.js';
 import { handleMcpPost, readMcpJsonBody } from '../../worker/src/routes/ops-assistant.js';
 import { CallBudget } from '../../worker/src/services/assistant-access.js';
 import { createMockD1 } from './helpers/mock-d1.js';
@@ -64,7 +64,11 @@ describe('assistant request photos', () => {
 
   it('rejects oversized streams, non-images and mismatched image bytes', async () => {
     const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher);
-    fetcher.mockResolvedValueOnce(new Response(new Uint8Array(MAX_PHOTO_BYTES + 1), { headers: { 'content-type': 'image/jpeg' } }));
+    // Over 4 MiB with no Images binding to scale it down: refused, as before.
+    const oversized = new Uint8Array(MAX_PHOTO_BYTES + 1); oversized.set([255, 216, 255, 224]);
+    fetcher.mockResolvedValueOnce(new Response(oversized, { headers: { 'content-type': 'image/jpeg' } }));
+    await expect(downloadRequestPhoto(photo)).rejects.toThrow('photo_too_large');
+    fetcher.mockResolvedValueOnce(new Response(new Uint8Array(MAX_SOURCE_PHOTO_BYTES + 1), { headers: { 'content-type': 'image/jpeg' } }));
     await expect(downloadRequestPhoto(photo)).rejects.toThrow('photo_too_large');
     fetcher.mockResolvedValueOnce(new Response('html', { headers: { 'content-type': 'text/html' } }));
     await expect(downloadRequestPhoto(photo)).rejects.toThrow('unsupported_photo_type');
@@ -111,5 +115,36 @@ describe('assistant request photos', () => {
     expect(await read.readRequestPhoto('u', { requestId: 'req-697' })).toMatchObject({ outcome: 'not_found', attachments: [] });
     jobber.graphqlRequest.mockRejectedValueOnce(new Error('timed out'));
     expect(await read.readRequestPhoto('u', { requestId: 'req-697' })).toMatchObject({ outcome: 'failed', read: { liveLookupFailed: true } });
+  });
+
+  it('scales down photos over 4 MiB with the Images binding instead of refusing them', async () => {
+    const big = new Uint8Array(MAX_PHOTO_BYTES + 10); big.set([255, 216, 255, 224]);
+    const small = new Uint8Array([255, 216, 255, 219, 1, 2, 3]);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(big, { headers: { 'content-type': 'image/jpeg' } })));
+    const transform = vi.fn(() => ({ output: vi.fn(async () => ({ response: () => new Response(small) })) }));
+    const resizer = { input: vi.fn(() => ({ transform })) } as unknown as PhotoResizer;
+    const result = await new OpsAssistantRead(client(), createMockD1() as never, resizer).readRequestPhoto('u', { requestId: 'req-697' });
+    expect(result).toMatchObject({ outcome: 'ok', resized: true, image: { type: 'image', mimeType: 'image/jpeg', data: btoa(String.fromCharCode(...small)) } });
+    expect(Object.keys((result as { image: object }).image).sort()).toEqual(['data', 'mimeType', 'type']);
+    expect(transform).toHaveBeenCalledWith({ width: RESIZED_PHOTO_EDGE, height: RESIZED_PHOTO_EDGE, fit: 'scale-down' });
+  });
+
+  it('leaves photos under the cap untouched and reports resize failures safely', async () => {
+    const resizer = { input: vi.fn(() => { throw new Error(`boom ${signedUrl}`); }) } as unknown as PhotoResizer;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(jpeg, { headers: { 'content-type': 'image/jpeg' } })));
+    expect(await downloadRequestPhoto(photo, resizer)).toEqual({ type: 'image', mimeType: 'image/jpeg', data: btoa(String.fromCharCode(...jpeg)) });
+    expect(resizer.input).not.toHaveBeenCalled();
+    const big = new Uint8Array(MAX_PHOTO_BYTES + 10); big.set([255, 216, 255, 224]);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(big, { headers: { 'content-type': 'image/jpeg' } })));
+    const result = await new OpsAssistantRead(client(), createMockD1() as never, resizer).readRequestPhoto('u', { requestId: 'req-697' });
+    expect(result).toMatchObject({ outcome: 'failed', failure: { reason: 'photo_resize_failed' } });
+    expect(JSON.stringify(result)).not.toContain('X-Amz');
+  });
+
+  it('still refuses originals over the source cap', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(new Uint8Array(1), {
+      headers: { 'content-type': 'image/jpeg', 'content-length': String(MAX_SOURCE_PHOTO_BYTES + 1) },
+    })));
+    await expect(downloadRequestPhoto(photo, { input: vi.fn() } as unknown as PhotoResizer)).rejects.toThrow('photo_too_large');
   });
 });
