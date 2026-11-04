@@ -150,7 +150,7 @@ export async function callLeadTool(db: D1Database, principal: AssistantPrincipal
       return {
         outcome: 'ok' as const,
         total: applied.open.length,
-        totalIsComplete: loaded.complete && !applied.postponedUnavailable,
+        totalIsComplete: loaded.complete && !applied.postponedUnavailable && !applied.closuresUnavailable,
         days,
         leads: page.map((node) => {
           const created = Date.parse(node.createdAt ?? '');
