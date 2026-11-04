@@ -70,6 +70,8 @@ export class PhoneContextService {
   private activityLog?: ActivityLogService;
   /** Set when a Quo call fails, so callers can tell a failed read from an empty history. */
   private lastReadFailed = false;
+  /** Why the last failed read failed, in words the team can act on. */
+  private lastFailure: string | null = null;
   /** Our Quo number ids: the configured one, or every number in the workspace (looked up once). */
   private numberIds: Promise<string[]> | null = null;
 
@@ -92,10 +94,12 @@ export class PhoneContextService {
 
   // ── Private HTTP helpers ───────────────────────────────────────
 
-  private async apiFetch<T>(path: string, params: Record<string, string> = {}): Promise<T | null> {
+  private async apiFetch<T>(path: string, params: Record<string, string | string[]> = {}): Promise<T | null> {
     const url = new URL(OPENPHONE_API_BASE + path);
     for (const [k, v] of Object.entries(params)) {
-      url.searchParams.set(k, v);
+      // Quo takes list parameters as repeated keys (participants=+1…&participants=+1…), not JSON text.
+      if (Array.isArray(v)) for (const item of v) url.searchParams.append(k, item);
+      else url.searchParams.set(k, v);
     }
 
     const controller = new AbortController();
@@ -107,13 +111,15 @@ export class PhoneContextService {
         signal: controller.signal,
       });
       if (!res.ok) {
-        // Non-200 means the API key is missing, expired, or the phone number lookup failed
         this.lastReadFailed = true;
+        this.lastFailure = quoFailureReason(res.status);
+        console.error(`[quo] GET ${path} -> HTTP ${res.status}`);
         return null;
       }
       return (await res.json()) as T;
     } catch {
       this.lastReadFailed = true;
+      this.lastFailure = 'Quo could not be reached (network error or timeout).';
       return null;  // network failure or timeout — graceful degradation
     } finally {
       clearTimeout(timeout);
@@ -150,7 +156,7 @@ export class PhoneContextService {
       '/conversations',
       {
         maxResults: '10',
-        phoneNumbers: JSON.stringify([customerPhone]),
+        phoneNumbers: [customerPhone],
       },
     );
     return result?.data ?? [];
@@ -168,7 +174,7 @@ export class PhoneContextService {
       '/messages',
       {
         phoneNumberId,
-        participants: JSON.stringify([customerPhone]),
+        participants: [customerPhone],
         maxResults: '20',
       },
     )));
@@ -186,7 +192,7 @@ export class PhoneContextService {
       '/calls',
       {
         phoneNumberId,
-        participants: JSON.stringify([customerPhone]),
+        participants: [customerPhone],
         maxResults: '10',
       },
     )));
@@ -198,15 +204,19 @@ export class PhoneContextService {
   // Transcripts and summaries are often absent (short calls, plan limits): a missing one is not a failed read.
   private async fetchTranscript(callId: string): Promise<OpenPhoneTranscript | null> {
     const failedBefore = this.lastReadFailed;
+    const failureBefore = this.lastFailure;
     const result = await this.apiFetch<{ data: OpenPhoneTranscript }>(`/call-transcripts/${callId}`);
     this.lastReadFailed = failedBefore;
+    this.lastFailure = failureBefore;
     return result?.data ?? null;
   }
 
   private async fetchCallSummary(callId: string): Promise<OpenPhoneCallSummary | null> {
     const failedBefore = this.lastReadFailed;
+    const failureBefore = this.lastFailure;
     const result = await this.apiFetch<{ data: OpenPhoneCallSummary }>(`/call-summaries/${callId}`);
     this.lastReadFailed = failedBefore;
+    this.lastFailure = failureBefore;
     return result?.data ?? null;
   }
 
@@ -366,13 +376,14 @@ export class PhoneContextService {
    * Message text is not returned. A failed read is reported, never an empty history.
    */
   async fetchActivityResult(customerPhone: string): Promise<
-    { status: 'ok'; events: Array<{ at: string; kind: 'text' | 'call'; direction: 'incoming' | 'outgoing'; answered: boolean }> } | { status: 'failed' }
+    { status: 'ok'; events: Array<{ at: string; kind: 'text' | 'call'; direction: 'incoming' | 'outgoing'; answered: boolean }> } | { status: 'failed'; reason?: string }
   > {
     this.lastReadFailed = false;
+    this.lastFailure = null;
     const phone = toE164(customerPhone);
     if (!this.isAvailable() || !phone) return { status: 'ok', events: [] };
     const [messages, calls] = await Promise.all([this.fetchMessages(phone), this.fetchCalls(phone)]);
-    if (this.lastReadFailed) return { status: 'failed' };
+    if (this.lastReadFailed) return { status: 'failed', reason: this.failureReason() };
     const events = [
       ...messages.map((m) => ({ at: m.createdAt, kind: 'text' as const, direction: m.direction, answered: true })),
       ...calls.map((c) => ({ at: c.createdAt, kind: 'call' as const, direction: c.direction, answered: c.duration > 0 })),
@@ -382,11 +393,27 @@ export class PhoneContextService {
   }
 
   /** Like fetchContext, but reports a failed read instead of returning an empty string for it. */
-  async fetchContextResult(customerPhone: string): Promise<{ status: 'ok'; text: string } | { status: 'failed' }> {
+  async fetchContextResult(customerPhone: string): Promise<{ status: 'ok'; text: string } | { status: 'failed'; reason?: string }> {
     this.lastReadFailed = false;
+    this.lastFailure = null;
     const text = await this.fetchContext(customerPhone);
-    return this.lastReadFailed ? { status: 'failed' } : { status: 'ok', text };
+    return this.lastReadFailed ? { status: 'failed', reason: this.failureReason() } : { status: 'ok', text };
   }
+
+  /** The reason for the last failed read, or a generic one. Never includes the key or the customer's number. */
+  failureReason(): string {
+    return this.lastFailure ?? 'Quo could not be read.';
+  }
+}
+
+/** Maps a Quo HTTP status to a reason the team can act on. */
+export function quoFailureReason(status: number | undefined): string {
+  if (typeof status !== 'number') return 'Quo refused the request.';
+  if (status === 401 || status === 403) return `Quo rejected the API key (HTTP ${status}). Check QUO_API_KEY on the Cotiza worker.`;
+  if (status === 402) return 'Quo says the plan does not include API access (HTTP 402).';
+  if (status === 429) return 'Quo is rate-limiting Cotiza (HTTP 429). Try again in a minute.';
+  if (status >= 500) return `Quo had a server error (HTTP ${status}). Try again in a minute.`;
+  return `Quo refused the request (HTTP ${status}).`;
 }
 
 /** Newest first by createdAt; entries without a date go last. */

@@ -1342,7 +1342,7 @@ export interface LeadInfoSummary {
 }
 
 type Avail<T> = { availability: 'present'; value: T } | { availability: 'unavailable' | 'withheld'; reason?: string };
-type ContextBlock = { status: 'ok'; text: string } | { status: 'not_connected' | 'no_address' | 'no_number' | 'failed' };
+type ContextBlock = { status: 'ok'; text: string } | { status: 'not_connected' | 'no_address' | 'no_number' } | { status: 'failed'; reason?: string };
 
 export interface LeadBundle {
   requestId: string;
