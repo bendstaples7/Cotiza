@@ -421,15 +421,22 @@ app.post('/:requestId/reopen', async (c) => {
   let requestId: string;
   try { requestId = requireRequestId(c.req.param('requestId')); } catch (err) { return c.json(badRequest(err), 400); }
   const userId = c.get('user').id;
-  const cleared = await new LeadContactService(c.env.DB).reopenLead(requestId, userId);
-  if (!cleared) return c.json({ reopened: false, jobberNote: null, jobberArchive: null });
-  const jobberNote = await addJobberNote(c.env, userId, noteKey('close', `${await requestKeyPart(requestId)}_reopen_${Date.now()}`), requestId, { kind: 'lead_reopened' });
+  const contacts = new LeadContactService(c.env.DB);
+  const cleared = await contacts.reopenLead(requestId, userId);
+  // Already open. If Cotiza archived the request and a past unarchive failed, try it again.
+  const leftoverArchive = !cleared && await contacts.jobberArchived(requestId).catch(() => false);
+  if (!cleared && !leftoverArchive) return c.json({ reopened: false, jobberNote: null, jobberArchive: null });
+  const jobberNote = cleared
+    ? await addJobberNote(c.env, userId, noteKey('close', `${await requestKeyPart(requestId)}_reopen_${Date.now()}`), requestId, { kind: 'lead_reopened' })
+    : null;
   let jobberArchive: { status: string; message?: string } | null = null;
-  if (cleared.jobberArchived) {
+  if (cleared?.jobberArchived || leftoverArchive) {
     const { jobberIntegration } = await openJobberIntegration(c.env.DB, c.env).catch(() => ({ jobberIntegration: null }));
     jobberArchive = await setRequestArchived(jobberIntegration, requestId, false);
+    // The flag is cleared only once Jobber has unarchived it, so a failure can be retried.
+    if (jobberArchive.status === 'unarchived') await contacts.setJobberArchived(requestId, false).catch(() => undefined);
   }
-  return c.json({ reopened: true, jobberNote, jobberArchive, trelloReminder: true });
+  return c.json({ reopened: Boolean(cleared), jobberNote, jobberArchive, trelloReminder: Boolean(cleared) });
 });
 
 app.post('/jobber-notes/:noteId/retry', async (c) => {

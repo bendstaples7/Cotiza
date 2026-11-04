@@ -185,7 +185,9 @@ export function validateContact(input: unknown, now: number): { channel: Contact
 
 export function validateNextContactDate(value: unknown): string | null {
   if (value === null) return null;
-  if (typeof value !== 'string' || !DATE_RE.test(value) || Number.isNaN(Date.parse(`${value}T12:00:00Z`))) {
+  // Must be a real calendar day: "2025-02-31" does not round-trip and is refused.
+  if (typeof value !== 'string' || !DATE_RE.test(value) || Number.isNaN(Date.parse(`${value}T12:00:00Z`))
+    || new Date(`${value}T12:00:00Z`).toISOString().slice(0, 10) !== value) {
     throw new LeadContactError('nextContactOn must be a date (YYYY-MM-DD) or null.');
   }
   return value;
@@ -268,7 +270,8 @@ export class LeadContactService {
   }
 
   private async dropEmptyMark(requestId: string) {
-    await this.db.prepare('DELETE FROM lead_marks WHERE jobber_request_id = ? AND not_a_lead = 0 AND closed_reason IS NULL').bind(requestId).run();
+    // A row still flagged as archived in Jobber is kept until the unarchive goes through.
+    await this.db.prepare('DELETE FROM lead_marks WHERE jobber_request_id = ? AND not_a_lead = 0 AND closed_reason IS NULL AND jobber_archived = 0').bind(requestId).run();
   }
 
   // ── Closing a lead ──────────────────────────────────────────
@@ -310,13 +313,16 @@ export class LeadContactService {
     return { closure, changed: Boolean(res.meta?.changes) };
   }
 
-  /** Reopens a closed lead. Returns the closure it cleared (null when it wasn't closed). */
+  /**
+   * Reopens a closed lead. Returns the closure it cleared (null when it wasn't closed). The
+   * jobber_archived flag stays until the caller has unarchived the Jobber request (setJobberArchived).
+   */
   async reopenLead(requestId: string, userId: string, now: number = Date.now()): Promise<LeadClosure | null> {
     const before = await this.closure(requestId);
     if (!before) return null;
     const res = await this.db
       .prepare(`UPDATE lead_marks SET closed_reason = NULL, closed_note = NULL, check_back_on = NULL, closed_at = NULL, closed_by_user_id = NULL,
-                  jobber_archived = 0, updated_at = ?, updated_by_user_id = ?
+                  updated_at = ?, updated_by_user_id = ?
                 WHERE jobber_request_id = ? AND closed_reason IS NOT NULL`)
       .bind(new Date(now).toISOString(), userId, requestId)
       .run();
@@ -326,6 +332,13 @@ export class LeadContactService {
 
   async setJobberArchived(requestId: string, archived: boolean): Promise<void> {
     await this.db.prepare('UPDATE lead_marks SET jobber_archived = ? WHERE jobber_request_id = ?').bind(archived ? 1 : 0, requestId).run();
+    if (!archived) await this.dropEmptyMark(requestId);
+  }
+
+  /** True when Cotiza archived this request in Jobber and has not unarchived it yet (even after reopening). */
+  async jobberArchived(requestId: string): Promise<boolean> {
+    const row = await this.db.prepare('SELECT jobber_archived FROM lead_marks WHERE jobber_request_id = ?').bind(requestId).first<{ jobber_archived: number }>();
+    return row?.jobber_archived === 1;
   }
 
   /** After a check-back on a postponed lead, the next one is due three months on (the handbook's postponed cadence). */
@@ -390,7 +403,7 @@ export function validateClose(input: unknown, now: number): { reason: CloseReaso
   for (const key of Object.keys(raw)) {
     if (!['reason', 'note', 'checkBackOn'].includes(key)) throw new LeadContactError(`Unknown field: ${key}`);
   }
-  if (typeof raw.reason !== 'string' || !(raw.reason in CLOSE_REASONS)) {
+  if (typeof raw.reason !== 'string' || !Object.prototype.hasOwnProperty.call(CLOSE_REASONS, raw.reason)) {
     throw new LeadContactError(`reason must be one of ${Object.keys(CLOSE_REASONS).join(', ')}.`);
   }
   const reason = raw.reason as CloseReason;

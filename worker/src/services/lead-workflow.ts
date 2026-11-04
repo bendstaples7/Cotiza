@@ -374,17 +374,28 @@ function computeOpenWorkflow(input: WorkflowInput): LeadWorkflow {
 export function applyClosure(w: LeadWorkflow, closed: LeadClosure | null | undefined, now: number): LeadWorkflow {
   if (!closed) return w;
   const today = chicagoDate(now);
-  const on = closed.checkBackOn ?? today;
-  const next = { on, source: 'set' as const, overdue: on < today, dueToday: on === today, daysOverdue: Math.max(0, daysBetween(on, today)) };
-  if (closed.reason === 'postponed' && closed.checkBackOn && closed.checkBackOn <= today) {
+  const due = closed.reason === 'postponed' && Boolean(closed.checkBackOn) && closed.checkBackOn! <= today;
+  // A lead marked "not a lead" stays in Review whatever else happened to it.
+  if (w.notALead) return { ...w, closed };
+  if (due) {
+    const on = closed.checkBackOn!;
+    const overdue = on < today;
     return {
-      ...w, closed, next, bucket: 'do_now', stage: 'Postponed → every 3 months',
+      ...w, closed, bucket: 'do_now', stage: 'Postponed → every 3 months',
+      next: { on, source: 'set', overdue, dueToday: on === today, daysOverdue: Math.max(0, daysBetween(on, today)) },
       action: { kind: 'check_back', label: 'Check back in', why: `Postponed${closed.note ? ` (${closed.note})` : ''}. See if they’re ready to go ahead.`, step: 'check_back', channel: 'text' },
+      // The open-lead cadence no longer applies: one row for the check-back.
+      plan: [{ label: `${formatShortDay(on)} · Check back in`, detail: overdue ? `Missed: was due ${formatShortDay(on)}. Do it today.` : 'Due today', state: overdue ? 'missed' : 'due' }],
     };
   }
   return {
-    ...w, closed, next, bucket: 'closed',
-    stage: closed.reason === 'postponed' ? `Postponed → back on ${formatShortDay(on)}` : `Closed · ${closed.label}`,
+    ...w, closed, bucket: 'closed',
+    // No contact is due on a closed lead: next shows the check-back day for a postponed one, and nothing is "due".
+    next: { on: closed.checkBackOn ?? today, source: 'set', overdue: false, dueToday: false, daysOverdue: 0 },
+    stage: closed.reason === 'postponed' ? `Postponed → back on ${formatShortDay(closed.checkBackOn ?? today)}` : `Closed · ${closed.label}`,
     action: { kind: 'none', label: 'Lead closed', why: `Closed: ${closed.label}${closed.note ? ` — ${closed.note}` : ''}.`, step: 'none', channel: 'other' },
+    plan: closed.reason === 'postponed' && closed.checkBackOn
+      ? [{ label: `${formatShortDay(closed.checkBackOn)} · Check back in`, detail: 'Postponed; it comes back to Do now that day', state: 'upcoming' }]
+      : [],
   };
 }

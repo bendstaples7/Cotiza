@@ -86,6 +86,7 @@ export function buildOutreach(input: { clientName: string | null; title: string 
  * - reply: thanks them for getting back to us, then any asks.
  * - quote_update: the handbook's "quote still being created" update.
  * - quote_follow_up: the handbook's "quote sent, follow up" check-in.
+ * - check_back: the postponed lead's check-in (every 3 months).
  * - draft_quote / ben_edits / wait_review / send_quote / review / none: no customer message.
  */
 export function buildActionMessage(kind: LeadActionKind, input: { clientName: string | null; title: string | null; items: LeadInfoItem[] }): OutreachMessages | null {

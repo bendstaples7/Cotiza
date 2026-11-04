@@ -50,7 +50,21 @@ export type ArchiveResult =
   | { status: 'failed'; message: string }
   | { status: 'skipped'; message: string };
 
+const shapeCache = new Map<string, { shape: ArchiveShape | null; at: number }>();
+const SHAPE_TTL_MS = 60 * 60_000;
+
+/** For tests. */
+export function resetArchiveShapeCache() { shapeCache.clear(); }
+
 async function loadShape(jobber: JobberReadClient, which: 'archive' | 'unarchive'): Promise<ArchiveShape | null> {
+  const cached = shapeCache.get(which);
+  if (cached && Date.now() - cached.at < SHAPE_TTL_MS) return cached.shape;
+  const shape = await introspectShape(jobber, which);
+  shapeCache.set(which, { shape, at: Date.now() });
+  return shape;
+}
+
+async function introspectShape(jobber: JobberReadClient, which: 'archive' | 'unarchive'): Promise<ArchiveShape | null> {
   const data = await jobber.graphqlRequest<{ __schema?: { mutationType?: { fields?: MutationField[] } } }>(ARCHIVE_MUTATIONS_QUERY);
   const fields = data.__schema?.mutationType?.fields ?? [];
   const candidate = archiveShape(fields, [], which);

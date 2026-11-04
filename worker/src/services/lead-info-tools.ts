@@ -28,7 +28,7 @@ function objectArgs(raw: unknown, allowed: string[]): Record<string, unknown> {
 export const LEAD_READ_TOOLS = [
   {
     name: 'list_open_leads',
-    description: 'List open leads: Jobber requests from the last N days that are still new or in assessment (not converted to a quote or job, not archived), oldest first (the lead waiting longest comes first), with each one\'s Jobber status, info-needed counts and next step: where it sits in the handbook follow-up cadence, when the next contact is due, and the one action the team should take. Next steps here use Jobber notes and contacts logged in Cotiza only (not Quo or email). Read live from Jobber. No contact details. Read-only. A failed lookup is not an empty list.',
+    description: 'List open leads: Jobber requests from the last N days that are still new or in assessment (not converted to a quote or job, not archived), leaving out leads the team closed in Cotiza and adding back postponed leads whose check-back date has come (even from before the window), oldest first (the lead waiting longest comes first), with each one\'s Jobber status, info-needed counts and next step: where it sits in the handbook follow-up cadence, when the next contact is due, and the one action the team should take. Next steps here use Jobber notes and contacts logged in Cotiza only (not Quo or email). Read live from Jobber. No contact details. Read-only. A failed lookup is not an empty list.',
     inputSchema: {
       type: 'object', additionalProperties: false,
       properties: {
@@ -150,7 +150,7 @@ export async function callLeadTool(db: D1Database, principal: AssistantPrincipal
       return {
         outcome: 'ok' as const,
         total: applied.open.length,
-        totalIsComplete: loaded.complete,
+        totalIsComplete: loaded.complete && !applied.postponedUnavailable,
         days,
         leads: page.map((node) => {
           const created = Date.parse(node.createdAt ?? '');
@@ -171,6 +171,7 @@ export async function callLeadTool(db: D1Database, principal: AssistantPrincipal
           'A lead with no checklist has total 0 and is not ready to quote.',
           'Leads the team closed in Cotiza are left out; a postponed one is listed again from its check-back date.',
           ...(applied.closuresUnavailable ? ['Closed leads could not be read, so some leads listed here may already be closed.'] : []),
+          ...(applied.postponedUnavailable ? ['Some postponed leads due a check-back could not be read from Jobber and are missing from this list.'] : []),
           'nextStep uses Jobber notes and contacts logged in Cotiza; texts, calls and emails that only live in Quo or Gmail are not counted here (the Cotiza request queue counts them). nextStep is null when it could not be worked out.',
           ...(loaded.complete ? [] : [`Only the newest ${LEAD_PAGE_SIZE * LEAD_MAX_PAGES} requests were checked; older ones in the window were not.`]),
         ],

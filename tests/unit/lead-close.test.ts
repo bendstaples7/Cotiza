@@ -1,9 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ContactEvent, LeadClosure } from '../../worker/src/services/lead-contact-service.js';
-import { addMonths, validateClose } from '../../worker/src/services/lead-contact-service.js';
+import { addMonths, validateClose, validateNextContactDate } from '../../worker/src/services/lead-contact-service.js';
 import { computeLeadWorkflow } from '../../worker/src/services/lead-workflow.js';
 import { applyClosuresToOpenLeads, closureListed } from '../../worker/src/services/lead-closures.js';
-import { archiveShape, setRequestArchived } from '../../worker/src/services/jobber-request-archive.js';
+import { archiveShape, resetArchiveShapeCache, setRequestArchived } from '../../worker/src/services/jobber-request-archive.js';
 import { formatJobberNote } from '../../worker/src/services/jobber-request-notes.js';
 
 // Wed Nov 4 2026, 10:00 in Chicago.
@@ -24,6 +24,13 @@ describe('validateClose', () => {
     expect(() => validateClose({ reason: 'no_response', checkBackOn: '2026-12-01' }, NOW)).toThrow('Only a postponed lead');
   });
 
+  it('refuses reasons that are not its own, and impossible dates', () => {
+    expect(() => validateClose({ reason: 'toString' }, NOW)).toThrow('reason must be one of');
+    expect(() => validateClose({ reason: 'postponed', checkBackOn: '2027-02-31' }, NOW)).toThrow('YYYY-MM-DD');
+    expect(() => validateNextContactDate('2026-11-31')).toThrow('YYYY-MM-DD');
+    expect(validateNextContactDate('2026-11-30')).toBe('2026-11-30');
+  });
+
   it('keeps contact details out of the note', () => {
     expect(() => validateClose({ reason: 'other', note: 'call 773-555-0100' }, NOW)).toThrow('phone number or email');
   });
@@ -40,8 +47,16 @@ describe('the workflow for a closed lead', () => {
     events: [lead], nextSet: null, info: { readyToQuote: false, total: 0, firstAsk: null }, hasTitle: true, notALead: false, closed, now: NOW,
   });
 
-  it('a closed lead leaves Do now / Waiting / Review', () => {
-    expect(run(closure())).toMatchObject({ bucket: 'closed', stage: 'Closed · Went with someone else', action: { kind: 'none', label: 'Lead closed' } });
+  it('a closed lead leaves Do now / Waiting / Review, with nothing due and no cadence rows', () => {
+    expect(run(closure())).toMatchObject({ bucket: 'closed', stage: 'Closed · Went with someone else', action: { kind: 'none', label: 'Lead closed' }, next: { overdue: false, dueToday: false }, plan: [] });
+  });
+
+  it('a lead marked not a lead stays in Review even when a postponed closure is due', () => {
+    const w = computeLeadWorkflow({
+      events: [lead], nextSet: null, info: { readyToQuote: false, total: 0, firstAsk: null }, hasTitle: true, notALead: true,
+      closed: closure({ reason: 'postponed', label: 'Postponed', checkBackOn: '2026-11-01' }), now: NOW,
+    });
+    expect(w).toMatchObject({ bucket: 'review', action: { kind: 'review' } });
   });
 
   it('a postponed lead waits until its check-back date, then returns as "Check back in"', () => {
@@ -50,6 +65,7 @@ describe('the workflow for a closed lead', () => {
       bucket: 'do_now', stage: 'Postponed → every 3 months',
       next: { on: '2026-11-04', dueToday: true },
       action: { kind: 'check_back', label: 'Check back in', step: 'check_back' },
+      plan: [{ label: 'Wed, Nov 4 · Check back in', state: 'due' }],
     });
   });
 });
@@ -75,17 +91,25 @@ describe('closed leads in the open-lead list', () => {
       { jobber_request_id: 'LATER', closed_reason: 'postponed', check_back_on: '2027-01-01' },
     ]), { graphqlRequest }, open, NOW);
     expect(result.open.map((n) => n.id)).toEqual(['B', 'OLD']);
+    expect(result.postponedUnavailable).toBe(false);
     expect(graphqlRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('flags a due postponed lead that could not be read, instead of dropping it silently', async () => {
+    const graphqlRequest = vi.fn(async () => { throw new Error('Jobber 502'); });
+    const result = await applyClosuresToOpenLeads(db([{ jobber_request_id: 'OLD', closed_reason: 'postponed', check_back_on: '2026-11-01' }]), { graphqlRequest }, [], NOW);
+    expect(result).toMatchObject({ open: [], postponedUnavailable: true });
   });
 
   it('shows everything, and says so, when closures cannot be read', async () => {
     const broken = { prepare: () => { throw new Error('D1 down'); } } as unknown as D1Database;
     const result = await applyClosuresToOpenLeads(broken, { graphqlRequest: vi.fn() }, [{ id: 'A' }], NOW);
-    expect(result).toEqual({ open: [{ id: 'A' }], closuresUnavailable: true });
+    expect(result).toEqual({ open: [{ id: 'A' }], closuresUnavailable: true, postponedUnavailable: false });
   });
 });
 
 describe('archiving the Jobber request', () => {
+  beforeEach(() => resetArchiveShapeCache());
   const nn = (inner: object) => ({ kind: 'NON_NULL', name: null, ofType: inner });
   const id = nn({ kind: 'SCALAR', name: 'EncodedId', ofType: null });
   const payload = nn({ kind: 'OBJECT', name: 'RequestArchivePayload', ofType: null });
@@ -113,6 +137,29 @@ describe('archiving the Jobber request', () => {
     ));
     expect(await setRequestArchived({ graphqlRequest: answers({ userErrors: [] }) }, 'R1', true)).toEqual({ status: 'archived' });
     expect(await setRequestArchived({ graphqlRequest: answers({ userErrors: [{ message: 'Has an open quote' }] }) }, 'R1', true)).toEqual({ status: 'failed', message: 'Has an open quote' });
+  });
+
+  it('unarchives with requestUnarchive, or says to do it in Jobber when not offered', async () => {
+    expect(archiveShape([{ name: 'requestUnarchive', args: [{ name: 'requestId', type: id }], type: payload }] as never, [], 'unarchive')).toMatchObject({ mutation: 'requestUnarchive' });
+    expect(archiveShape([{ name: 'requestArchive', args: [{ name: 'requestId', type: id }], type: payload }] as never, [], 'unarchive')).toBeNull();
+    const fields = [{ name: 'requestUnarchive', args: [{ name: 'requestId', type: id }], type: payload }];
+    const graphqlRequest = vi.fn(async (q: string) => (
+      q.includes('CotizaArchiveMutations') ? { __schema: { mutationType: { fields } } }
+        : q.includes('CotizaArchivePayload') ? { payload: { fields: [] } }
+          : { requestUnarchive: { __typename: 'X' } }
+    ));
+    expect(await setRequestArchived({ graphqlRequest }, 'R1', false)).toEqual({ status: 'unarchived' });
+    expect(graphqlRequest.mock.calls.at(-1)?.[0]).toContain('requestUnarchive(requestId: $id)');
+    resetArchiveShapeCache();
+    const none = await setRequestArchived({ graphqlRequest: vi.fn(async () => ({ __schema: { mutationType: { fields: [] } } })) }, 'R1', false);
+    expect(none).toMatchObject({ status: 'not_offered', message: expect.stringContaining('Unarchive this request in Jobber') });
+  });
+
+  it('remembers the schema answer instead of introspecting on every close', async () => {
+    const graphqlRequest = vi.fn(async () => ({ __schema: { mutationType: { fields: [] } } }));
+    await setRequestArchived({ graphqlRequest }, 'R1', true);
+    await setRequestArchived({ graphqlRequest }, 'R2', true);
+    expect(graphqlRequest).toHaveBeenCalledTimes(1);
   });
 });
 

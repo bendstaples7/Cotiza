@@ -776,7 +776,9 @@ export async function fetchManualRequest(id: string): Promise<ManualRequest> {
 }
 
 /** Whether the queue's Jobber cards came from Jobber's live open leads. */
-export type JobberQueueStatus = { status: 'live'; days: number; complete: boolean } | { status: 'unavailable'; days: number };
+export type JobberQueueStatus =
+  | { status: 'live'; days: number; complete: boolean; closuresUnavailable?: boolean; postponedUnavailable?: boolean }
+  | { status: 'unavailable'; days: number };
 
 /** The request queue: manual requests plus Jobber's open leads, with whether Jobber could be read. */
 export async function fetchRequestQueue(sortBy?: 'age_asc' | 'age_desc'): Promise<{ requests: ManualRequestWithDeathclock[]; jobber: JobberQueueStatus }> {

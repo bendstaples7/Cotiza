@@ -64,8 +64,12 @@ export default function LeadPage() {
 
   // Opened from a queue action button: bring the next step into view.
   const fromAction = searchParams.get('action');
+  const closeRef = useRef<HTMLElement | null>(null);
+  // The Jobber archive outcome of the last close, kept across the refresh that follows it.
+  const [closeOutcome, setCloseOutcome] = useState<JobberArchiveOutcome | null>(null);
   useEffect(() => {
-    if (fromAction && lead && nextStepRef.current) nextStepRef.current.scrollIntoView?.({ block: 'start' });
+    const target = fromAction === 'close' ? closeRef.current : nextStepRef.current;
+    if (fromAction && lead && target) target.scrollIntoView?.({ block: 'start' });
   }, [fromAction, lead?.requestId]);
 
   const replaceItem = (item: LeadInfoItem) => {
@@ -116,7 +120,7 @@ export default function LeadPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          {workflow && <NextContactChip workflow={workflow} />}
+          {workflow && workflow.bucket !== 'closed' && <NextContactChip workflow={workflow} />}
           <ReadyBadge ready={summary.readyToQuote} total={summary.total} open={summary.open + summary.asked} workflow={workflow} />
         </div>
       </header>
@@ -128,11 +132,11 @@ export default function LeadPage() {
       <div style={twoCol}>
         <div style={mainCol}>
           {workflow?.bucket === 'closed' && workflow.closed
-            ? <ClosedLeadPanel lead={lead} closure={workflow.closed} onChanged={reload} />
+            ? <ClosedLeadPanel lead={lead} closure={workflow.closed} closeOutcome={closeOutcome} onChanged={() => { setCloseOutcome(null); reload(); }} />
             : workflow
               ? <NextStepPanel lead={lead} workflow={withRequestedAction(workflow, fromAction)} onChanged={reload} panelRef={nextStepRef} />
               : <section style={card}><p style={muted}>The next step could not be worked out right now: Jobber's quotes for this request could not be fully read, so a quote may already be out. Check the quotes in Jobber before reaching out.</p></section>}
-          {workflow?.bucket !== 'closed' && <CloseLeadPanel lead={lead} startOpen={fromAction === 'close'} postponedDue={workflow?.action.kind === 'check_back'} onChanged={reload} />}
+          {workflow?.bucket !== 'closed' && <CloseLeadPanel lead={lead} startOpen={fromAction === 'close'} postponedDue={workflow?.action.kind === 'check_back'} panelRef={closeRef} onClosed={setCloseOutcome} onChanged={reload} />}
         </div>
         <aside style={sideCol}>
           {workflow && <FollowUpPlan workflow={workflow} />}
@@ -922,8 +926,12 @@ function closeFollowUps(archive: JobberArchiveOutcome | null, jobberUrl: string 
 }
 
 /** Close a lead with a reason. Postponed takes a check-back date (default 3 months, per the handbook). */
-function CloseLeadPanel({ lead, startOpen, postponedDue, onChanged }: { lead: LeadBundle; startOpen: boolean; postponedDue: boolean; onChanged: () => void }) {
+function CloseLeadPanel({ lead, startOpen, postponedDue, panelRef, onClosed, onChanged }: {
+  lead: LeadBundle; startOpen: boolean; postponedDue: boolean; panelRef: React.MutableRefObject<HTMLElement | null>;
+  onClosed: (outcome: JobberArchiveOutcome) => void; onChanged: () => void;
+}) {
   const [open, setOpen] = useState(startOpen);
+  const [reopened, setReopened] = useState<JobberArchiveOutcome | null | undefined>(undefined);
   const [reason, setReason] = useState<LeadCloseReason | ''>('');
   const [note, setNote] = useState('');
   const [checkBackOn, setCheckBackOn] = useState('');
@@ -939,6 +947,7 @@ function CloseLeadPanel({ lead, startOpen, postponedDue, onChanged }: { lead: Le
     try {
       const result = await closeLead(lead.requestId, { reason, ...(note.trim() ? { note: note.trim() } : {}), ...(reason === 'postponed' && checkBackOn ? { checkBackOn } : {}) });
       warnIfJobberNoteFailed(result.jobberNote);
+      onClosed(result.jobberArchive);
       onChanged();
     } catch (err) {
       setError((err as ErrorResponse).message ?? 'Could not close the lead.');
@@ -954,13 +963,22 @@ function CloseLeadPanel({ lead, startOpen, postponedDue, onChanged }: { lead: Le
       try {
         const result = await reopenLead(lead.requestId);
         warnIfJobberNoteFailed(result.jobberNote);
-        onChanged();
+        // Nothing changed (reopened elsewhere): just refresh. Otherwise show the Trello reminder first.
+        if (!result.reopened) onChanged(); else setReopened(result.jobberArchive);
       } catch (err) {
         setError((err as ErrorResponse).message ?? 'Could not reopen the lead.');
       } finally {
         setBusy(false);
       }
     };
+    if (reopened !== undefined) {
+      return (
+        <section ref={panelRef} style={card} aria-label="Lead reopened">
+          {closeFollowUps(reopened, null, true)}
+          <div style={actions}><button type="button" style={primaryBtn} onClick={onChanged}>Reopened · back to the lead</button></div>
+        </section>
+      );
+    }
     return (
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
         <span style={muted}>Still not ready? Mark done above and it comes back in 3 months.</span>
@@ -977,7 +995,7 @@ function CloseLeadPanel({ lead, startOpen, postponedDue, onChanged }: { lead: Le
     );
   }
   return (
-    <section style={card} aria-label="Close lead">
+    <section ref={panelRef} style={card} aria-label="Close lead">
       <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Close lead</h2>
       <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <fieldset style={{ border: 0, padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -1015,7 +1033,7 @@ function CloseLeadPanel({ lead, startOpen, postponedDue, onChanged }: { lead: Le
 }
 
 /** A closed lead: why, when a postponed one comes back, what to do in Jobber and Trello, and Reopen. */
-function ClosedLeadPanel({ lead, closure, onChanged }: { lead: LeadBundle; closure: LeadClosure; onChanged: () => void }) {
+function ClosedLeadPanel({ lead, closure, closeOutcome, onChanged }: { lead: LeadBundle; closure: LeadClosure; closeOutcome: JobberArchiveOutcome | null; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reopened, setReopened] = useState<JobberArchiveOutcome | null | undefined>(undefined);
@@ -1026,16 +1044,19 @@ function ClosedLeadPanel({ lead, closure, onChanged }: { lead: LeadBundle; closu
     try {
       const result = await reopenLead(lead.requestId);
       warnIfJobberNoteFailed(result.jobberNote);
-      // Show what to do in Jobber and Trello first; the page refreshes when they continue.
-      setReopened(result.jobberArchive);
+      // Not reopened here (already open): just refresh. Otherwise show what to do in Jobber and Trello first.
+      if (!result.reopened) onChanged(); else setReopened(result.jobberArchive);
     } catch (err) {
       setError((err as ErrorResponse).message ?? 'Could not reopen the lead.');
     } finally {
       setBusy(false);
     }
   };
+  // The outcome from the close itself (with Jobber's reason when it failed), else what is stored.
   const archive: JobberArchiveOutcome | null = closure.reason === 'postponed' ? null
-    : closure.jobberArchived ? { status: 'archived' } : { status: 'not_offered', message: 'This request is still open in Jobber.' };
+    : closure.jobberArchived ? { status: 'archived' }
+      : closeOutcome && closeOutcome.status !== 'skipped' ? closeOutcome
+        : { status: 'not_offered', message: 'This request is still open in Jobber.' };
   return (
     <section style={card} aria-label="Closed lead">
       <span style={eyebrow}>{closure.reason === 'postponed' ? 'Postponed' : 'Closed'}</span>
