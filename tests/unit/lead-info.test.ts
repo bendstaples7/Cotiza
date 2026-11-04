@@ -1,35 +1,58 @@
 import { describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { LeadInfoError, LeadInfoService, summarize } from '../../worker/src/services/lead-info-service.js';
 import { callLeadTool, LeadToolArgsError } from '../../worker/src/services/lead-info-tools.js';
 import { CallBudget, type AssistantDirectory, type AssistantPrincipal } from '../../worker/src/services/assistant-access.js';
 import { OpsAssistantRead } from '../../worker/src/services/ops-assistant-read.js';
 import { handleMcpPost, readMcpJsonBody } from '../../worker/src/routes/ops-assistant.js';
 
-// Vitest 2's resolver doesn't know node:sqlite, so load it through Node's own require.
-const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
-const MIGRATION = readFileSync(new URL('../../worker/src/migrations/0071_lead_info_items.sql', import.meta.url), 'utf8');
 const REQ = 'Z2lkOi8vSm9iYmVyL1JlcXVlc3QvMzU3NDIzMDM=';
 const OTHER = 'Z2lkOi8vSm9iYmVyL1JlcXVlc3QvMQ==';
 
-/** Minimal D1 over node:sqlite so the real SQL runs. */
+/**
+ * In-memory D1 for exactly the statements LeadInfoService runs (CI's test job runs Node 20,
+ * which has no node:sqlite). Any other SQL throws, so a new query can't slip past untested.
+ */
 function sqliteD1() {
-  const db = new DatabaseSync(':memory:');
-  db.exec(MIGRATION);
+  type Row = Record<string, unknown>;
+  const table: Row[] = [];
+  const norm = (sql: string) => sql.replace(/\s+/g, ' ').trim();
   const d1 = {
-    prepare(sql: string) {
+    prepare(rawSql: string) {
+      const sql = norm(rawSql);
       let args: unknown[] = [];
       const stmt = {
         bind(...a: unknown[]) { args = a; return stmt; },
-        async all() { return { results: db.prepare(sql).all(...(args as never[])) }; },
-        async first() { return db.prepare(sql).get(...(args as never[])) ?? null; },
-        async run() { db.prepare(sql).run(...(args as never[])); return { success: true, meta: { changes: 1 } }; },
+        async all() {
+          if (sql.startsWith('SELECT * FROM lead_info_items WHERE jobber_request_id = ?')) {
+            return { results: table.filter((r) => r.jobber_request_id === args[0]).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)) || String(a.id).localeCompare(String(b.id))) };
+          }
+          if (sql.startsWith('SELECT * FROM lead_info_items WHERE jobber_request_id IN (')) {
+            return { results: table.filter((r) => args.includes(r.jobber_request_id)) };
+          }
+          throw new Error(`unexpected all(): ${sql}`);
+        },
+        async first() {
+          if (sql === 'SELECT * FROM lead_info_items WHERE id = ?') return table.find((r) => r.id === args[0]) ?? null;
+          throw new Error(`unexpected first(): ${sql}`);
+        },
+        async run() {
+          if (sql.startsWith('INSERT INTO lead_info_items')) {
+            const [id, jobber_request_id, question, required, created_at, updated_at, created_via, created_by_user_id, updated_by_user_id, updated_via] = args;
+            table.push({ id, jobber_request_id, question, status: 'open', answer: null, required, created_at, updated_at, created_via, created_by_user_id, updated_by_user_id, updated_via });
+            return { success: true, meta: { changes: 1 } };
+          }
+          if (sql.startsWith('UPDATE lead_info_items SET question = ?, status = ?, answer = ?, updated_at = ?, updated_by_user_id = ?, updated_via = ? WHERE id = ?')) {
+            const row = table.find((r) => r.id === args[6]);
+            if (row) Object.assign(row, { question: args[0], status: args[1], answer: args[2], updated_at: args[3], updated_by_user_id: args[4], updated_via: args[5] });
+            return { success: true, meta: { changes: row ? 1 : 0 } };
+          }
+          throw new Error(`unexpected run(): ${sql}`);
+        },
       };
       return stmt;
     },
   };
-  return { d1: d1 as unknown as D1Database, rows: () => db.prepare('SELECT * FROM lead_info_items').all() };
+  return { d1: d1 as unknown as D1Database, rows: () => table };
 }
 
 const team = { userId: 'user-a', via: 'app' as const };
