@@ -43,10 +43,10 @@ function contextServices(env: Bindings) {
 
 type QuoteList = { jobberQuotes?: { outcome?: string; items?: Array<{ status?: { availability?: string; value?: string } }>; page?: { hasNextPage?: boolean } } };
 
-/** The request's quote statuses, or undefined when they are not fully known (failed read, more pages). */
-function knownQuotes(quotes: unknown): Array<{ status: string | null }> | undefined {
-  const list = (quotes as QuoteList).jobberQuotes;
-  if (!list || list.outcome !== 'ok' || list.page?.hasNextPage) return undefined;
+/** The request's quote statuses, or 'unknown' when they are not fully known (failed read, more pages). */
+function knownQuotes(quotes: unknown): Array<{ status: string | null }> | 'unknown' {
+  const list = (quotes as QuoteList | null)?.jobberQuotes;
+  if (!list || list.outcome !== 'ok' || list.page?.hasNextPage) return 'unknown';
   return (list.items ?? []).map((q) => ({ status: q.status?.availability === 'present' ? q.status.value ?? null : null }));
 }
 
@@ -77,7 +77,7 @@ app.get('/contact-status', async (c) => {
         ]);
         // One set of services per lead: each tracks its own failed-read flag.
         const { email, phone } = contextServices(c.env);
-        const { status, workflow } = await gatherLeadWorkflow({ requestId, detail: request.request, requestFailed: request.outcome !== 'ok', contacts, phone, email, now, items, quotes: quotes ? knownQuotes(quotes) : undefined });
+        const { status, workflow } = await gatherLeadWorkflow({ requestId, detail: request.request, requestFailed: request.outcome !== 'ok', contacts, phone, email, now, items, quotes: knownQuotes(quotes) });
         statuses[requestId] = { ...status, workflow };
       } catch (err) {
         console.warn('[leads] contact status failed', sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 180));

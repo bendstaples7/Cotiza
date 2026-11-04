@@ -1365,7 +1365,7 @@ export interface LeadBundle {
   phone: ContextBlock;
   infoNeeded: { items: LeadInfoItem[]; summary: LeadInfoSummary };
   contactStatus: LeadContactStatus;
-  workflow?: LeadWorkflow;
+  workflow?: LeadWorkflow | null;
   loggedContacts: LoggedLeadContact[];
   outreachSteps: Array<{ step: string; contactedAt: string }>;
 }
@@ -1388,8 +1388,8 @@ export interface LeadContactStatus {
   unavailable: LeadContactSource[];
   notConnected: LeadContactSource[];
   recent: LeadContactEvent[];
-  /** What to do next (handbook cadence). Present on the queue's contact-status responses. */
-  workflow?: LeadWorkflow;
+  /** What to do next (handbook cadence). null when it can't be worked out (e.g. quotes unreadable). */
+  workflow?: LeadWorkflow | null;
 }
 
 export type LeadBucket = 'do_now' | 'waiting' | 'review';

@@ -121,7 +121,7 @@ export default function LeadPage() {
         <div style={mainCol}>
           {workflow
             ? <NextStepPanel lead={lead} workflow={withRequestedAction(workflow, fromAction)} onChanged={reload} panelRef={nextStepRef} />
-            : <section style={card}><p style={muted}>The next step could not be worked out right now. The contact history below is still current.</p></section>}
+            : <section style={card}><p style={muted}>The next step could not be worked out right now (Jobber's quotes or request could not be read, so a quote may already be out). The contact history and quotes below are still current.</p></section>}
         </div>
         <aside style={sideCol}>
           {workflow && <FollowUpPlan workflow={workflow} />}
@@ -196,7 +196,8 @@ export default function LeadPage() {
  * lead sitting in Review. Only that case differs today; any other request keeps the workflow's action.
  */
 function withRequestedAction(workflow: LeadWorkflow, requested: string | null): LeadWorkflow {
-  if (requested !== 'intro_text' || workflow.action.kind === 'intro_text' || workflow.action.kind !== 'review' && !workflow.likelySpam) return workflow;
+  // A lead the team marked "not a lead" keeps its review action whatever the link asked for.
+  if (workflow.notALead || requested !== 'intro_text' || workflow.action.kind === 'intro_text' || !workflow.likelySpam) return workflow;
   return { ...workflow, action: { kind: 'intro_text', label: 'Send intro text', why: 'No project described yet. One intro text to find out what they need.', step: 'intro_text', channel: 'text' } };
 }
 

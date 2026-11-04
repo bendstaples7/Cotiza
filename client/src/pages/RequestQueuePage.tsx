@@ -334,8 +334,9 @@ export default function RequestQueuePage() {
       // Move the row right away; the next poll recomputes the rest.
       setContactStatuses((prev) => {
         const status = prev[requestId];
-        if (!status?.workflow) return prev;
-        return { ...prev, [requestId]: { ...status, workflow: { ...status.workflow, notALead, bucket: notALead ? 'review' : status.workflow.likelySpam ? 'review' : 'do_now' } } };
+        const w = status?.workflow;
+        if (!status || !w) return prev;
+        return { ...prev, [requestId]: { ...status, workflow: { ...w, notALead, bucket: notALead || w.likelySpam ? 'review' : 'do_now' } } };
       });
       void loadRequests({ silent: true });
     } catch {

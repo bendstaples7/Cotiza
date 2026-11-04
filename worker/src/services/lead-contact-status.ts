@@ -141,13 +141,17 @@ export function firstOpenAsk(items: LeadInfoItem[]): string | null {
 /** Contact status plus what to do next, from the handbook cadence and the info-needed checklist. */
 export async function gatherLeadWorkflow(input: Parameters<typeof gatherContactStatus>[0] & {
   items: LeadInfoItem[];
-  /** Jobber quotes on the request, when the caller has them (statuses only). */
-  quotes?: Array<{ status: string | null }>;
-}): Promise<{ status: ContactStatus; logged: LoggedContact[]; workflow: LeadWorkflow }> {
+  /**
+   * Jobber quotes on the request (statuses only). 'unknown' when they could not be read: a quote
+   * may already be out, so no next step is offered (workflow null). Omit when not looked up.
+   */
+  quotes?: Array<{ status: string | null }> | 'unknown';
+}): Promise<{ status: ContactStatus; logged: LoggedContact[]; workflow: LeadWorkflow | null }> {
   const [gathered, notALead] = await Promise.all([
     gatherContactStatus(input),
     input.contacts.notALead(input.requestId),
   ]);
+  if (input.quotes === 'unknown') return { status: gathered.status, logged: gathered.logged, workflow: null };
   const summary = summarize(input.items);
   const workflow = computeLeadWorkflow({
     events: gathered.events,
