@@ -325,6 +325,43 @@ export class PhoneContextService {
   }
 
   /**
+   * Sends one text from our Quo number (QUO_PHONE_NUMBER_ID, or the workspace's first number).
+   * Only called after a team member confirms the exact text in Cotiza. Never retried
+   * automatically: a failed send might still have gone out.
+   */
+  async sendText(customerPhone: string, content: string): Promise<{ status: 'sent'; id: string | null } | { status: 'failed'; reason: string }> {
+    const to = toE164(customerPhone);
+    if (!this.isAvailable()) return { status: 'failed', reason: 'Quo is not connected.' };
+    if (!to) return { status: 'failed', reason: 'The customer has no usable phone number in Jobber.' };
+    this.lastReadFailed = false;
+    const [from] = await this.ourNumberIds();
+    if (this.lastReadFailed) return { status: 'failed', reason: 'Could not read Chicago Reno\'s Quo numbers, so nothing was sent. Try again in a minute.' };
+    if (!from) return { status: 'failed', reason: 'There is no Quo number to send from, so nothing was sent.' };
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+    try {
+      const res = await fetch(OPENPHONE_API_BASE + '/messages', {
+        method: 'POST',
+        headers: { Authorization: this.apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, from, to: [to] }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        // A 4xx is a refusal; a 5xx doesn't prove the text didn't go out.
+        return res.status >= 500
+          ? { status: 'failed', reason: `Quo returned an error (HTTP ${res.status}). The text may have gone out: check Quo before sending again.` }
+          : { status: 'failed', reason: `Quo did not send the text (HTTP ${res.status}).` };
+      }
+      const body = await res.json().catch(() => null) as { data?: { id?: string } } | null;
+      return { status: 'sent', id: body?.data?.id ?? null };
+    } catch {
+      return { status: 'failed', reason: 'Quo could not be reached; check Quo before sending again.' };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  /**
    * Texts and calls with the customer as dated events (newest first), for last-contact tracking.
    * Message text is not returned. A failed read is reported, never an empty history.
    */

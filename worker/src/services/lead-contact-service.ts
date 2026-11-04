@@ -254,6 +254,15 @@ export class LeadContactService {
     return { id, requestId, ...contact, createdAt };
   }
 
+  /** Each outreach step's first completion, however many contacts have been logged since. */
+  async completedSteps(requestId: string): Promise<Array<{ step: string; contactedAt: string }>> {
+    const { results } = await this.db
+      .prepare('SELECT step, MIN(contacted_at) AS contacted_at FROM lead_contacts WHERE jobber_request_id = ? AND step IS NOT NULL GROUP BY step')
+      .bind(requestId)
+      .all<{ step: string; contacted_at: string }>();
+    return (results ?? []).map((r) => ({ step: r.step, contactedAt: r.contacted_at }));
+  }
+
   async nextContact(requestId: string): Promise<string | null> {
     const row = await this.db.prepare('SELECT next_contact_on FROM lead_followups WHERE jobber_request_id = ?').bind(requestId).first<{ next_contact_on: string }>();
     return row?.next_contact_on ?? null;

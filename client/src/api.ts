@@ -1366,6 +1366,7 @@ export interface LeadBundle {
   infoNeeded: { items: LeadInfoItem[]; summary: LeadInfoSummary };
   contactStatus: LeadContactStatus;
   loggedContacts: LoggedLeadContact[];
+  outreachSteps: Array<{ step: string; contactedAt: string }>;
 }
 
 export type LeadContactChannel = 'call' | 'text' | 'email' | 'in_person' | 'other';
@@ -1423,6 +1424,18 @@ export async function setLeadNextContact(requestId: string, nextContactOn: strin
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ nextContactOn }),
+  });
+  return handleResponseWithToast(res);
+}
+
+/** Sends one text through Quo after the team confirmed it. The server takes the number from Jobber. */
+export async function sendLeadText(requestId: string, text: string, step?: string): Promise<
+  { sent: true; logged: true; contact: LoggedLeadContact } | { sent: true; logged: false; warning: string }
+> {
+  const res = await fetch(API_BASE + '/api/leads/' + encodeURIComponent(requestId) + '/send-text', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ text, step }),
   });
   return handleResponseWithToast(res);
 }

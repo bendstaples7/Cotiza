@@ -6,11 +6,13 @@ import {
   fetchLead,
   fetchLeadPhotoUrl,
   logLeadContact,
+  sendLeadText,
   setLeadNextContact,
   updateLeadInfo,
 } from '../api';
 import type { LeadBundle, LeadContactChannel, LeadContactStatus, LeadInfoItem, LeadInfoStatus } from '../api';
 import { formatDay, sourceList, timeAgo } from '../components/LeadContactLine';
+import { ASSUMED_PREFIX, buildOutreach, itemKind, mailtoLink, MAX_TEXT_LENGTH, OUTREACH_STEPS, smsLink, type ItemKind } from '../leadOutreach';
 
 /**
  * Lead hub: everything known about one Jobber request, and the "info needed" list the team
@@ -95,15 +97,9 @@ export default function LeadPage() {
 
       {lead.contactStatus && <ContactPanel requestId={lead.requestId} status={lead.contactStatus} onChanged={reload} />}
 
-      <section style={card}>
-        <h2 style={h2}>Info needed</h2>
-        <p style={muted}>What we still need from the customer before quoting. Ask, then type the answer here.</p>
-        {lead.infoNeeded.items.length === 0 && <p style={muted}>No questions yet.</p>}
-        <ul style={list}>
-          {lead.infoNeeded.items.map((item) => <InfoRow key={item.id} item={item} onSaved={replaceItem} />)}
-        </ul>
-        <AddQuestion requestId={lead.requestId} onAdded={replaceItem} />
-      </section>
+      <OutreachPanel lead={lead} onChanged={reload} />
+
+      <InfoSections requestId={lead.requestId} items={lead.infoNeeded.items} onSaved={replaceItem} />
 
       <section style={card}>
         <h2 style={h2}>Request</h2>
@@ -162,6 +158,125 @@ export default function LeadPage() {
         <ContextText block={lead.phone} kind="phone" />
       </section>
     </div>
+  );
+}
+
+/**
+ * The team's outreach checklist for this lead, with proposed messages they can copy, open in
+ * their own phone or mail app, or send through Quo after confirming the exact text.
+ */
+function OutreachPanel({ lead, onChanged }: { lead: LeadBundle; onChanged: () => void }) {
+  const req = lead.request.request;
+  const clientName = req?.clientName?.availability === 'present' ? req.clientName.value ?? null : null;
+  const title = req?.title?.availability === 'present' ? req.title.value ?? null : null;
+  const messages = buildOutreach({ clientName, title, items: lead.infoNeeded.items });
+  const [text, setText] = useState(messages.text);
+  const [copied, setCopied] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ text: string; warn: boolean } | null>(null);
+  // Rebuild the proposed text when the checklist changes (until the team edits it).
+  const [edited, setEdited] = useState(false);
+  useEffect(() => { if (!edited) setText(messages.text); }, [messages.text, edited]);
+
+  const quoConnected = !(lead.contactStatus?.notConnected ?? []).includes('quo');
+  const phone = lead.contact.phone;
+  const email = lead.contact.email;
+  const mailto = email ? mailtoLink(email, messages.emailSubject, messages.emailBody) : null;
+  const done = new Map<string, string>((lead.outreachSteps ?? []).map((s) => [s.step, s.contactedAt]));
+
+  const copy = async (what: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(what);
+      setTimeout(() => setCopied(null), 2000);
+    } catch {
+      setError('Could not copy. Select the text and copy it by hand.');
+    }
+  };
+
+  const markStep = async (step: string, channel: LeadContactChannel) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await logLeadContact(lead.requestId, { channel, step });
+      onChanged();
+    } catch (err) {
+      setError((err as ErrorResponse).message ?? 'Could not save.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const sendViaQuo = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await sendLeadText(lead.requestId, text.trim(), done.has('intro_text') ? undefined : 'intro_text');
+      setConfirming(false);
+      setNotice(result.logged ? { text: 'Text sent through Quo and logged.', warn: false } : { text: result.warning, warn: true });
+      onChanged();
+    } catch (err) {
+      setError((err as ErrorResponse).message ?? 'The text was not sent.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section style={card}>
+      <h2 style={h2}>Outreach</h2>
+      <ol style={stepList}>
+        {OUTREACH_STEPS.map((s) => (
+          <li key={s.step} style={stepRow}>
+            <label style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', cursor: done.has(s.step) ? 'default' : 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={done.has(s.step)}
+                disabled={busy || done.has(s.step)}
+                onChange={() => { void markStep(s.step, s.channel); }}
+              />
+              <span style={done.has(s.step) ? { textDecoration: 'line-through', color: '#666' } : {}}>{s.label}</span>
+            </label>
+            {done.has(s.step) && <span style={muted}>done {timeAgo(done.get(s.step)!)}</span>}
+          </li>
+        ))}
+      </ol>
+
+      <h3 style={h3}>Proposed text</h3>
+      <textarea style={{ ...textarea, minHeight: 120 }} maxLength={MAX_TEXT_LENGTH} value={text} onChange={(e) => { setText(e.target.value); setEdited(true); }} aria-label="Proposed text message" />
+      <div style={{ ...actions, marginTop: '0.5rem' }}>
+        <button type="button" style={btn} onClick={() => copy('text', text)}>{copied === 'text' ? 'Copied' : 'Copy text'}</button>
+        {phone && <a style={btnLink} href={smsLink(phone, text)}>Text from my phone</a>}
+        {phone && quoConnected && <button type="button" style={primaryBtn} disabled={busy || !text.trim()} onClick={() => { setConfirming(true); setNotice(null); }}>Send via Quo…</button>}
+        {edited && <button type="button" style={linkBtn} onClick={() => { setEdited(false); setText(messages.text); }}>Reset to proposed</button>}
+      </div>
+      {!phone && <p style={muted}>No phone number in Jobber for this lead.</p>}
+      {confirming && phone && (
+        <div role="dialog" aria-label="Confirm text" style={confirmBox}>
+          <p style={{ margin: 0, fontWeight: 600 }}>Send this text to {phone} from Chicago Reno's Quo number?</p>
+          <p style={{ ...pre, margin: '0.5rem 0' }}>{text.trim()}</p>
+          <div style={actions}>
+            <button type="button" style={primaryBtn} disabled={busy} onClick={() => { void sendViaQuo(); }}>{busy ? 'Sending…' : 'Send now'}</button>
+            <button type="button" style={btn} disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      <h3 style={h3}>Proposed email</h3>
+      <p style={{ ...muted, margin: '0 0 0.25rem' }}>Subject: {messages.emailSubject}</p>
+      <p style={{ ...pre, ...emailPreview }}>{messages.emailBody}</p>
+      <div style={{ ...actions, marginTop: '0.5rem' }}>
+        <button type="button" style={btn} onClick={() => copy('email', `Subject: ${messages.emailSubject}\n\n${messages.emailBody}`)}>{copied === 'email' ? 'Copied' : 'Copy email'}</button>
+        {mailto && <a style={btnLink} href={mailto}>Open in my email</a>}
+      </div>
+      {!email && <p style={muted}>No email address in Jobber for this lead.</p>}
+      {email && !mailto && <p style={muted}>The email address in Jobber doesn't look usable, so it can't be opened here. Copy the email instead.</p>}
+      <p style={{ ...muted, marginTop: '0.5rem' }}>After sending from your own phone or email, tick the step above so it's logged.</p>
+      {notice && <p role="status" style={{ ...muted, color: notice.warn ? '#92400e' : '#166534', fontWeight: notice.warn ? 600 : 400 }}>{notice.text}</p>}
+      {error && <p role="alert" style={inlineError}>{error}</p>}
+    </section>
   );
 }
 
@@ -290,7 +405,49 @@ function ReadyBadge({ ready, total, open }: { ready: boolean; total: number; ope
 
 const STATUS_LABEL: Record<LeadInfoStatus, string> = { open: 'Not asked', asked: 'Asked', answered: 'Answered', dropped: 'Not needed' };
 
-function InfoRow({ item, onSaved }: { item: LeadInfoItem; onSaved: (item: LeadInfoItem) => void }) {
+function InfoSections({ requestId, items, onSaved }: { requestId: string; items: LeadInfoItem[]; onSaved: (item: LeadInfoItem) => void }) {
+  const [showDropped, setShowDropped] = useState(false);
+  const live = items.filter((i) => i.status !== 'dropped');
+  const asks = live.filter((i) => itemKind(i) !== 'assumption');
+  const assumptions = live.filter((i) => itemKind(i) === 'assumption');
+  const dropped = items.filter((i) => i.status === 'dropped');
+  return (
+    <>
+      <section style={card}>
+        <h2 style={h2}>Need from the customer</h2>
+        <p style={muted}>Only what we can't reasonably assume. Ask, then type the answer here.</p>
+        {asks.length === 0 && <p style={muted}>Nothing needed from the customer to quote this lead.</p>}
+        <ul style={list}>
+          {asks.map((item) => <InfoRow key={item.id} item={item} kind={itemKind(item)} onSaved={onSaved} />)}
+        </ul>
+        <AddQuestion requestId={requestId} onAdded={onSaved} />
+      </section>
+      {assumptions.length > 0 && (
+        <section style={card}>
+          <h2 style={h2}>Our assumptions</h2>
+          <p style={muted}>What the quote is based on. These go to the customer with the quote; if they correct one, type the correction here.</p>
+          <ul style={list}>
+            {assumptions.map((item) => <InfoRow key={item.id} item={item} kind="assumption" onSaved={onSaved} />)}
+          </ul>
+        </section>
+      )}
+      {dropped.length > 0 && (
+        <div>
+          <button type="button" style={linkBtn} onClick={() => setShowDropped((v) => !v)}>
+            {showDropped ? 'Hide' : 'Show'} {dropped.length} retired question{dropped.length === 1 ? '' : 's'}
+          </button>
+          {showDropped && (
+            <ul style={{ ...list, marginTop: '0.5rem' }}>
+              {dropped.map((item) => <InfoRow key={item.id} item={item} kind={itemKind(item)} onSaved={onSaved} />)}
+            </ul>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+function InfoRow({ item, kind, onSaved }: { item: LeadInfoItem; kind: ItemKind; onSaved: (item: LeadInfoItem) => void }) {
   const [answer, setAnswer] = useState(item.answer ?? '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -312,14 +469,14 @@ function InfoRow({ item, onSaved }: { item: LeadInfoItem; onSaved: (item: LeadIn
   return (
     <li style={{ ...infoRow, opacity: item.status === 'dropped' ? 0.6 : 1 }}>
       <div style={infoHead}>
-        <span style={{ fontWeight: 600 }}>{item.question}{!item.required && <span style={muted}> (optional)</span>}</span>
-        <span style={{ ...chip, ...(done ? chipDone : item.status === 'asked' ? chipAsked : {}) }}>{STATUS_LABEL[item.status]}</span>
+        <span style={{ fontWeight: 600 }}>{kind === 'assumption' ? item.question.replace(/^assumed:\s*/i, '') : item.question}{kind === 'optional' && <span style={muted}> (optional)</span>}</span>
+        <span style={{ ...chip, ...(done ? chipDone : item.status === 'asked' ? chipAsked : {}) }}>{kind === 'assumption' && item.status !== 'dropped' ? (item.status === 'answered' ? 'Corrected' : 'Assumed') : STATUS_LABEL[item.status]}</span>
       </div>
       {item.status !== 'dropped' && (
         <textarea
           style={textarea}
           rows={2}
-          placeholder="Customer's answer"
+          placeholder={kind === 'assumption' ? "Customer's correction, if any" : "Customer's answer"}
           value={answer}
           onChange={(e) => setAnswer(e.target.value)}
           aria-label={`Answer: ${item.question}`}
@@ -328,10 +485,10 @@ function InfoRow({ item, onSaved }: { item: LeadInfoItem; onSaved: (item: LeadIn
       <div style={actions}>
         {item.status !== 'dropped' && (
           <button type="button" style={primaryBtn} disabled={saving || !answer.trim() || answer.trim() === (item.answer ?? '')} onClick={() => save({ answer: answer.trim(), status: 'answered' })}>
-            Save answer
+            {kind === 'assumption' ? 'Save correction' : 'Save answer'}
           </button>
         )}
-        {item.status === 'open' && <button type="button" style={btn} disabled={saving} onClick={() => save({ status: 'asked' })}>Mark asked</button>}
+        {item.status === 'open' && kind !== 'assumption' && <button type="button" style={btn} disabled={saving} onClick={() => save({ status: 'asked' })}>Mark asked</button>}
         {item.status !== 'dropped'
           ? <button type="button" style={btn} disabled={saving} onClick={() => save({ status: 'dropped' })}>Not needed</button>
           : <button type="button" style={btn} disabled={saving} onClick={() => save({ status: 'open' })}>Reopen</button>}
@@ -351,7 +508,8 @@ function AddQuestion({ requestId, onAdded }: { requestId: string; onAdded: (item
     setSaving(true);
     setError(null);
     try {
-      onAdded((await addLeadInfo(requestId, question.trim())).item);
+      // An "Assumed: …" line is a documented assumption, not an ask: it never holds the quote back.
+      onAdded((await addLeadInfo(requestId, question.trim(), !ASSUMED_PREFIX.test(question.trim()))).item);
       setQuestion('');
     } catch (err) {
       setError((err as ErrorResponse).message ?? 'Could not add the question.');
@@ -432,3 +590,8 @@ const dateInput: React.CSSProperties = { font: 'inherit', fontSize: '0.85rem', p
 const select: React.CSSProperties = { font: 'inherit', padding: '0.45rem', border: '1px solid #d1d5db', borderRadius: 6, background: '#fff' };
 const timelineRow: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: '0.75rem', fontSize: '0.88rem', flexWrap: 'wrap' };
 const linkBtn: React.CSSProperties = { font: 'inherit', fontSize: '0.85rem', background: 'none', border: 'none', color: '#00a89d', cursor: 'pointer', padding: '0.25rem 0' };
+const stepList: React.CSSProperties = { margin: '0 0 0.5rem', paddingLeft: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' };
+const stepRow: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' };
+const btnLink: React.CSSProperties = { font: 'inherit', fontSize: '0.85rem', padding: '0.35rem 0.75rem', border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', color: 'inherit', textDecoration: 'none' };
+const confirmBox: React.CSSProperties = { marginTop: '0.75rem', padding: '0.75rem', border: '1px solid #f59e0b', background: '#fffbeb', borderRadius: 8 };
+const emailPreview: React.CSSProperties = { margin: 0, padding: '0.5rem', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 6, fontSize: '0.88rem', maxHeight: 240, overflow: 'auto' };
