@@ -30,9 +30,9 @@ export default function LeadReceivedBadge({ createdAt, ageDays, now = Date.now()
 }
 
 const badge: React.CSSProperties = {
-  display: 'inline-flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap',
-  padding: '4px 10px', borderRadius: 999, background: '#eef2ff', color: '#1e3a8a', fontSize: 13, whiteSpace: 'nowrap',
-};
+  display: 'inline-flex', alignItems: 'baseline', columnGap: 6, rowGap: 0, flexWrap: 'wrap', maxWidth: 220,
+  padding: '4px 10px', borderRadius: 10, background: '#eef2ff', color: '#1e3a8a', fontSize: 13, };
 const label: React.CSSProperties = { fontWeight: 600 };
 const value: React.CSSProperties = { fontWeight: 700 };
-const sub: React.CSSProperties = { color: '#4b5563', fontSize: 12 };
+// The date sits on its own line under the age.
+const sub: React.CSSProperties = { color: '#4b5563', fontSize: 12, flexBasis: '100%' };

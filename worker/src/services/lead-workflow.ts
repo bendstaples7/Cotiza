@@ -220,7 +220,7 @@ export function shortAsk(question: string): string {
 }
 
 const QUOTE_UPDATE_AFTER_DAYS = 3;
-/** No "quote in progress" update when we were in touch with the customer within this many days. */
+/** No "quote in progress" update when we were in touch with the customer within this many Chicago calendar days. */
 const QUIET_DAYS_BEFORE_UPDATE = 3;
 
 function formatShortDay(date: string): string {
@@ -283,8 +283,10 @@ function computeOpenWorkflow(input: WorkflowInput): LeadWorkflow {
   const likelySpam = !input.notALead && !input.hasTitle && !teamNotes && cadence.touches.length === 0 && !cadence.engaged
     && info.total === 0 && (ageDays ?? 0) >= 3;
   // Any outreach from us (text, call, email, a team note recording outreach, a logged step) counts.
+  // A team note counts when it records outreach, a conversation, or a logged step. Chicago calendar days.
   const contactedRecently = events.some((e) => e.direction === 'outgoing' && e.channel !== 'request'
-    && (e.channel !== 'note' || e.outreach || e.step) && Date.parse(e.at) >= now - QUIET_DAYS_BEFORE_UPDATE * 86400_000);
+    && (e.channel !== 'note' || e.outreach || e.conversation || e.step)
+    && Number.isFinite(Date.parse(e.at)) && daysBetween(chicagoDate(Date.parse(e.at)), today) < QUIET_DAYS_BEFORE_UPDATE);
 
   // Jobber quote states: draft; sent and waiting on the customer; or settled (approved / converted to a job).
   const quoteStatuses = (input.quotes ?? []).map((q) => String(q.status ?? '').toLowerCase()).filter((st) => st && st !== 'archived');

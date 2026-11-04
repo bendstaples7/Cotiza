@@ -147,6 +147,13 @@ describe('computeLeadWorkflow', () => {
     expect(recent.bucket).toBe('do_now');
   });
 
+  it('a team note recording a conversation also counts as being in touch', () => {
+    const old = request('2026-10-29T02:11:00Z');
+    const spoke: ContactEvent = { at: '2026-11-03T20:00:00Z', channel: 'note', direction: 'outgoing', source: 'jobber', label: 'Spoke with customer', conversation: true };
+    const w = workflow([old, out('2026-10-29T15:00:00Z'), out('2026-10-30T15:00:00Z'), spoke], { info: info({ readyToQuote: true, firstAsk: null }) });
+    expect(w.secondary).toBeNull();
+  });
+
   it('ready to quote with the next contact days away: still Do now, drafting, no update', () => {
     const old = request('2026-10-28T20:00:00Z');
     const events = [old, out('2026-10-29T15:00:00Z'), out('2026-10-30T15:00:00Z'), out('2026-11-03T15:00:00Z')];

@@ -172,7 +172,8 @@ describe('lead connector tools', () => {
     expect(graphqlRequest.mock.calls.filter(([, vars]) => (vars as { id?: string }).id === undefined)).toHaveLength(2);
     expect(result).toMatchObject({ outcome: 'ok', total: 2, totalIsComplete: true });
     expect(result.leads.map((l) => [l.requestId, l.client, l.title, l.jobberStatus, l.ageDays, l.infoNeeded.total])).toEqual([
-      [OTHER, null, 'Shower', 'assessment_completed', 15, 0],
+      // Chicago calendar days: Oct 20 00:00Z is Oct 19 in Chicago, 16 days before Nov 4.
+      [OTHER, null, 'Shower', 'assessment_completed', 16, 0],
       [REQ, 'Keeley Sorokti', 'Shower', 'new', 2, 1],
     ]);
     expect(result.leads[1].nextStep).toMatchObject({ bucket: 'do_now', stage: 'Step 1 · reach out on intake', due: 'overdue', daysOverdue: 2, action: 'Send intro text' });
