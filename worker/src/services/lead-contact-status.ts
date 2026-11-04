@@ -38,19 +38,21 @@ export function redactContactDetails(text: string): string {
 
 // The handbook has the team record every call, text and email in Jobber, so team notes are read for
 // what they record. Plain wording only; anything unrecognised stays a note and does not move the cadence.
-// Customer-voiced notes ("Client texted", "Customer left a voicemail", "Emma's text:") are replies, checked first.
-const REPLY_NOTE = /^\s*(?:[a-z]+(?:'|’)s\s+(?:text|email|reply|message|voicemail)|[a-z]+\s+(?:emailed|texted|replied|wrote|called back))\s*:|\b(?:customer|client|homeowner)\s+(?:replied|responded|wrote|texted|emailed|called|sent|reached out|left|got back)\b|\b(?:missed call|voicemail|text|email|message) from (?:the )?(?:customer|client|homeowner)\b/i;
+// A note that starts with the customer's own words ("Emma's text:", "CHRIS EMAILED:") is a reply.
+const REPLY_PREFIX = /^\s*(?:[a-z]+(?:'|’)s\s+(?:text|email|reply|message|voicemail)|[a-z]+\s+(?:emailed|texted|replied|wrote|called back))\s*:/i;
 const CONVERSATION_NOTE = /\b(?:call summary|spoke (?:with|to)|talked (?:with|to)|on the phone with)\b/i;
-// "Spoke to voicemail" or an answering machine is not a conversation.
+// "Spoke to voicemail" or an answering machine is outreach, not a conversation.
 const NOT_A_CONVERSATION = /\b(?:voicemail|voice mail|vm|machine|no answer)\b/i;
+// Customer-voiced notes ("Client texted", "Customer left a voicemail") are replies, unless the note is a call summary.
+const CUSTOMER_VOICED = /\b(?:customer|client|homeowner)\s+(?:replied|responded|wrote|texted|emailed|called|sent|reached out|left|got back)\b|\b(?:missed call|voicemail|text|email|message) from (?:the )?(?:customer|client|homeowner)\b/i;
 const OUTREACH_NOTE = /\b(?:no answer|left (?:a )?(?:vm|voicemail|message)|sent (?:an? )?(?:email|text|follow[- ]?up)|texted|emailed (?:the )?(?:customer|client|them|him|her)|followed up|reached out|called (?:the )?(?:customer|client|them|him|her))\b/i;
 
 export type NoteKind = 'reply' | 'conversation' | 'outreach' | 'note';
 
 export function classifyTeamNote(message: string): NoteKind {
-  if (REPLY_NOTE.test(message)) return 'reply';
-  // A call that reached voicemail is still outreach, just not a conversation.
+  if (REPLY_PREFIX.test(message)) return 'reply';
   if (CONVERSATION_NOTE.test(message)) return NOT_A_CONVERSATION.test(message) ? 'outreach' : 'conversation';
+  if (CUSTOMER_VOICED.test(message)) return 'reply';
   if (OUTREACH_NOTE.test(message)) return 'outreach';
   return 'note';
 }

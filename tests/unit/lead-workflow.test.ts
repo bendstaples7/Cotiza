@@ -79,6 +79,7 @@ describe('Jobber team notes', () => {
       expect(classifyTeamNote(note)).toBe('reply');
     }
     expect(classifyTeamNote('Spoke to voicemail, will try again')).toBe('outreach');
+    expect(classifyTeamNote('Spoke with customer. Customer sent photos after.')).toBe('conversation');
     expect(classifyTeamNote('Called the customer, no answer')).toBe('outreach');
   });
 
@@ -152,6 +153,10 @@ describe('computeLeadWorkflow', () => {
     expect(drafted).toMatchObject({ progress: 'quote_drafted', bucket: 'do_now', action: { kind: 'draft_quote', label: 'Finish the quote' } });
     const sent = workflow(events, { quotes: [{ status: 'awaiting_response' }], info: info({ readyToQuote: true, firstAsk: null }) });
     expect(sent).toMatchObject({ progress: 'quote_sent', action: { kind: 'quote_follow_up' } });
+    const approved = workflow(events, { quotes: [{ status: 'approved' }] });
+    expect(approved).toMatchObject({ bucket: 'waiting', action: { kind: 'none', label: 'Quote approved' } });
+    // A draft beats the intro text when nobody has reached out yet.
+    expect(workflow([lead], { quotes: [{ status: 'draft' }] }).action.label).toBe('Finish the quote');
   });
 
   it('a ready lead stays in Do now even when the next touch is later', () => {

@@ -143,7 +143,7 @@ export function handbookCadence(events: ContactEvent[], now: number): Cadence {
 // ── Next action ────────────────────────────────────────────────
 
 export type LeadBucket = 'do_now' | 'waiting' | 'review';
-export type LeadActionKind = 'intro_text' | 'reply' | 'ask_info' | 'quote_update' | 'draft_quote' | 'quote_follow_up' | 'follow_up' | 'review';
+export type LeadActionKind = 'intro_text' | 'reply' | 'ask_info' | 'quote_update' | 'draft_quote' | 'quote_follow_up' | 'follow_up' | 'review' | 'none';
 export type LeadProgress = 'lead_in' | 'getting_info' | 'ready_to_quote' | 'quote_drafted' | 'quote_sent';
 export type PlanState = 'done' | 'missed' | 'due' | 'upcoming';
 
@@ -261,14 +261,18 @@ export function computeLeadWorkflow(input: WorkflowInput): LeadWorkflow {
     && info.total === 0 && (ageDays ?? 0) >= 3;
   const quoteUpdateRecent = events.some((e) => e.step === 'quote_update' && Date.parse(e.at) >= now - QUOTE_UPDATE_REPEAT_DAYS * 86400_000);
 
+  // Jobber quote states: draft; sent and waiting on the customer; or settled (approved / converted to a job).
   const quoteStatuses = (input.quotes ?? []).map((q) => String(q.status ?? '').toLowerCase()).filter((st) => st && st !== 'archived');
-  const quoteSent = quoteStatuses.some((st) => st !== 'draft');
+  const quoteSettled = quoteStatuses.some((st) => st === 'approved' || st === 'converted');
+  const quoteSent = quoteSettled || quoteStatuses.some((st) => st === 'awaiting_response' || st === 'changes_requested');
   const quoteDrafted = quoteStatuses.length > 0;
   const oldNoQuote = (ageDays ?? 0) >= QUOTE_UPDATE_AFTER_DAYS && !quoteUpdateRecent;
 
   let action: LeadAction;
   if (input.notALead) {
     action = { kind: 'review', label: 'Archive in Jobber', why: 'Marked as not a lead. Archive it in Jobber to clear it.', step: 'review', channel: 'other' };
+  } else if (quoteSettled) {
+    action = { kind: 'none', label: 'Quote approved', why: 'The customer approved the quote. Nothing to chase here; schedule the job in Jobber.', step: 'none', channel: 'other' };
   } else if (quoteSent) {
     action = { kind: 'quote_follow_up', label: 'Follow up on the quote', why: 'A quote has gone out. Make sure they got it and answer questions.', step: 'quote_follow_up', channel: 'text' };
   } else if (cadence.step === 'replied') {
@@ -278,12 +282,14 @@ export function computeLeadWorkflow(input: WorkflowInput): LeadWorkflow {
       : quoteDrafted || !oldNoQuote
         ? { kind: 'draft_quote', label: quoteDrafted ? 'Finish the quote' : 'Draft quote', why: 'They replied and we have what we need to quote. Answer them, then get the quote out.', step: 'draft_quote', channel: 'other' }
         : { kind: 'quote_update', label: 'Reply: quote is coming', why: `They replied and the lead is ${ageDays} days old with no quote. Answer today and let them know it’s coming.`, step: 'quote_update', channel: 'text' };
+  } else if (quoteDrafted) {
+    action = { kind: 'draft_quote', label: 'Finish the quote', why: 'A draft quote is in Jobber. Finish it and send it.', step: 'draft_quote', channel: 'other' };
   } else if (cadence.count === 0) {
     action = { kind: 'intro_text', label: 'Send intro text', why: likelySpam ? 'No project described yet. Send one intro text or mark it not a lead.' : 'Nobody has contacted them yet.', step: 'intro_text', channel: 'text' };
-  } else if (info.readyToQuote && !quoteDrafted && oldNoQuote) {
+  } else if (info.readyToQuote && oldNoQuote) {
     action = { kind: 'quote_update', label: 'Send “quote in progress” text', why: `Lead is ${ageDays} days old with no quote. Let them know it’s coming.`, step: 'quote_update', channel: 'text' };
-  } else if (info.readyToQuote || quoteDrafted) {
-    action = { kind: 'draft_quote', label: quoteDrafted ? 'Finish the quote' : 'Draft quote', why: quoteDrafted ? 'A draft quote is in Jobber. Finish it and send it.' : 'We have what we need to quote.', step: 'draft_quote', channel: 'other' };
+  } else if (info.readyToQuote) {
+    action = { kind: 'draft_quote', label: 'Draft quote', why: 'We have what we need to quote.', step: 'draft_quote', channel: 'other' };
   } else if (info.firstAsk) {
     const ask = shortAsk(info.firstAsk);
     action = { kind: 'ask_info', label: `Text: ask for ${ask}`, why: `Still need ${ask} to quote.`, step: 'follow_up', channel: 'text' };
@@ -292,6 +298,7 @@ export function computeLeadWorkflow(input: WorkflowInput): LeadWorkflow {
   }
 
   const bucket: LeadBucket = input.notALead || likelySpam ? 'review'
+    : quoteSettled ? 'waiting'
     : ((info.readyToQuote || quoteDrafted) && !quoteSent) || next.overdue || next.dueToday ? 'do_now'
     : 'waiting';
   const progress: LeadProgress = quoteSent ? 'quote_sent'
