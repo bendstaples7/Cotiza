@@ -1374,6 +1374,8 @@ export interface LeadBundle {
   unsentJobberNotes?: JobberNoteStatus[];
   /** True when Cotiza could not check for unsent Jobber notes (not the same as none). */
   unsentJobberNotesUnavailable?: boolean;
+  /** Trello: whether Cotiza can move cards, and the cards it moved for this lead (null when unreadable). */
+  trello?: { configured: boolean; moved: Array<{ name: string; url: string }> | null };
 }
 
 /** The Jobber note Cotiza adds for an action. "failed" means the action is saved in Cotiza but Jobber didn't get the note. */
@@ -1432,7 +1434,14 @@ export interface LeadContactStatus {
 }
 
 export type LeadBucket = 'do_now' | 'waiting' | 'review' | 'closed';
-export type LeadActionKind = 'intro_text' | 'reply' | 'ask_info' | 'quote_update' | 'draft_quote' | 'ben_edits' | 'wait_review' | 'send_quote' | 'quote_follow_up' | 'follow_up' | 'check_back' | 'review' | 'none';
+export type LeadActionKind = 'intro_text' | 'reply' | 'ask_info' | 'quote_update' | 'draft_quote' | 'ben_edits' | 'wait_review' | 'send_quote' | 'quote_follow_up' | 'follow_up' | 'check_back' | 'review' | 'lost_in_trello' | 'none';
+
+/** What Cotiza did with the lead's Trello card(s) on close, postpone or reopen. */
+export interface TrelloResult {
+  status: 'not_configured' | 'moved' | 'commented' | 'already' | 'none_found' | 'ambiguous' | 'partial' | 'failed';
+  message: string;
+  cards: Array<{ name: string; url: string; done: boolean; error?: string }>;
+}
 export type LeadProgress = 'lead_in' | 'getting_info' | 'ready_to_quote' | 'quote_drafted' | 'ben_review' | 'ready_to_send' | 'quote_sent';
 
 /** Where a drafted quote is, so the team knows whose move it is (worker: lead-quote-stage.ts). */
@@ -1472,6 +1481,8 @@ export interface LeadWorkflow {
   quoteStage?: LeadQuoteStage | null;
   /** The team closed this lead; null while open. */
   closed?: LeadClosure | null;
+  /** The lead's Trello card is in Bid Lost while the lead is still open: it sits in Review. */
+  lostInTrello?: boolean;
 }
 
 export type LeadCloseReason = 'went_elsewhere' | 'too_small' | 'no_response' | 'postponed' | 'other';
@@ -1496,7 +1507,7 @@ export interface JobberArchiveOutcome { status: 'archived' | 'unarchived' | 'not
 
 /** Closes a lead with a reason. Postponed leads take a check-back date (default 3 months). */
 export async function closeLead(requestId: string, input: { reason: LeadCloseReason; note?: string; checkBackOn?: string }): Promise<{
-  closure: LeadClosure; alreadyClosed?: boolean; jobberNote: JobberNoteStatus | null; jobberArchive: JobberArchiveOutcome; trelloReminder: boolean;
+  closure: LeadClosure; alreadyClosed?: boolean; jobberNote: JobberNoteStatus | null; jobberArchive: JobberArchiveOutcome; trello?: TrelloResult | null; trelloReminder: boolean;
 }> {
   const res = await fetch(API_BASE + '/api/leads/' + encodeURIComponent(requestId) + '/close', {
     method: 'POST',
@@ -1506,8 +1517,17 @@ export async function closeLead(requestId: string, input: { reason: LeadCloseRea
   return handleResponseWithToast(res);
 }
 
-export async function reopenLead(requestId: string): Promise<{ reopened: boolean; jobberNote: JobberNoteStatus | null; jobberArchive: JobberArchiveOutcome | null; trelloReminder?: boolean }> {
+export async function reopenLead(requestId: string): Promise<{ reopened: boolean; jobberNote: JobberNoteStatus | null; jobberArchive: JobberArchiveOutcome | null; trello?: TrelloResult | null; trelloReminder?: boolean }> {
   const res = await fetch(API_BASE + '/api/leads/' + encodeURIComponent(requestId) + '/reopen', {
+    method: 'POST',
+    headers: { ...authHeaders() },
+  });
+  return handleResponseWithToast(res);
+}
+
+/** Retry the Trello side of a close: move the lead's card to Bid Lost (safe to repeat). */
+export async function syncLeadTrello(requestId: string): Promise<{ trello: TrelloResult; trelloReminder: boolean }> {
+  const res = await fetch(API_BASE + '/api/leads/' + encodeURIComponent(requestId) + '/trello-sync', {
     method: 'POST',
     headers: { ...authHeaders() },
   });

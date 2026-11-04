@@ -17,6 +17,7 @@ import {
   fetchLeadSummaries,
   fetchLeadContactStatuses,
   setLeadNotALead,
+  closeLead,
   warnIfJobberNoteFailed,
 } from '../api';
 import type { JobberQueueStatus, LeadContactStatus, LeadInfoSummary, LeadWorkflow, ManualRequestWithDeathclock, ResolveRequestQuoteResult } from '../api';
@@ -349,6 +350,25 @@ export default function RequestQueuePage() {
     }
   };
 
+  /** "Close in Cotiza too" for a lead whose Trello card is already in Bid Lost: same close as the lead page (Jobber note + archive). */
+  const closeLostInTrello = async (requestId: string) => {
+    setMarkingId(requestId);
+    try {
+      const result = await closeLead(requestId, { reason: 'other', note: 'Already in Bid Lost in Trello' });
+      warnIfJobberNoteFailed(result?.jobberNote);
+      setContactStatuses((prev) => {
+        const status = prev[requestId];
+        if (!status?.workflow) return prev;
+        return { ...prev, [requestId]: { ...status, workflow: { ...status.workflow, bucket: 'closed', lostInTrello: false } } };
+      });
+      void loadRequests({ silent: true });
+    } catch {
+      // The API helper already shows a toast.
+    } finally {
+      setMarkingId(null);
+    }
+  };
+
   const handleRequestClick = async (req: ManualRequestWithDeathclock) => {
     const cardKey = req.jobberRequestId ?? req.id;
     if (!beginGenerating(cardKey)) return;
@@ -460,7 +480,12 @@ export default function RequestQueuePage() {
         <div style={{ ...cellStyle, flex: '1.3 1 240px', alignItems: 'flex-start', gap: 8 }}>
           {w && <span style={whyStyle}>{w.action.why}</span>}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            {w?.bucket === 'review' ? (
+            {w?.bucket === 'review' && w.lostInTrello ? (
+              <>
+                <button type="button" style={primaryButtonStyle} disabled={markingId === id} onClick={() => { void closeLostInTrello(id); }}>Close in Cotiza too</button>
+                <button type="button" style={secondaryButtonStyle} onClick={() => openRequest(req)}>Open lead</button>
+              </>
+            ) : w?.bucket === 'review' ? (
               <>
                 {w.notALead ? (
                   <button type="button" style={secondaryButtonStyle} disabled={markingId === id} onClick={() => markNotALead(id, false)}>Undo: it is a lead</button>
@@ -476,7 +501,7 @@ export default function RequestQueuePage() {
                 {w?.action.label ?? 'Open lead'}
               </button>
             )}
-            {w && w.bucket !== 'review' && (w.progress === 'ready_to_quote' || quoteChip(w) || (summary?.total ?? 0) > 0) && (
+            {w && (w.bucket !== 'review' || w.lostInTrello) && (w.progress === 'ready_to_quote' || quoteChip(w) || (summary?.total ?? 0) > 0) && (
               <span style={readinessChipStyle(w, summary)}>{readinessText(w, summary)}</span>
             )}
             {w?.secondary && w.bucket !== 'review' && (
@@ -597,7 +622,7 @@ export default function RequestQueuePage() {
               <Tile label="Do now" color="#9a3412" count={statusesLoaded ? doNow.length : null} note="overdue, due today, or ready to quote" />
               <Tile label="Ready to quote" color="#166534" count={statusesLoaded ? readyCount : null} note="enough info, draft the quote" />
               <Tile label="Waiting on customer" color="#1e40af" count={statusesLoaded ? waiting.length : null} note="next touch is scheduled" />
-              <Tile label="Review" color="#4b5563" count={statusesLoaded ? review.length : null} note="likely not a lead" />
+              <Tile label="Review" color="#4b5563" count={statusesLoaded ? review.length : null} note="likely not a lead, or lost in Trello" />
             </div>
           )}
 
@@ -622,7 +647,7 @@ export default function RequestQueuePage() {
             </Section>
           )}
           {review.length > 0 && (
-            <Section title="Review" note="No real project described, or marked not a lead. Archive in Jobber, or send one intro text.">
+            <Section title="Review" note="No real project described, marked not a lead, or already in Bid Lost in Trello. Close or archive it, or send one intro text.">
               {review.map(renderLeadRow)}
             </Section>
           )}

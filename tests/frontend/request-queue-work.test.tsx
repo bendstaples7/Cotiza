@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   fetchLeadSummaries: vi.fn(),
   fetchLeadContactStatuses: vi.fn(),
   setLeadNotALead: vi.fn(),
+  closeLead: vi.fn(),
   fetchRequestJobberQuotes: vi.fn(),
   retryJobberNote: vi.fn(),
   warnIfJobberNoteFailed: vi.fn(),
@@ -168,5 +169,23 @@ describe('Requests work queue', () => {
     const row = await within(doNow).findByRole('article', { name: 'Lead: John Oconnell' });
     await userEvent.click(within(row).getByRole('button', { name: /Also: Send “quote in progress” text/ }));
     expect(screen.getByTestId('where')).toHaveTextContent('/quotes/leads/J?action=quote_update');
+  });
+
+  it('a lead lost in Trello sits in Review with "Close in Cotiza too"', async () => {
+    api.closeLead.mockResolvedValue({ closure: {}, jobberNote: null, jobberArchive: { status: 'archived' }, trello: null, trelloReminder: false });
+    api.fetchLeadContactStatuses.mockResolvedValue({
+      statuses: {
+        A: status(workflow({ bucket: 'waiting', next: { on: '2099-11-10', source: 'suggested', overdue: false, dueToday: false, daysOverdue: 0 } })),
+        K: status(workflow({ bucket: 'review', lostInTrello: true, action: { kind: 'lost_in_trello', label: 'Close in Cotiza too', why: 'Lost in Trello: the card is in Bid Lost.', step: 'none', channel: 'other' } })),
+        J: status(workflow({})),
+      },
+    });
+    renderQueue();
+    const review = await screen.findByRole('region', { name: 'Review' });
+    const row = await within(review).findByRole('article', { name: 'Lead: Katherine Harris' });
+    expect(within(row).getByText('Lost in Trello: the card is in Bid Lost.')).toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Not a lead' })).not.toBeInTheDocument();
+    await userEvent.click(within(row).getByRole('button', { name: 'Close in Cotiza too' }));
+    expect(api.closeLead).toHaveBeenCalledWith('K', { reason: 'other', note: 'Already in Bid Lost in Trello' });
   });
 });

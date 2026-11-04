@@ -16,9 +16,10 @@ import {
   sendLeadText,
   setLeadNextContact,
   setLeadNotALead,
+  syncLeadTrello,
   updateLeadInfo,
 } from '../api';
-import type { JobberArchiveOutcome, JobberNoteStatus, LeadBundle, LeadCloseReason, LeadClosure, LeadContactChannel, LeadContactStatus, LeadInfoItem, LeadInfoStatus, LeadWorkflow } from '../api';
+import type { JobberArchiveOutcome, JobberNoteStatus, TrelloResult, LeadBundle, LeadCloseReason, LeadClosure, LeadContactChannel, LeadContactStatus, LeadInfoItem, LeadInfoStatus, LeadWorkflow } from '../api';
 import { formatDay, sourceList, timeAgo } from '../components/LeadContactLine';
 import { ASSUMED_PREFIX, buildActionMessage, itemKind, mailtoLink, MAX_TEXT_LENGTH, smsLink, type ItemKind } from '../leadOutreach';
 
@@ -67,7 +68,7 @@ export default function LeadPage() {
   const fromAction = searchParams.get('action');
   const closeRef = useRef<HTMLElement | null>(null);
   // The Jobber archive outcome of the last close, kept across the refresh that follows it.
-  const [closeOutcome, setCloseOutcome] = useState<JobberArchiveOutcome | null>(null);
+  const [closeOutcome, setCloseOutcome] = useState<CloseOutcome | null>(null);
   useEffect(() => {
     const target = fromAction === 'close' ? closeRef.current : nextStepRef.current;
     if (fromAction && lead && target) target.scrollIntoView?.({ block: 'start' });
@@ -365,6 +366,20 @@ function NextStepPanel({ lead, workflow, onChanged, panelRef, onSwitch }: { lead
     }
   };
 
+  const closeLostInTrello = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await closeLead(lead.requestId, { reason: 'other', note: 'Already in Bid Lost in Trello' });
+      warnIfJobberNoteFailed(result.jobberNote);
+      onChanged();
+    } catch (err) {
+      setError((err as ErrorResponse).message ?? 'Could not close the lead.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const setNotALead = async (value: boolean) => {
     setBusy(true);
     setError(null);
@@ -406,6 +421,13 @@ function NextStepPanel({ lead, workflow, onChanged, panelRef, onSwitch }: { lead
           </p>
         )}
       </div>
+
+      {action.kind === 'lost_in_trello' && (
+        <div style={actions}>
+          <button type="button" style={primaryBtn} disabled={busy} onClick={() => { void closeLostInTrello(); }}>Close in Cotiza too</button>
+          <span style={muted}>Adds a note to the Jobber request and archives it there.</span>
+        </div>
+      )}
 
       {action.kind === 'review' && (
         <div style={actions}>
@@ -483,7 +505,7 @@ function NextStepPanel({ lead, workflow, onChanged, panelRef, onSwitch }: { lead
         </>
       )}
 
-      {action.kind !== 'review' && action.kind !== 'none' && action.kind !== 'wait_review' && (
+      {action.kind !== 'review' && action.kind !== 'none' && action.kind !== 'wait_review' && action.kind !== 'lost_in_trello' && (
         <div style={doneRow}>
           <button type="button" style={doneBtn} disabled={busy} onClick={() => { void markDone(); }}>Mark done</button>
           <span style={{ fontSize: 14, color: '#4b5563' }}>
@@ -920,8 +942,64 @@ export function JobberNotesBanner({ notes, unavailable = false, onChanged }: { n
   );
 }
 
+/** The outcome of a close, kept across the refresh that follows it. */
+type CloseOutcome = { archive: JobberArchiveOutcome; trello: TrelloResult | null };
+
+/**
+ * The Trello side, in plain words: what Cotiza did (with card links), or why the team should move the
+ * card by hand, with a retry when Trello failed or Cotiza couldn't tell which card it is.
+ */
+function TrelloLine({ lead, result, reopening, postponed }: { lead: LeadBundle; result: TrelloResult | null | undefined; reopening: boolean; postponed: boolean }) {
+  const [shown, setShown] = useState<TrelloResult | null | undefined>(result);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setShown(result); }, [result]);
+  const configured = lead.trello?.configured ?? false;
+  const retry = async () => {
+    setBusy(true);
+    try {
+      setShown((await syncLeadTrello(lead.requestId)).trello);
+    } catch {
+      // The API helper already shows a toast.
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!configured && !shown) return <span>{reopening ? 'Also move the Trello card back.' : 'Also move the Trello card.'}</span>;
+  if (!shown) {
+    // After a refresh: what Cotiza moved for this lead is stored; otherwise offer to do it now.
+    const moved = lead.trello?.moved ?? null;
+    if (reopening || postponed) return null;
+    if (moved && moved.length > 0) {
+      return <span>Moved to Bid Lost in Trello: {moved.map((m, i) => <span key={m.url}>{i > 0 ? ', ' : ''}<a href={m.url} target="_blank" rel="noreferrer">{m.name}</a></span>)}</span>;
+    }
+    return (
+      <span>
+        No Trello card was moved for this lead.{' '}
+        <button type="button" style={linkBtn} disabled={busy} onClick={() => { void retry(); }}>{busy ? 'Checking Trello…' : 'Move its Trello card now'}</button>
+      </span>
+    );
+  }
+  const warn = shown.status === 'failed' || shown.status === 'partial' || shown.status === 'ambiguous' || shown.status === 'not_configured';
+  // A failed close or reopen can be retried: the server moves the cards to Bid Lost, or back.
+  const canRetry = configured && (shown.status === 'failed' || shown.status === 'partial');
+  return (
+    <span style={warn ? { color: '#92400e', fontWeight: 600 } : undefined} role={warn ? 'alert' : undefined}>
+      {shown.message}
+      {shown.cards.length > 0 && (
+        <>
+          {' '}
+          {shown.cards.map((card, i) => (
+            <span key={card.url}>{i > 0 ? ', ' : ''}<a href={card.url} target="_blank" rel="noreferrer">{card.name}</a>{card.error ? ` (${card.error})` : ''}</span>
+          ))}
+        </>
+      )}
+      {canRetry && <>{' '}<button type="button" style={linkBtn} disabled={busy} onClick={() => { void retry(); }}>{busy ? 'Retrying…' : 'Retry Trello'}</button></>}
+    </span>
+  );
+}
+
 /** What happened in Jobber and Trello after closing or reopening, in plain words. */
-function closeFollowUps(archive: JobberArchiveOutcome | null, jobberUrl: string | null, reopening: boolean) {
+function closeFollowUps(archive: JobberArchiveOutcome | null, jobberUrl: string | null, reopening: boolean, trello: React.ReactNode = <span>Also move the Trello card.</span>) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 14, color: '#374151' }}>
       {archive?.status === 'archived' && <span>Archived the request in Jobber.</span>}
@@ -932,7 +1010,7 @@ function closeFollowUps(archive: JobberArchiveOutcome | null, jobberUrl: string 
           {jobberUrl && <a href={jobberUrl} target="_blank" rel="noreferrer">{reopening ? 'Unarchive this request in Jobber' : 'Archive this request in Jobber'}</a>}
         </span>
       )}
-      <span>Also move the Trello card.</span>
+      {trello}
     </div>
   );
 }
@@ -940,10 +1018,10 @@ function closeFollowUps(archive: JobberArchiveOutcome | null, jobberUrl: string 
 /** Close a lead with a reason. Postponed takes a check-back date (default 3 months, per the handbook). */
 function CloseLeadPanel({ lead, startOpen, postponedDue, panelRef, onClosed, onChanged }: {
   lead: LeadBundle; startOpen: boolean; postponedDue: boolean; panelRef: React.MutableRefObject<HTMLElement | null>;
-  onClosed: (outcome: JobberArchiveOutcome) => void; onChanged: () => void;
+  onClosed: (outcome: CloseOutcome) => void; onChanged: () => void;
 }) {
   const [open, setOpen] = useState(startOpen);
-  const [reopened, setReopened] = useState<JobberArchiveOutcome | null | undefined>(undefined);
+  const [reopened, setReopened] = useState<{ archive: JobberArchiveOutcome | null; trello: TrelloResult | null } | undefined>(undefined);
   const [reason, setReason] = useState<LeadCloseReason | ''>('');
   const [note, setNote] = useState('');
   const [checkBackOn, setCheckBackOn] = useState('');
@@ -959,7 +1037,7 @@ function CloseLeadPanel({ lead, startOpen, postponedDue, panelRef, onClosed, onC
     try {
       const result = await closeLead(lead.requestId, { reason, ...(note.trim() ? { note: note.trim() } : {}), ...(reason === 'postponed' && checkBackOn ? { checkBackOn } : {}) });
       warnIfJobberNoteFailed(result.jobberNote);
-      onClosed(result.jobberArchive);
+      onClosed({ archive: result.jobberArchive, trello: result.trello ?? null });
       onChanged();
     } catch (err) {
       setError((err as ErrorResponse).message ?? 'Could not close the lead.');
@@ -975,8 +1053,8 @@ function CloseLeadPanel({ lead, startOpen, postponedDue, panelRef, onClosed, onC
       try {
         const result = await reopenLead(lead.requestId);
         warnIfJobberNoteFailed(result.jobberNote);
-        // Nothing changed (reopened elsewhere): just refresh. Otherwise show the Trello reminder first.
-        if (!result.reopened) onChanged(); else setReopened(result.jobberArchive);
+        // Nothing changed (reopened elsewhere): just refresh. Otherwise show what happened in Jobber and Trello first.
+        if (!result.reopened) onChanged(); else setReopened({ archive: result.jobberArchive, trello: result.trello ?? null });
       } catch (err) {
         setError((err as ErrorResponse).message ?? 'Could not reopen the lead.');
       } finally {
@@ -986,7 +1064,7 @@ function CloseLeadPanel({ lead, startOpen, postponedDue, panelRef, onClosed, onC
     if (reopened !== undefined) {
       return (
         <section ref={panelRef} style={card} aria-label="Lead reopened">
-          {closeFollowUps(reopened, null, true)}
+          {closeFollowUps(reopened.archive, null, true, <TrelloLine lead={lead} result={reopened.trello} reopening postponed={false} />)}
           <div style={actions}><button type="button" style={primaryBtn} onClick={onChanged}>Reopened · back to the lead</button></div>
         </section>
       );
@@ -1045,10 +1123,10 @@ function CloseLeadPanel({ lead, startOpen, postponedDue, panelRef, onClosed, onC
 }
 
 /** A closed lead: why, when a postponed one comes back, what to do in Jobber and Trello, and Reopen. */
-function ClosedLeadPanel({ lead, closure, closeOutcome, onChanged }: { lead: LeadBundle; closure: LeadClosure; closeOutcome: JobberArchiveOutcome | null; onChanged: () => void }) {
+function ClosedLeadPanel({ lead, closure, closeOutcome, onChanged }: { lead: LeadBundle; closure: LeadClosure; closeOutcome: CloseOutcome | null; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [reopened, setReopened] = useState<JobberArchiveOutcome | null | undefined>(undefined);
+  const [reopened, setReopened] = useState<{ archive: JobberArchiveOutcome | null; trello: TrelloResult | null } | undefined>(undefined);
   const jobberUrl = lead.request.request?.jobberWebUri?.availability === 'present' ? lead.request.request.jobberWebUri.value ?? null : null;
   const reopen = async () => {
     setBusy(true);
@@ -1056,8 +1134,8 @@ function ClosedLeadPanel({ lead, closure, closeOutcome, onChanged }: { lead: Lea
     try {
       const result = await reopenLead(lead.requestId);
       warnIfJobberNoteFailed(result.jobberNote);
-      // Not reopened here (already open): just refresh. Otherwise show what to do in Jobber and Trello first.
-      if (!result.reopened) onChanged(); else setReopened(result.jobberArchive);
+      // Not reopened here (already open): just refresh. Otherwise show what happened in Jobber and Trello first.
+      if (!result.reopened) onChanged(); else setReopened({ archive: result.jobberArchive, trello: result.trello ?? null });
     } catch (err) {
       setError((err as ErrorResponse).message ?? 'Could not reopen the lead.');
     } finally {
@@ -1067,7 +1145,7 @@ function ClosedLeadPanel({ lead, closure, closeOutcome, onChanged }: { lead: Lea
   // The outcome from the close itself (with Jobber's reason when it failed), else what is stored.
   const archive: JobberArchiveOutcome | null = closure.reason === 'postponed' ? null
     : closure.jobberArchived ? { status: 'archived' }
-      : closeOutcome && closeOutcome.status !== 'skipped' ? closeOutcome
+      : closeOutcome && closeOutcome.archive.status !== 'skipped' ? closeOutcome.archive
         : { status: 'not_offered', message: 'This request is still open in Jobber.' };
   return (
     <section style={card} aria-label="Closed lead">
@@ -1077,7 +1155,9 @@ function ClosedLeadPanel({ lead, closure, closeOutcome, onChanged }: { lead: Lea
       {closure.reason === 'postponed' && closure.checkBackOn && (
         <p style={{ margin: 0, fontSize: 14, color: '#374151' }}>Comes back to Do now on <strong>{formatDay(closure.checkBackOn)}</strong>.</p>
       )}
-      {reopened === undefined ? closeFollowUps(archive, jobberUrl, false) : closeFollowUps(reopened, jobberUrl, true)}
+      {reopened === undefined
+        ? closeFollowUps(archive, jobberUrl, false, <TrelloLine lead={lead} result={closeOutcome?.trello} reopening={false} postponed={closure.reason === 'postponed'} />)
+        : closeFollowUps(reopened.archive, jobberUrl, true, <TrelloLine lead={lead} result={reopened.trello} reopening postponed={false} />)}
       <div style={actions}>
         {reopened === undefined
           ? <button type="button" style={btn} disabled={busy} onClick={() => { void reopen(); }}>{busy ? 'Reopening…' : 'Reopen lead'}</button>

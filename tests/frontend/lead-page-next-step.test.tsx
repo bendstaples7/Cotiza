@@ -19,6 +19,7 @@ const api = vi.hoisted(() => ({
   requestQuoteReview: vi.fn(),
   closeLead: vi.fn(),
   reopenLead: vi.fn(),
+  syncLeadTrello: vi.fn(),
   LEAD_CLOSE_REASONS: [
     { value: 'went_elsewhere', label: 'Went with someone else' },
     { value: 'too_small', label: 'Too small or not our work' },
@@ -184,5 +185,47 @@ describe('Lead page next step', () => {
     expect(screen.queryByRole('region', { name: 'Next step' })).not.toBeInTheDocument();
     await userEvent.click(within(panel).getByRole('button', { name: 'Reopen lead' }));
     expect(api.reopenLead).toHaveBeenCalledWith(REQ);
+  });
+
+  it('a closed lead shows the Trello card Cotiza moved to Bid Lost', async () => {
+    const closed = { reason: 'no_response' as const, label: 'No response', note: null, checkBackOn: null, closedAt: '2026-11-04T16:00:00Z', jobberArchived: true };
+    api.fetchLead.mockResolvedValue({
+      ...bundle,
+      trello: { configured: true, moved: [{ name: 'Bryan Waters - Wall Project', url: 'https://trello.com/c/abc' }] },
+      workflow: { ...workflow, bucket: 'closed', closed, action: { kind: 'none', label: 'Lead closed', why: 'Closed.', step: 'none', channel: 'other' } },
+    });
+    renderLead();
+    const panel = await screen.findByRole('region', { name: 'Closed lead' });
+    expect(within(panel).getByRole('link', { name: 'Bryan Waters - Wall Project' })).toHaveAttribute('href', 'https://trello.com/c/abc');
+    expect(within(panel).queryByText('Also move the Trello card.')).not.toBeInTheDocument();
+  });
+
+  it('a closed lead whose card was not moved offers to move it now, and shows a Trello failure with a retry', async () => {
+    const closed = { reason: 'no_response' as const, label: 'No response', note: null, checkBackOn: null, closedAt: '2026-11-04T16:00:00Z', jobberArchived: true };
+    api.fetchLead.mockResolvedValue({
+      ...bundle,
+      trello: { configured: true, moved: [] },
+      workflow: { ...workflow, bucket: 'closed', closed, action: { kind: 'none', label: 'Lead closed', why: 'Closed.', step: 'none', channel: 'other' } },
+    });
+    api.syncLeadTrello.mockResolvedValue({ trello: { status: 'failed', message: 'Trello could not be updated. Move the card by hand. Trello had a server error (HTTP 500).', cards: [] }, trelloReminder: true });
+    renderLead();
+    const panel = await screen.findByRole('region', { name: 'Closed lead' });
+    await userEvent.click(within(panel).getByRole('button', { name: 'Move its Trello card now' }));
+    expect(api.syncLeadTrello).toHaveBeenCalledWith(REQ);
+    expect(await within(panel).findByRole('alert')).toHaveTextContent('HTTP 500');
+    expect(within(panel).getByRole('button', { name: 'Retry Trello' })).toBeInTheDocument();
+  });
+
+  it('a lead lost in Trello offers "Close in Cotiza too"', async () => {
+    api.fetchLead.mockResolvedValue({
+      ...bundle,
+      workflow: { ...workflow, bucket: 'review', lostInTrello: true, secondary: null, action: { kind: 'lost_in_trello', label: 'Close in Cotiza too', why: 'Lost in Trello: the card is in Bid Lost.', step: 'none', channel: 'other' } },
+    });
+    api.closeLead.mockResolvedValue({ closure: {}, jobberNote: null, jobberArchive: { status: 'archived' }, trello: { status: 'already', message: 'The Trello card was already in Bid Lost.', cards: [] }, trelloReminder: false });
+    renderLead();
+    const step = await screen.findByRole('region', { name: 'Next step' });
+    await userEvent.click(within(step).getByRole('button', { name: 'Close in Cotiza too' }));
+    expect(api.closeLead).toHaveBeenCalledWith(REQ, { reason: 'other', note: 'Already in Bid Lost in Trello' });
+    expect(within(step).queryByRole('button', { name: 'Mark done' })).not.toBeInTheDocument();
   });
 });
