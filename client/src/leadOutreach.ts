@@ -86,10 +86,10 @@ export function buildOutreach(input: { clientName: string | null; title: string 
  * - reply: thanks them for getting back to us, then any asks.
  * - quote_update: the handbook's "quote still being created" update.
  * - quote_follow_up: the handbook's "quote sent, follow up" check-in.
- * - draft_quote / review / none: no customer message.
+ * - draft_quote / ben_edits / wait_review / send_quote / review / none: no customer message.
  */
 export function buildActionMessage(kind: LeadActionKind, input: { clientName: string | null; title: string | null; items: LeadInfoItem[] }): OutreachMessages | null {
-  if (kind === 'draft_quote' || kind === 'review' || kind === 'none') return null;
+  if (kind === 'draft_quote' || kind === 'ben_edits' || kind === 'wait_review' || kind === 'send_quote' || kind === 'review' || kind === 'none') return null;
   const base = buildOutreach(input);
   const name = firstName(input.clientName);
   const project = (input.title ?? '').trim() || 'project';

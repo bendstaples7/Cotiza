@@ -6,6 +6,7 @@ import {
   fetchLead,
   fetchLeadPhotoUrl,
   logLeadContact,
+  requestQuoteReview,
   retryJobberNote,
   sendLeadText,
   setLeadNextContact,
@@ -208,8 +209,10 @@ const PROGRESS_STEPS: Array<{ key: LeadWorkflow['progress']; label: string }> = 
   { key: 'lead_in', label: 'Lead in' },
   { key: 'getting_info', label: 'Getting info' },
   { key: 'ready_to_quote', label: 'Ready to quote' },
-  { key: 'quote_drafted', label: 'Quote drafted' },
-  { key: 'quote_sent', label: 'Quote sent' },
+  { key: 'quote_drafted', label: 'Drafting' },
+  { key: 'ben_review', label: 'Ben review' },
+  { key: 'ready_to_send', label: 'Ready to send' },
+  { key: 'quote_sent', label: 'Sent' },
 ];
 
 function ProgressBar({ progress }: { progress: LeadWorkflow['progress'] }) {
@@ -313,6 +316,24 @@ function NextStepPanel({ lead, workflow, onChanged, panelRef }: { lead: LeadBund
     }
   };
 
+  const stageQuote = workflow.quoteStage?.quote ?? null;
+  const sendToBen = async () => {
+    if (!stageQuote) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await requestQuoteReview(lead.requestId, stageQuote.id);
+      setNotice(result.jobberNote?.status === 'failed'
+        ? { text: 'Marked as with Ben. Couldn\u2019t add the Jobber note; retry it above.', warn: true }
+        : { text: 'Marked as with Ben for review.', warn: false });
+      onChanged();
+    } catch (err) {
+      setError((err as ErrorResponse).message ?? 'Could not save.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(text);
@@ -365,11 +386,36 @@ function NextStepPanel({ lead, workflow, onChanged, panelRef }: { lead: LeadBund
         </div>
       )}
 
-      {action.kind === 'draft_quote' && (
+      {(action.kind === 'draft_quote' || action.kind === 'ben_edits') && !stageQuote && (
         <>
           <p style={{ ...muted, margin: 0 }}>We have what we need. Draft the quote in Jobber from the request and the assumptions below, then mark this done.</p>
           <div style={actions}>
             {jobberUrl && <a style={primaryLink} href={jobberUrl} target="_blank" rel="noreferrer">Open in Jobber</a>}
+          </div>
+        </>
+      )}
+
+      {stageQuote && (action.kind === 'draft_quote' || action.kind === 'ben_edits') && (
+        <>
+          <p style={{ ...muted, margin: 0 }}>{action.kind === 'ben_edits' ? 'Make the changes in Jobber, then send it back to Ben.' : 'When the quote is finished in Jobber, send it to Ben for review.'}</p>
+          <div style={actions}>
+            {stageQuote.webUri && <a style={btnLink} href={stageQuote.webUri} target="_blank" rel="noreferrer">Open quote{stageQuote.number ? ` #${stageQuote.number}` : ''} in Jobber</a>}
+            <button type="button" style={primaryBtn} disabled={busy} onClick={() => { void sendToBen(); }}>{busy ? 'Saving…' : 'Sent to Ben for review'}</button>
+          </div>
+        </>
+      )}
+
+      {action.kind === 'wait_review' && (
+        <div style={actions}>
+          {stageQuote?.webUri && <a style={btnLink} href={stageQuote.webUri} target="_blank" rel="noreferrer">Open quote{stageQuote.number ? ` #${stageQuote.number}` : ''} in Jobber</a>}
+        </div>
+      )}
+
+      {action.kind === 'send_quote' && (
+        <>
+          <p style={{ ...muted, margin: 0 }}>Ben approved it. Send it from Jobber (email is the default), then mark this done.</p>
+          <div style={actions}>
+            {(stageQuote?.webUri ?? jobberUrl) && <a style={primaryLink} href={(stageQuote?.webUri ?? jobberUrl)!} target="_blank" rel="noreferrer">Open quote{stageQuote?.number ? ` #${stageQuote.number}` : ''} in Jobber</a>}
           </div>
         </>
       )}
@@ -407,7 +453,7 @@ function NextStepPanel({ lead, workflow, onChanged, panelRef }: { lead: LeadBund
         </>
       )}
 
-      {action.kind !== 'review' && action.kind !== 'none' && (
+      {action.kind !== 'review' && action.kind !== 'none' && action.kind !== 'wait_review' && (
         <div style={doneRow}>
           <button type="button" style={doneBtn} disabled={busy} onClick={() => { void markDone(); }}>Mark done</button>
           <span style={{ fontSize: 14, color: '#4b5563' }}>
@@ -747,7 +793,8 @@ const back: React.CSSProperties = { color: '#1d4ed8', textDecoration: 'none', fo
 const twoCol: React.CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 20, alignItems: 'flex-start' };
 const mainCol: React.CSSProperties = { flex: '999 1 520px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 };
 const sideCol: React.CSSProperties = { flex: '1 1 300px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 };
-const progressList: React.CSSProperties = { listStyle: 'none', margin: 0, padding: 0, display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 8 };
+// Seven steps: on a phone they wrap onto two rows instead of squeezing the labels.
+const progressList: React.CSSProperties = { listStyle: 'none', margin: 0, padding: 0, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(84px, 1fr))', gap: 8 };
 const nextStepCard: React.CSSProperties = { background: '#fff', border: '2px solid #1d4ed8', borderRadius: 12, padding: 20, display: 'flex', flexDirection: 'column', gap: 14, scrollMarginTop: 16 };
 const eyebrow: React.CSSProperties = { fontSize: 12, fontWeight: 700, color: '#1d4ed8', textTransform: 'uppercase', letterSpacing: '0.06em' };
 const fieldLabel: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: '#374151' };

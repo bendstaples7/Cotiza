@@ -15,6 +15,7 @@
  * The handbook also says a lead with no quote 3+ days after it came in gets a "still working on
  * your quote" update.
  */
+import type { QuoteStage } from './lead-quote-stage.js';
 import type { ContactEvent } from './lead-contact-service.js';
 
 // ── Chicago calendar days ──────────────────────────────────────
@@ -143,8 +144,9 @@ export function handbookCadence(events: ContactEvent[], now: number): Cadence {
 // ── Next action ────────────────────────────────────────────────
 
 export type LeadBucket = 'do_now' | 'waiting' | 'review';
-export type LeadActionKind = 'intro_text' | 'reply' | 'ask_info' | 'quote_update' | 'draft_quote' | 'quote_follow_up' | 'follow_up' | 'review' | 'none';
-export type LeadProgress = 'lead_in' | 'getting_info' | 'ready_to_quote' | 'quote_drafted' | 'quote_sent';
+export type LeadActionKind = 'intro_text' | 'reply' | 'ask_info' | 'quote_update' | 'draft_quote' | 'ben_edits' | 'wait_review' | 'send_quote' | 'quote_follow_up' | 'follow_up' | 'review' | 'none';
+/** quote_drafted is the Drafting step; ben_review and ready_to_send follow it before quote_sent. */
+export type LeadProgress = 'lead_in' | 'getting_info' | 'ready_to_quote' | 'quote_drafted' | 'ben_review' | 'ready_to_send' | 'quote_sent';
 export type PlanState = 'done' | 'missed' | 'due' | 'upcoming';
 
 export interface LeadAction {
@@ -177,6 +179,8 @@ export interface LeadWorkflow {
   likelySpam: boolean;
   notALead: boolean;
   plan: PlanRow[];
+  /** Where the quote is once one is drafted; null when no quote stage was looked up. */
+  quoteStage: QuoteStage | null;
 }
 
 export interface WorkflowInput {
@@ -187,6 +191,8 @@ export interface WorkflowInput {
   notALead: boolean;
   /** Jobber quotes on the request, when known. Open leads normally have none (Jobber marks a quoted request converted). */
   quotes?: Array<{ status: string | null }>;
+  /** Where the quote is (drafting, with Ben, ready to send, sent), from lead-quote-stage.ts. */
+  quoteStage?: QuoteStage | null;
   now: number;
 }
 
@@ -268,6 +274,23 @@ export function computeLeadWorkflow(input: WorkflowInput): LeadWorkflow {
   const quoteDrafted = quoteStatuses.length > 0;
   const oldNoQuote = (ageDays ?? 0) >= QUOTE_UPDATE_AFTER_DAYS && !quoteUpdateRecent;
 
+  const stage = quoteDrafted && !quoteSent ? input.quoteStage ?? null : null;
+  const withBen = stage?.kind === 'ben_review';
+  const cadenceDue = next.overdue || next.dueToday;
+  const stageAction = (prefix = ''): LeadAction | null => {
+    if (!stage) return null;
+    const n = stage.quote?.number ? `#${stage.quote.number}` : '';
+    const why = `${prefix}${stage.why}`;
+    switch (stage.kind) {
+      case 'drafting': return { kind: 'draft_quote', label: n ? `Finish quote ${n}` : 'Finish the quote', why, step: 'draft_quote', channel: 'other' };
+      case 'changes': return { kind: 'ben_edits', label: 'Make Ben\u2019s edits', why, step: 'draft_quote', channel: 'other' };
+      case 'ben_review': return { kind: 'wait_review', label: 'Waiting on Ben\u2019s review', why, step: 'none', channel: 'other' };
+      case 'ready_to_send': return { kind: 'send_quote', label: n ? `Send quote ${n} in Jobber` : 'Send the quote in Jobber', why, step: 'send_quote', channel: 'other' };
+      case 'unknown': return { kind: 'draft_quote', label: 'Check the quote with Ben', why, step: 'draft_quote', channel: 'other' };
+      default: return null;
+    }
+  };
+
   let action: LeadAction;
   if (input.notALead) {
     action = { kind: 'review', label: 'Archive in Jobber', why: 'Marked as not a lead. Archive it in Jobber to clear it.', step: 'review', channel: 'other' };
@@ -279,15 +302,20 @@ export function computeLeadWorkflow(input: WorkflowInput): LeadWorkflow {
     // Their message gets an answer today. When we can quote, the answer is that the quote is coming.
     action = !info.readyToQuote
       ? { kind: 'reply', label: 'Reply today', why: 'They got back to us. Answer the same day.', step: 'reply', channel: 'text' }
-      : quoteDrafted || !oldNoQuote
-        ? { kind: 'draft_quote', label: quoteDrafted ? 'Finish the quote' : 'Draft quote', why: 'They replied and we have what we need to quote. Answer them, then get the quote out.', step: 'draft_quote', channel: 'other' }
-        : { kind: 'quote_update', label: 'Reply: quote is coming', why: `They replied and the lead is ${ageDays} days old with no quote. Answer today and let them know it’s coming.`, step: 'quote_update', channel: 'text' };
+      : quoteDrafted
+        ? stageAction('They replied: answer them today. ') ?? { kind: 'draft_quote', label: 'Finish the quote', why: 'They replied and we have what we need to quote. Answer them, then get the quote out.', step: 'draft_quote', channel: 'other' }
+        : !oldNoQuote
+          ? { kind: 'draft_quote', label: 'Draft quote', why: 'They replied and we have what we need to quote. Answer them, then get the quote out.', step: 'draft_quote', channel: 'other' }
+          : { kind: 'quote_update', label: 'Reply: quote is coming', why: `They replied and the lead is ${ageDays} days old with no quote. Answer today and let them know it\u2019s coming.`, step: 'quote_update', channel: 'text' };
+  } else if (withBen && cadenceDue && oldNoQuote) {
+    // While Ben reviews, the customer still hears from us on the handbook schedule.
+    action = { kind: 'quote_update', label: 'Send \u201cquote in progress\u201d text', why: `Quote is with Ben for review and the lead is ${ageDays} days old. Let them know it\u2019s coming.`, step: 'quote_update', channel: 'text' };
   } else if (quoteDrafted) {
-    action = { kind: 'draft_quote', label: 'Finish the quote', why: 'A draft quote is in Jobber. Finish it and send it.', step: 'draft_quote', channel: 'other' };
+    action = stageAction() ?? { kind: 'draft_quote', label: 'Finish the quote', why: 'A draft quote is in Jobber. Finish it and send it.', step: 'draft_quote', channel: 'other' };
   } else if (cadence.count === 0) {
     action = { kind: 'intro_text', label: 'Send intro text', why: likelySpam ? 'No project described yet. Send one intro text or mark it not a lead.' : 'Nobody has contacted them yet.', step: 'intro_text', channel: 'text' };
   } else if (info.readyToQuote && oldNoQuote) {
-    action = { kind: 'quote_update', label: 'Send “quote in progress” text', why: `Lead is ${ageDays} days old with no quote. Let them know it’s coming.`, step: 'quote_update', channel: 'text' };
+    action = { kind: 'quote_update', label: 'Send \u201cquote in progress\u201d text', why: `Lead is ${ageDays} days old with no quote. Let them know it\u2019s coming.`, step: 'quote_update', channel: 'text' };
   } else if (info.readyToQuote) {
     action = { kind: 'draft_quote', label: 'Draft quote', why: 'We have what we need to quote.', step: 'draft_quote', channel: 'other' };
   } else if (info.firstAsk) {
@@ -299,9 +327,13 @@ export function computeLeadWorkflow(input: WorkflowInput): LeadWorkflow {
 
   const bucket: LeadBucket = input.notALead || likelySpam ? 'review'
     : quoteSettled ? 'waiting'
-    : ((info.readyToQuote || quoteDrafted) && !quoteSent) || next.overdue || next.dueToday ? 'do_now'
+    // With Ben and nothing due with the customer: nothing for the team to do.
+    : action.kind === 'wait_review' ? 'waiting'
+    : ((info.readyToQuote || quoteDrafted) && !quoteSent) || cadenceDue ? 'do_now'
     : 'waiting';
   const progress: LeadProgress = quoteSent ? 'quote_sent'
+    : stage?.kind === 'ready_to_send' ? 'ready_to_send'
+    : stage?.kind === 'ben_review' ? 'ben_review'
     : quoteDrafted ? 'quote_drafted'
     : info.readyToQuote ? 'ready_to_quote'
     : cadence.count === 0 && !cadence.engaged ? 'lead_in'
@@ -318,5 +350,6 @@ export function computeLeadWorkflow(input: WorkflowInput): LeadWorkflow {
     likelySpam,
     notALead: input.notALead,
     plan: planRows(cadence, next, today),
+    quoteStage: stage ?? (quoteSent ? input.quoteStage ?? null : null),
   };
 }

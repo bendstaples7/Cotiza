@@ -1430,8 +1430,25 @@ export interface LeadContactStatus {
 }
 
 export type LeadBucket = 'do_now' | 'waiting' | 'review';
-export type LeadActionKind = 'intro_text' | 'reply' | 'ask_info' | 'quote_update' | 'draft_quote' | 'quote_follow_up' | 'follow_up' | 'review' | 'none';
-export type LeadProgress = 'lead_in' | 'getting_info' | 'ready_to_quote' | 'quote_drafted' | 'quote_sent';
+export type LeadActionKind = 'intro_text' | 'reply' | 'ask_info' | 'quote_update' | 'draft_quote' | 'ben_edits' | 'wait_review' | 'send_quote' | 'quote_follow_up' | 'follow_up' | 'review' | 'none';
+export type LeadProgress = 'lead_in' | 'getting_info' | 'ready_to_quote' | 'quote_drafted' | 'ben_review' | 'ready_to_send' | 'quote_sent';
+
+/** Where a drafted quote is, so the team knows whose move it is (worker: lead-quote-stage.ts). */
+export interface LeadQuoteStage {
+  kind: 'none' | 'drafting' | 'changes' | 'ben_review' | 'ready_to_send' | 'sent' | 'unknown';
+  quote: { id: string; number: string | null; webUri: string | null } | null;
+  label: string;
+  why: string;
+}
+
+/** The team sent a draft quote to Ben for review. */
+export async function requestQuoteReview(requestId: string, quoteId: string): Promise<{ requestedAt: string; quoteStage: LeadQuoteStage; jobberNote?: JobberNoteStatus | null }> {
+  const res = await fetch(API_BASE + '/api/leads/' + encodeURIComponent(requestId) + '/quotes/' + encodeURIComponent(quoteId) + '/review-request', {
+    method: 'POST',
+    headers: { ...authHeaders() },
+  });
+  return handleResponseWithToast(res);
+}
 
 /** A lead's place in the handbook follow-up cadence and the one next action (worker: lead-workflow.ts). */
 export interface LeadWorkflow {
@@ -1445,6 +1462,8 @@ export interface LeadWorkflow {
   likelySpam: boolean;
   notALead: boolean;
   plan: Array<{ label: string; detail: string; state: 'done' | 'missed' | 'due' | 'upcoming' }>;
+  /** Where the quote is once one is drafted; null before that. */
+  quoteStage?: LeadQuoteStage | null;
 }
 
 export interface LoggedLeadContact {

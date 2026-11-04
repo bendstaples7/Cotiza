@@ -475,7 +475,7 @@ export default function RequestQueuePage() {
                 {w?.action.label ?? 'Open lead'}
               </button>
             )}
-            {w && w.bucket !== 'review' && (w.progress === 'ready_to_quote' || (summary?.total ?? 0) > 0) && (
+            {w && w.bucket !== 'review' && (w.progress === 'ready_to_quote' || quoteChip(w) || (summary?.total ?? 0) > 0) && (
               <span style={readinessChipStyle(w, summary)}>{readinessText(w, summary)}</span>
             )}
             <button type="button" style={linkButtonStyle} onClick={() => handleRequestClick(req)}>Quote builder</button>
@@ -715,7 +715,24 @@ function dueColor(w: LeadWorkflow): string {
   return w.next.overdue ? '#b91c1c' : w.next.dueToday ? '#9a3412' : '#1e40af';
 }
 
+const QUOTE_CHIP: Record<string, { background: string; color: string }> = {
+  drafting: { background: '#fef3c7', color: '#92400e' },
+  changes: { background: '#fef3c7', color: '#92400e' },
+  ben_review: { background: '#dbeafe', color: '#1e40af' },
+  ready_to_send: { background: '#dcfce7', color: '#166534' },
+  sent: { background: '#dcfce7', color: '#166534' },
+  unknown: { background: '#f3f4f6', color: '#4b5563' },
+};
+
+/** Once a quote is drafted, the chip says where it is (drafting, with Ben, ready to send). */
+function quoteChip(w: LeadWorkflow | null) {
+  const st = w?.quoteStage;
+  return st && st.kind !== 'none' && QUOTE_CHIP[st.kind] ? st : null;
+}
+
 function readinessText(w: LeadWorkflow | null, summary: LeadInfoSummary | undefined): string {
+  const st = quoteChip(w);
+  if (st) return st.label;
   if (w?.progress === 'ready_to_quote' || summary?.readyToQuote) return 'Ready to quote';
   if (w?.action.kind === 'ask_info') return 'Need: ' + w.action.label.replace(/^Text: ask for /, '');
   if (summary && summary.total > 0) return `${summary.open + summary.asked} info needed`;
@@ -723,6 +740,8 @@ function readinessText(w: LeadWorkflow | null, summary: LeadInfoSummary | undefi
 }
 
 function readinessChipStyle(w: LeadWorkflow | null, summary: LeadInfoSummary | undefined): React.CSSProperties {
+  const st = quoteChip(w);
+  if (st) return { fontSize: 12, fontWeight: 600, padding: '4px 8px', borderRadius: 999, ...QUOTE_CHIP[st.kind] };
   const ready = w?.progress === 'ready_to_quote' || summary?.readyToQuote;
   const none = !ready && !(summary && summary.total > 0) && w?.action.kind !== 'ask_info';
   return {

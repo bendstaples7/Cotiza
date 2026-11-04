@@ -48,7 +48,8 @@ export type NoteAction =
   | { kind: 'not_a_lead' }
   | { kind: 'not_a_lead_cleared' }
   | { kind: 'lead_closed'; reason: string; note?: string | null; checkBackOn?: string | null }
-  | { kind: 'lead_reopened' };
+  | { kind: 'lead_reopened' }
+  | { kind: 'review_requested'; quoteNumber: string | null };
 
 const CONTACT_WORDS: Record<string, [string, string]> = {
   call: ['Call logged', 'Call from customer logged'],
@@ -80,6 +81,7 @@ export function formatJobberNote(action: NoteAction, userName: string): string {
       return `${COTIZA_NOTE_PREFIX} Lead closed by ${by} — ${clean(action.reason)}${back}${action.note ? `: ${excerpt(action.note)}` : ''}`;
     }
     case 'lead_reopened': return `${COTIZA_NOTE_PREFIX} Lead reopened by ${by}`;
+    case 'review_requested': return `${COTIZA_NOTE_PREFIX} Quote ${action.quoteNumber ? `#${clean(action.quoteNumber)}` : ''} sent to Ben for review by ${by}`.replace('Quote  sent', 'Quote sent');
   }
 }
 

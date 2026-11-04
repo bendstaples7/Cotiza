@@ -423,7 +423,7 @@ export const REVIEW_WRITE_TOOLS = [
   },
   {
     name: 'record_quote_review',
-    description: 'Save a new version of one quote\'s review record (edit register, closed findings, verification notes) in the Cotiza ledger. The newest version is current; earlier versions are kept. Do not include customer contact details. Never writes to Jobber.',
+    description: 'Save a new version of one quote\'s review record (edit register, closed findings, verification notes) in the Cotiza ledger. The newest version is current; earlier versions are kept. Set record.decision to "approved" when Ben\'s review clears the quote to send, or "changes_requested" when the team must edit it first: the lead page uses it to show whose move it is. Do not include customer contact details. Never writes to Jobber.',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     inputSchema: {
       type: 'object',
@@ -435,7 +435,7 @@ export const REVIEW_WRITE_TOOLS = [
         quoteNumber: { type: 'string' },
         record: {
           type: 'object',
-          description: 'Full current record, e.g. { "edit_register": [...], "closed_findings": [...], "verification": [...] }',
+          description: 'Full current record, e.g. { "decision": "approved" | "changes_requested", "edit_register": [...], "closed_findings": [...], "verification": [...] }',
         },
       },
     },
