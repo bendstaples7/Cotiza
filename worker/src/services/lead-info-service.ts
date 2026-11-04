@@ -112,7 +112,7 @@ export class LeadInfoService {
     return Object.fromEntries([...grouped].map(([id, items]) => [id, summarize(items)]));
   }
 
-  async add(requestId: string, input: { question: unknown; required?: unknown }, by: { userId: string; via: LeadInfoVia }): Promise<LeadInfoItem> {
+  async add(requestId: string, input: { question?: unknown; required?: unknown }, by: { userId: string; via: LeadInfoVia }): Promise<LeadInfoItem> {
     const id = requireRequestId(requestId);
     const question = cleanText(input.question, 'question', MAX_QUESTION, 3);
     if (input.required !== undefined && typeof input.required !== 'boolean') throw new LeadInfoError('required must be true or false.');
