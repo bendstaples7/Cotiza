@@ -16,7 +16,7 @@
  * your quote" update.
  */
 import type { QuoteStage } from './lead-quote-stage.js';
-import type { ContactEvent } from './lead-contact-service.js';
+import type { ContactEvent, LeadClosure } from './lead-contact-service.js';
 
 // ── Chicago calendar days ──────────────────────────────────────
 
@@ -143,8 +143,9 @@ export function handbookCadence(events: ContactEvent[], now: number): Cadence {
 
 // ── Next action ────────────────────────────────────────────────
 
-export type LeadBucket = 'do_now' | 'waiting' | 'review';
-export type LeadActionKind = 'intro_text' | 'reply' | 'ask_info' | 'quote_update' | 'draft_quote' | 'ben_edits' | 'wait_review' | 'send_quote' | 'quote_follow_up' | 'follow_up' | 'review' | 'none';
+/** closed: the team closed the lead (a postponed one comes back to do_now on its check-back date). */
+export type LeadBucket = 'do_now' | 'waiting' | 'review' | 'closed';
+export type LeadActionKind = 'intro_text' | 'reply' | 'ask_info' | 'quote_update' | 'draft_quote' | 'ben_edits' | 'wait_review' | 'send_quote' | 'quote_follow_up' | 'follow_up' | 'check_back' | 'review' | 'none';
 /** quote_drafted is the Drafting step; ben_review and ready_to_send follow it before quote_sent. */
 export type LeadProgress = 'lead_in' | 'getting_info' | 'ready_to_quote' | 'quote_drafted' | 'ben_review' | 'ready_to_send' | 'quote_sent';
 export type PlanState = 'done' | 'missed' | 'due' | 'upcoming';
@@ -181,6 +182,8 @@ export interface LeadWorkflow {
   plan: PlanRow[];
   /** Where the quote is once one is drafted; null when no quote stage was looked up. */
   quoteStage: QuoteStage | null;
+  /** The team closed this lead (reason, check-back date for a postponed one); null when open. */
+  closed: LeadClosure | null;
 }
 
 export interface WorkflowInput {
@@ -193,6 +196,8 @@ export interface WorkflowInput {
   quotes?: Array<{ status: string | null }>;
   /** Where the quote is (drafting, with Ben, ready to send, sent), from lead-quote-stage.ts. */
   quoteStage?: QuoteStage | null;
+  /** The team closed this lead; a postponed one returns as "Check back in" on its date. */
+  closed?: LeadClosure | null;
   now: number;
 }
 
@@ -252,6 +257,10 @@ function planRows(c: Cadence, next: LeadWorkflow['next'], today: string): PlanRo
 }
 
 export function computeLeadWorkflow(input: WorkflowInput): LeadWorkflow {
+  return applyClosure(computeOpenWorkflow(input), input.closed, input.now);
+}
+
+function computeOpenWorkflow(input: WorkflowInput): LeadWorkflow {
   const { events, nextSet, info, now } = input;
   const today = chicagoDate(now);
   const cadence = handbookCadence(events, now);
@@ -354,5 +363,39 @@ export function computeLeadWorkflow(input: WorkflowInput): LeadWorkflow {
     notALead: input.notALead,
     plan: planRows(cadence, next, today),
     quoteStage: stage ?? (quoteSent ? input.quoteStage ?? null : null),
+    closed: input.closed ?? null,
+  };
+}
+
+/**
+ * A closed lead leaves the queue. A postponed one comes back to Do now on its check-back date with
+ * "Check back in" (the handbook follows up on postponed projects every 3 months).
+ */
+export function applyClosure(w: LeadWorkflow, closed: LeadClosure | null | undefined, now: number): LeadWorkflow {
+  if (!closed) return w;
+  const today = chicagoDate(now);
+  const due = closed.reason === 'postponed' && Boolean(closed.checkBackOn) && closed.checkBackOn! <= today;
+  // A lead marked "not a lead" stays in Review whatever else happened to it.
+  if (w.notALead) return { ...w, closed };
+  if (due) {
+    const on = closed.checkBackOn!;
+    const overdue = on < today;
+    return {
+      ...w, closed, bucket: 'do_now', stage: 'Postponed → every 3 months',
+      next: { on, source: 'set', overdue, dueToday: on === today, daysOverdue: Math.max(0, daysBetween(on, today)) },
+      action: { kind: 'check_back', label: 'Check back in', why: `Postponed${closed.note ? ` (${closed.note})` : ''}. See if they’re ready to go ahead.`, step: 'check_back', channel: 'text' },
+      // The open-lead cadence no longer applies: one row for the check-back.
+      plan: [{ label: `${formatShortDay(on)} · Check back in`, detail: overdue ? `Missed: was due ${formatShortDay(on)}. Do it today.` : 'Due today', state: overdue ? 'missed' : 'due' }],
+    };
+  }
+  return {
+    ...w, closed, bucket: 'closed',
+    // No contact is due on a closed lead: next shows the check-back day for a postponed one, and nothing is "due".
+    next: { on: closed.checkBackOn ?? today, source: 'set', overdue: false, dueToday: false, daysOverdue: 0 },
+    stage: closed.reason === 'postponed' ? `Postponed → back on ${formatShortDay(closed.checkBackOn ?? today)}` : `Closed · ${closed.label}`,
+    action: { kind: 'none', label: 'Lead closed', why: `Closed: ${closed.label}${closed.note ? ` — ${closed.note}` : ''}.`, step: 'none', channel: 'other' },
+    plan: closed.reason === 'postponed' && closed.checkBackOn
+      ? [{ label: `${formatShortDay(closed.checkBackOn)} · Check back in`, detail: 'Postponed; it comes back to Do now that day', state: 'upcoming' }]
+      : [],
   };
 }

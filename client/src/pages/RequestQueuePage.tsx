@@ -407,7 +407,9 @@ export default function RequestQueuePage() {
   const review = leads.filter((r) => workflowOf(r)?.bucket === 'review');
   const pending = leads.filter((r) => !(r.jobberRequestId! in contactStatuses));
   const unknown = leads.filter((r) => r.jobberRequestId! in contactStatuses && !workflowOf(r));
-  const readyCount = leads.filter((r) => workflowOf(r)?.progress === 'ready_to_quote' && workflowOf(r)?.bucket !== 'review').length;
+  // Closed leads normally never reach the queue (the server leaves them out); one closed since the
+  // last load is not shown or counted.
+  const readyCount = leads.filter((r) => workflowOf(r)?.progress === 'ready_to_quote' && workflowOf(r)?.bucket !== 'review' && workflowOf(r)?.bucket !== 'closed').length;
   const statusesLoaded = pending.length === 0;
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
 
@@ -479,6 +481,7 @@ export default function RequestQueuePage() {
               <span style={readinessChipStyle(w, summary)}>{readinessText(w, summary)}</span>
             )}
             <button type="button" style={linkButtonStyle} onClick={() => handleRequestClick(req)}>Quote builder</button>
+            <button type="button" style={linkButtonStyle} onClick={() => openRequest(req, 'close')}>Close lead</button>
           </div>
         </div>
       </article>
@@ -564,6 +567,16 @@ export default function RequestQueuePage() {
       {jobberStatus?.status === 'live' && !jobberStatus.complete && (
         <div role="status" style={alertStyle}>
           Only the newest Jobber requests were checked, so some older open leads from the last {jobberStatus.days} days may be missing.
+        </div>
+      )}
+      {jobberStatus?.status === 'live' && jobberStatus.closuresUnavailable && (
+        <div role="status" style={alertStyle}>
+          Cotiza couldn&rsquo;t read which leads were closed, so some leads shown here may already be closed.
+        </div>
+      )}
+      {jobberStatus?.status === 'live' && jobberStatus.postponedUnavailable && (
+        <div role="status" style={alertStyle}>
+          Some postponed leads due a check-back couldn&rsquo;t be read from Jobber and are missing here.
         </div>
       )}
 
