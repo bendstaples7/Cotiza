@@ -163,6 +163,26 @@ describe('PhoneContextService', () => {
       expect(new URL(firstCallUrl).searchParams.getAll('phoneNumbers')).toEqual(['+15551234567']);
     });
 
+    it('does not fail the read when only the optional conversations lookup fails', async () => {
+      const fetchMock = vi.fn().mockImplementation(async (u: string) => (new URL(u).pathname === '/v1/conversations'
+        ? { ok: false, status: 404, json: async () => ({}) }
+        : { ok: true, status: 200, json: async () => ({ data: [], totalItems: 0, nextPageToken: null }) }));
+      vi.stubGlobal('fetch', fetchMock);
+      expect(await new PhoneContextService('sk-test-key', 'PN123').fetchContextResult('+15551234567')).toEqual({ status: 'ok', text: '' });
+      expect(fetchMock.mock.calls.some(([u]) => new URL(String(u)).pathname === '/v1/conversations')).toBe(true);
+    });
+
+    it('still fails the read when a required lookup fails alongside the optional one', async () => {
+      const fetchMock = vi.fn().mockImplementation(async (u: string) => {
+        const path = new URL(u).pathname;
+        if (path === '/v1/conversations') return { ok: false, status: 404, json: async () => ({}) };
+        if (path === '/v1/messages') return { ok: false, status: 401, json: async () => ({}) };
+        return { ok: true, status: 200, json: async () => ({ data: [], totalItems: 0, nextPageToken: null }) };
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      expect(await new PhoneContextService('sk-test-key', 'PN123').fetchContextResult('+15551234567')).toMatchObject({ status: 'failed', reason: expect.stringContaining('HTTP 401') });
+    });
+
     it('sends participants as a plain list', async () => {
       const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ data: [], totalItems: 0, nextPageToken: null }) });
       vi.stubGlobal('fetch', fetchMock);
