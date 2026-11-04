@@ -94,7 +94,7 @@ export class PhoneContextService {
 
   // ── Private HTTP helpers ───────────────────────────────────────
 
-  private async apiFetch<T>(path: string, params: Record<string, string | string[]> = {}): Promise<T | null> {
+  private async apiFetch<T>(path: string, params: Record<string, string | string[]> = {}, opts: { optional?: boolean } = {}): Promise<T | null> {
     const url = new URL(OPENPHONE_API_BASE + path);
     for (const [k, v] of Object.entries(params)) {
       // Quo takes list parameters as repeated keys (participants=+1…&participants=+1…), not JSON text.
@@ -111,13 +111,15 @@ export class PhoneContextService {
         signal: controller.signal,
       });
       if (!res.ok) {
+        console.error(`[quo] GET ${path} -> HTTP ${res.status}${opts.optional ? ' (optional)' : ''}`);
+        if (opts.optional) return null;
         this.lastReadFailed = true;
         this.lastFailure = quoFailureReason(res.status);
-        console.error(`[quo] GET ${path} -> HTTP ${res.status}`);
         return null;
       }
       return (await res.json()) as T;
     } catch {
+      if (opts.optional) return null;
       this.lastReadFailed = true;
       this.lastFailure = 'Quo could not be reached (network error or timeout).';
       return null;  // network failure or timeout — graceful degradation
@@ -154,17 +156,14 @@ export class PhoneContextService {
   private async fetchConversations(customerPhone: string): Promise<OpenPhoneConversation[]> {
     // Optional: only used when messages and calls come back empty. Quo answers 404 here for some
     // workspaces, which must not turn an otherwise good read into a failed one.
-    const failedBefore = this.lastReadFailed;
-    const failureBefore = this.lastFailure;
     const result = await this.apiFetch<ApiListResponse<OpenPhoneConversation>>(
       '/conversations',
       {
         maxResults: '10',
         phoneNumbers: [customerPhone],
       },
+      { optional: true },
     );
-    this.lastReadFailed = failedBefore;
-    this.lastFailure = failureBefore;
     return result?.data ?? [];
   }
 
@@ -209,20 +208,12 @@ export class PhoneContextService {
 
   // Transcripts and summaries are often absent (short calls, plan limits): a missing one is not a failed read.
   private async fetchTranscript(callId: string): Promise<OpenPhoneTranscript | null> {
-    const failedBefore = this.lastReadFailed;
-    const failureBefore = this.lastFailure;
-    const result = await this.apiFetch<{ data: OpenPhoneTranscript }>(`/call-transcripts/${callId}`);
-    this.lastReadFailed = failedBefore;
-    this.lastFailure = failureBefore;
+    const result = await this.apiFetch<{ data: OpenPhoneTranscript }>(`/call-transcripts/${callId}`, {}, { optional: true });
     return result?.data ?? null;
   }
 
   private async fetchCallSummary(callId: string): Promise<OpenPhoneCallSummary | null> {
-    const failedBefore = this.lastReadFailed;
-    const failureBefore = this.lastFailure;
-    const result = await this.apiFetch<{ data: OpenPhoneCallSummary }>(`/call-summaries/${callId}`);
-    this.lastReadFailed = failedBefore;
-    this.lastFailure = failureBefore;
+    const result = await this.apiFetch<{ data: OpenPhoneCallSummary }>(`/call-summaries/${callId}`, {}, { optional: true });
     return result?.data ?? null;
   }
 
