@@ -161,10 +161,21 @@ export default function RequestQueuePage() {
             .catch(() => undefined);
           // Last/next contact reads Jobber, Quo and Gmail per lead, so it arrives after the cards.
           // A slower response from an earlier load must not overwrite a newer one.
+          // Batches of 50 (the endpoint's limit); a failed batch marks its leads as unknown (null), never as "do now".
           const generation = ++contactLoadGeneration.current;
-          fetchLeadContactStatuses(leadIds.slice(0, 50))
-            .then(({ statuses }) => { if (generation === contactLoadGeneration.current) setContactStatuses(statuses); })
-            .catch(() => undefined);
+          if (!silent) setContactStatuses({});
+          for (let i = 0; i < leadIds.length; i += 50) {
+            const batch = leadIds.slice(i, i + 50);
+            fetchLeadContactStatuses(batch)
+              .then(({ statuses }) => {
+                if (generation !== contactLoadGeneration.current) return;
+                setContactStatuses((prev) => ({ ...prev, ...Object.fromEntries(batch.map((id) => [id, statuses[id] ?? null])) }));
+              })
+              .catch(() => {
+                if (generation !== contactLoadGeneration.current) return;
+                setContactStatuses((prev) => ({ ...prev, ...Object.fromEntries(batch.map((id) => [id, prev[id] ?? null])) }));
+              });
+          }
         } catch {
           // Lead badges are optional; never block the queue.
         }
@@ -386,12 +397,15 @@ export default function RequestQueuePage() {
   const leads = requests.filter((r) => r.jobberRequestId);
   const manual = requests.filter((r) => !r.jobberRequestId);
   const workflowOf = (r: ManualRequestWithDeathclock): LeadWorkflow | null => contactStatuses[r.jobberRequestId as string]?.workflow ?? null;
-  // Rows keep the queue's order (oldest first by default) inside each section.
-  const doNow = leads.filter((r) => { const w = workflowOf(r); return !w || w.bucket === 'do_now'; });
+  // Rows keep the queue's order (oldest first by default) inside each section. A lead whose next
+  // step is still loading, or could not be worked out, is never counted as "do now".
+  const doNow = leads.filter((r) => workflowOf(r)?.bucket === 'do_now');
   const waiting = leads.filter((r) => workflowOf(r)?.bucket === 'waiting');
   const review = leads.filter((r) => workflowOf(r)?.bucket === 'review');
+  const pending = leads.filter((r) => !(r.jobberRequestId! in contactStatuses));
+  const unknown = leads.filter((r) => r.jobberRequestId! in contactStatuses && !workflowOf(r));
   const readyCount = leads.filter((r) => workflowOf(r)?.progress === 'ready_to_quote' && workflowOf(r)?.bucket !== 'review').length;
-  const statusesLoaded = leads.length === 0 || leads.some((r) => r.jobberRequestId! in contactStatuses);
+  const statusesLoaded = pending.length === 0;
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
 
   const renderLeadRow = (req: ManualRequestWithDeathclock) => {
@@ -458,7 +472,9 @@ export default function RequestQueuePage() {
                 {w?.action.label ?? 'Open lead'}
               </button>
             )}
-            {w?.bucket !== 'review' && <span style={readinessChipStyle(w, summary)}>{readinessText(w, summary)}</span>}
+            {w && w.bucket !== 'review' && (w.progress === 'ready_to_quote' || (summary?.total ?? 0) > 0) && (
+              <span style={readinessChipStyle(w, summary)}>{readinessText(w, summary)}</span>
+            )}
             <button type="button" style={linkButtonStyle} onClick={() => handleRequestClick(req)}>Quote builder</button>
           </div>
         </div>
@@ -573,6 +589,16 @@ export default function RequestQueuePage() {
           {waiting.length > 0 && (
             <Section title="Waiting on customer" note="Nothing to do until the date shown. These move to Do now on their own.">
               {waiting.map(renderLeadRow)}
+            </Section>
+          )}
+          {pending.length > 0 && (
+            <Section title="Checking next steps" note="Reading contact history from Jobber, Quo and email.">
+              {pending.map(renderLeadRow)}
+            </Section>
+          )}
+          {unknown.length > 0 && (
+            <Section title="Next step unknown" note="Contact history could not be read right now. Open the lead to check it.">
+              {unknown.map(renderLeadRow)}
             </Section>
           )}
           {review.length > 0 && (

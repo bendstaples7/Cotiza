@@ -62,13 +62,17 @@ export default function LeadPage() {
     if (fromAction && lead && nextStepRef.current) nextStepRef.current.scrollIntoView?.({ block: 'start' });
   }, [fromAction, lead?.requestId]);
 
-  const replaceItem = (item: LeadInfoItem) => setLead((prev) => {
-    // A save that finishes after the user moved to another lead must not land on it.
-    if (!prev || prev.requestId !== item.requestId) return prev;
-    const exists = prev.infoNeeded.items.some((i) => i.id === item.id);
-    const items = exists ? prev.infoNeeded.items.map((i) => (i.id === item.id ? item : i)) : [...prev.infoNeeded.items, item];
-    return { ...prev, infoNeeded: { items, summary: summarize(items) } };
-  });
+  const replaceItem = (item: LeadInfoItem) => {
+    setLead((prev) => {
+      // A save that finishes after the user moved to another lead must not land on it.
+      if (!prev || prev.requestId !== item.requestId) return prev;
+      const exists = prev.infoNeeded.items.some((i) => i.id === item.id);
+      const items = exists ? prev.infoNeeded.items.map((i) => (i.id === item.id ? item : i)) : [...prev.infoNeeded.items, item];
+      return { ...prev, infoNeeded: { items, summary: summarize(items) } };
+    });
+    // The checklist decides the next action, so refresh it from the server.
+    reload();
+  };
 
   if (loading) return <div style={page}><p style={muted}>Loading lead…</p></div>;
   if (error || !lead) {
@@ -116,7 +120,7 @@ export default function LeadPage() {
       <div style={twoCol}>
         <div style={mainCol}>
           {workflow
-            ? <NextStepPanel lead={lead} workflow={workflow} onChanged={reload} panelRef={nextStepRef} />
+            ? <NextStepPanel lead={lead} workflow={withRequestedAction(workflow, fromAction)} onChanged={reload} panelRef={nextStepRef} />
             : <section style={card}><p style={muted}>The next step could not be worked out right now. The contact history below is still current.</p></section>}
         </div>
         <aside style={sideCol}>
@@ -187,6 +191,15 @@ export default function LeadPage() {
   );
 }
 
+/**
+ * The queue can open a lead with an action other than the workflow's, e.g. "Send intro text" on a
+ * lead sitting in Review. Only that case differs today; any other request keeps the workflow's action.
+ */
+function withRequestedAction(workflow: LeadWorkflow, requested: string | null): LeadWorkflow {
+  if (requested !== 'intro_text' || workflow.action.kind === 'intro_text' || workflow.action.kind !== 'review' && !workflow.likelySpam) return workflow;
+  return { ...workflow, action: { kind: 'intro_text', label: 'Send intro text', why: 'No project described yet. One intro text to find out what they need.', step: 'intro_text', channel: 'text' } };
+}
+
 const PROGRESS_STEPS: Array<{ key: LeadWorkflow['progress']; label: string }> = [
   { key: 'lead_in', label: 'Lead in' },
   { key: 'getting_info', label: 'Getting info' },
@@ -255,9 +268,16 @@ function NextStepPanel({ lead, workflow, onChanged, panelRef }: { lead: LeadBund
   const today = workflow.next.overdue || workflow.next.dueToday || workflow.bucket === 'do_now';
 
   const afterContact = async () => {
-    // The contact was made: let the cadence choose the next date again.
-    if (workflow.next.source === 'set') await setLeadNextContact(lead.requestId, null);
+    // The contact is logged whatever happens next, so never report it as failed after this point.
     setDoneAt(new Date().toISOString());
+    if (workflow.next.source === 'set') {
+      // Let the cadence choose the next date again.
+      try {
+        await setLeadNextContact(lead.requestId, null);
+      } catch {
+        setNotice({ text: 'Logged. The date set by hand could not be cleared, so change it below. Do not log this again.', warn: true });
+      }
+    }
     onChanged();
   };
 

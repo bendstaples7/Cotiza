@@ -106,4 +106,14 @@ describe('Lead page next step', () => {
     expect(api.setLeadNextContact).not.toHaveBeenCalled(); // the date was the cadence's, nothing to clear
     await waitFor(() => expect(api.fetchLead).toHaveBeenCalledTimes(2));
   });
+
+  it('a logged contact is not reported as failed when a hand-set date cannot be cleared', async () => {
+    api.fetchLead.mockResolvedValue({ ...bundle, workflow: { ...workflow, next: { ...workflow.next, source: 'set' } } });
+    api.setLeadNextContact.mockRejectedValue({ message: 'nope' });
+    renderLead();
+    const step = await screen.findByRole('region', { name: 'Next step' });
+    await userEvent.click(within(step).getByRole('button', { name: 'Mark done' }));
+    expect(await within(step).findByRole('status')).toHaveTextContent('Do not log this again');
+    expect(within(step).queryByRole('alert')).not.toBeInTheDocument();
+  });
 });

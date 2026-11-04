@@ -51,7 +51,7 @@ function renderQueue() {
 describe('Requests work queue', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.fetchLeadSummaries.mockResolvedValue({ summaries: {} });
+    api.fetchLeadSummaries.mockResolvedValue({ summaries: { A: { total: 2, open: 1, asked: 0, answered: 1, readyToQuote: false } } });
     api.fetchRequestJobberQuotes.mockResolvedValue({});
     api.setLeadNotALead.mockResolvedValue({ notALead: true });
     api.fetchRequestQueue.mockResolvedValue({
@@ -74,7 +74,8 @@ describe('Requests work queue', () => {
 
   it('sorts leads into Do now, Waiting on customer and Review with one action each', async () => {
     renderQueue();
-    const doNow = await screen.findByRole('region', { name: 'Do now' });
+    await screen.findByText('Overdue 2 days'); // next steps loaded
+    const doNow = screen.getByRole('region', { name: 'Do now' });
     expect(within(doNow).getByText('John Oconnell')).toBeInTheDocument();
     expect(within(doNow).getByText('Overdue 2 days')).toBeInTheDocument();
     expect(within(doNow).getByText('Step 1 · reach out on intake')).toBeInTheDocument();
@@ -90,11 +91,30 @@ describe('Requests work queue', () => {
     expect(within(review).getByText('Katherine Harris')).toBeInTheDocument();
     expect(within(review).getByRole('button', { name: 'Not a lead' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'How next contact is set' })).toBeInTheDocument();
+    // John has no checklist: no readiness chip.
+    expect(within(doNow).queryByText('No checklist yet')).not.toBeInTheDocument();
+  });
+
+  it('never counts a lead as "do now" before its next step is known', async () => {
+    api.fetchLeadContactStatuses.mockReturnValue(new Promise(() => {}));
+    renderQueue();
+    const pending = await screen.findByRole('region', { name: 'Checking next steps' });
+    expect(within(pending).getByText('John Oconnell')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Do now' })).not.toBeInTheDocument();
+  });
+
+  it('shows leads whose status failed as unknown, not as work to do', async () => {
+    api.fetchLeadContactStatuses.mockRejectedValue(new Error('boom'));
+    renderQueue();
+    const unknown = await screen.findByRole('region', { name: 'Next step unknown' });
+    expect(within(unknown).getByText('Anne Brady')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Do now' })).not.toBeInTheDocument();
   });
 
   it('opens the lead page with the action preselected', async () => {
     renderQueue();
-    const doNow = await screen.findByRole('region', { name: 'Do now' });
+    await screen.findByText('Overdue 2 days');
+    const doNow = screen.getByRole('region', { name: 'Do now' });
     await userEvent.click(within(doNow).getByRole('button', { name: 'Send intro text' }));
     expect(screen.getByTestId('where')).toHaveTextContent('/quotes/leads/J?action=intro_text');
   });

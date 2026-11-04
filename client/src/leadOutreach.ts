@@ -131,6 +131,25 @@ export function buildActionMessage(kind: LeadActionKind, input: { clientName: st
     return {
       ...base,
       text: base.text.replace(`Hi ${name}, this is Chicago Reno about your ${project} request.`, `Hi ${name}, thanks for getting back to us about your ${project} request.`),
+      emailBody: base.emailBody.replace(`Thanks for reaching out to Chicago Reno about your ${project} request.`, `Thanks for getting back to us about your ${project} request.`),
+    };
+  }
+  if (kind === 'follow_up' && base.asks.length === 0) {
+    // No checklist yet: a check-in, not a first contact.
+    return {
+      ...base,
+      text: [
+        `Hi ${name}, this is Chicago Reno following up on your ${project} request.`,
+        `Is this still something you'd like a quote for? If you can send a few photos and any details, we'll get it put together.`,
+        '— Chicago Reno',
+      ].join('\n\n'),
+      emailSubject: `Following up on your ${project} request`,
+      emailBody: [
+        `Hi ${name},`,
+        `Following up on your ${project} request. Is this still something you'd like a quote for?`,
+        `If you can reply with a few photos and any details, we'll get it put together.`,
+        'Thanks,\nChicago Reno',
+      ].join('\n\n'),
     };
   }
   return base;

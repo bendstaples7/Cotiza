@@ -87,6 +87,13 @@ describe('buildActionMessage', () => {
     const m = buildActionMessage('reply', input)!;
     expect(m.text).toMatch(/^Hi Chris, thanks for getting back to us about your Vinyl Flooring request\./);
     expect(m.text).toContain('room measurements');
+    expect(m.emailBody).toContain('Thanks for getting back to us about your Vinyl Flooring request.');
+  });
+
+  it('checks in, rather than introducing us again, when following up with no checklist', () => {
+    const m = buildActionMessage('follow_up', { clientName: 'Anne Brady', title: 'Basement', items: [] })!;
+    expect(m.text).toContain('following up on your Basement request');
+    expect(m.text).not.toContain("We're putting your quote together now");
   });
 
   it('uses the asks for intro and follow-up texts, and has no message for drafting or review', () => {
