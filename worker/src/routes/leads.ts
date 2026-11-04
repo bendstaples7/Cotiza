@@ -31,7 +31,7 @@ import { LeadInfoError, LeadInfoService, requireRequestId, summarize } from '../
 import { sanitizeLogText } from '../services/jobber-log-sanitize.mjs';
 import { LeadContactError, LeadContactService, validateContact } from '../services/lead-contact-service.js';
 import { gatherLeadWorkflow, type RequestDetail } from '../services/lead-contact-status.js';
-import { formatJobberNote, JobberNoteWriter, noteKey, stepLabel, type JobberNoteRecord, type NoteAction } from '../services/jobber-request-notes.js';
+import { formatJobberNote, JobberNoteWriter, NOTE_ID_RE, noteKey, requestKeyPart, stepLabel, type JobberNoteRecord, type NoteAction } from '../services/jobber-request-notes.js';
 import { ActivityLogService } from '../services/activity-log-service.js';
 
 type Env = { Bindings: Bindings; Variables: { user: { id: string; email: string } } };
@@ -83,8 +83,9 @@ async function addJobberNote(env: Bindings, userId: string, id: string, requestI
     const writer = await noteWriter(env, userId);
     return noteView(await writer.write(id, requestId, formatJobberNote(action, await userName(env.DB, userId)), userId));
   } catch (err) {
+    // Cotiza could not even record the note (its database is unreachable), so there is nothing to retry.
     console.error('[leads] jobber note failed', sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 180));
-    return { id, status: 'failed' as const, error: 'Cotiza could not add the Jobber note.', message: null };
+    return { id, status: 'failed' as const, error: 'Cotiza could not record the Jobber note, so it cannot be retried. Add a note in Jobber by hand.', message: null, retryable: false };
   }
 }
 
@@ -154,7 +155,8 @@ app.get('/:requestId', async (c) => {
     read.listRequestQuotes(userId, { requestId }),
     info.list(requestId),
     new LeadContactService(c.env.DB).completedSteps(requestId),
-    new JobberNoteWriter({ db: c.env.DB, jobber: null }).unsent(requestId).catch(() => []),
+    // A failed read is reported, never shown as "nothing unsent".
+    new JobberNoteWriter({ db: c.env.DB, jobber: null }).unsent(requestId).catch(() => null),
   ]);
   const detail = (request as { request?: { phone?: { value?: string }; email?: { value?: string } } | null }).request;
   const contact = { email: detail?.email?.value ?? null, phone: detail?.phone?.value ?? null };
@@ -193,7 +195,8 @@ app.get('/:requestId', async (c) => {
     loggedContacts: contactTimeline.logged,
     outreachSteps,
     // Cotiza actions whose Jobber note did not go through; the page offers a retry.
-    unsentJobberNotes: unsentJobberNotes.map(noteView),
+    unsentJobberNotes: unsentJobberNotes ? unsentJobberNotes.map(noteView) : [],
+    unsentJobberNotesUnavailable: unsentJobberNotes === null,
   });
 });
 
@@ -282,11 +285,11 @@ app.put('/:requestId/not-a-lead', async (c) => {
   const body = await c.req.json().catch(() => null) as { notALead?: unknown } | null;
   try {
     const userId = c.get('user').id;
-    const contacts = new LeadContactService(c.env.DB);
-    const before = await contacts.notALead(requestId);
-    const notALead = await contacts.setNotALead(requestId, body?.notALead, userId);
-    // Only a change is worth a note; repeating the same mark adds nothing to Jobber.
-    const jobberNote = before === notALead ? null : await addJobberNote(c.env, userId, noteKey('mark', `${requestId}:${Date.now()}`), requestId, { kind: notALead ? 'not_a_lead' : 'not_a_lead_cleared' });
+    const { notALead, changed } = await new LeadContactService(c.env.DB).setNotALead(requestId, body?.notALead, userId);
+    // Only the call that flipped the mark writes a note: a repeat, or a concurrent duplicate, adds nothing to Jobber.
+    const jobberNote = changed
+      ? await addJobberNote(c.env, userId, noteKey('mark', `${await requestKeyPart(requestId)}_${notALead ? 'on' : 'off'}_${Date.now()}`), requestId, { kind: notALead ? 'not_a_lead' : 'not_a_lead_cleared' })
+      : null;
     return c.json({ notALead, jobberNote });
   } catch (err) {
     const bad = badRequest(err);
@@ -334,7 +337,7 @@ app.post('/:requestId/send-text', async (c) => {
 
 app.post('/jobber-notes/:noteId/retry', async (c) => {
   const noteId = c.req.param('noteId');
-  if (!/^jn_[a-z]+_[A-Za-z0-9_:=+/.-]{1,200}$/.test(noteId)) return c.json({ error: 'Not a Cotiza note id.' }, 400);
+  if (!NOTE_ID_RE.test(noteId)) return c.json({ error: 'Not a Cotiza note id.' }, 400);
   const userId = c.get('user').id;
   const writer = await noteWriter(c.env, userId);
   const note = await writer.retry(noteId, userId).catch((err) => {

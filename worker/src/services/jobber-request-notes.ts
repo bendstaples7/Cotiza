@@ -18,14 +18,23 @@ import { sanitizeLogText } from './jobber-log-sanitize.mjs';
 /** Every note Cotiza writes starts with this, so the lead workflow can skip its own notes. */
 export const COTIZA_NOTE_PREFIX = 'Cotiza ·';
 const EXCERPT = 160;
-const CONTACT_DETAILS = /[^\s@]+@[^\s@]+\.[a-z]{2,}|(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/gi;
+const EMAIL = /[^\s@]+@[^\s@]+\.[a-z]{2,}/gi;
+// Any run of digits and phone punctuation holding 7 or more digits: US, local and international numbers alike.
+const PHONE_LIKE = /\+?\(?\d[\d\s().\/-]{5,}\d/g;
+
+/** Replaces emails and anything that could be a phone number with [contact]. */
+export function redactContacts(text: string): string {
+  return text
+    .replace(EMAIL, '[contact]')
+    .replace(PHONE_LIKE, (m) => ((m.match(/\d/g) ?? []).length >= 7 ? '[contact]' : m));
+}
 
 export function isCotizaNote(message: string | null | undefined): boolean {
   return (message ?? '').trimStart().startsWith(COTIZA_NOTE_PREFIX);
 }
 
 function clean(text: string | null | undefined): string {
-  return (text ?? '').replace(/\s+/g, ' ').replace(CONTACT_DETAILS, '[contact]').trim();
+  return redactContacts((text ?? '').replace(/\s+/g, ' ')).trim();
 }
 
 function excerpt(text: string | null | undefined): string {
@@ -132,13 +141,20 @@ export interface NoteShape {
   hasUserErrors: boolean;
 }
 
-/** Picks the note mutation from introspection results. Pure, so it can be tested without Jobber. */
-export function pickNoteMutation(fields: MutationField[]): { field: MutationField; target: 'request' | 'client' } {
+/** The note mutations Jobber offers, best first: a note on the request, else on its client. Pure. */
+export function noteMutationCandidates(fields: MutationField[]): Array<{ field: MutationField; target: 'request' | 'client' }> {
+  const out: Array<{ field: MutationField; target: 'request' | 'client' }> = [];
   const request = fields.find((f) => f.name === 'requestCreateNote');
-  if (request) return { field: request, target: 'request' };
+  if (request) out.push({ field: request, target: 'request' });
   const client = fields.find((f) => f.name === 'clientCreateNote');
-  if (client) return { field: client, target: 'client' };
-  throw new NoteSchemaMismatch('Jobber offers no requestCreateNote or clientCreateNote mutation.');
+  if (client) out.push({ field: client, target: 'client' });
+  if (!out.length) throw new NoteSchemaMismatch('Jobber offers no requestCreateNote or clientCreateNote mutation.');
+  return out;
+}
+
+/** The preferred note mutation by name only (the shape is checked in loadNoteShape). */
+export function pickNoteMutation(fields: MutationField[]): { field: MutationField; target: 'request' | 'client' } {
+  return noteMutationCandidates(fields)[0];
 }
 
 export function noteShape(field: MutationField, target: 'request' | 'client', inputFields: Field[], payloadFields: Field[]): NoteShape {
@@ -177,16 +193,25 @@ export function resetNoteShapeCache() { cachedShape = null; }
 export async function loadNoteShape(jobber: JobberReadClient, now: number = Date.now()): Promise<NoteShape> {
   if (cachedShape && now - cachedShape.at < SHAPE_TTL_MS) return cachedShape.shape;
   const data = await jobber.graphqlRequest<{ __schema?: { mutationType?: { fields?: MutationField[] } } }>(NOTE_MUTATIONS_QUERY);
-  const { field, target } = pickNoteMutation(data.__schema?.mutationType?.fields ?? []);
-  const inputArg = field.args.find((a) => a.name !== (target === 'request' ? 'requestId' : 'clientId') && baseOf(a.type).kind === 'INPUT_OBJECT');
-  const payloadName = baseOf(field.type).name;
-  if (!inputArg || !payloadName) throw new NoteSchemaMismatch(`${field.name} has unexpected arguments.`);
-  const types = await jobber.graphqlRequest<{ input?: { inputFields?: Field[] } | null; payload?: { fields?: Field[] } | null }>(
-    NOTE_TYPES_QUERY, { input: String(baseOf(inputArg.type).name), payload: payloadName },
-  );
-  const shape = noteShape(field, target, types.input?.inputFields ?? [], types.payload?.fields ?? []);
-  cachedShape = { shape, at: now };
-  return shape;
+  const problems: string[] = [];
+  // A request note is best; when its shape is one Cotiza can't fill, a client note still keeps the record.
+  for (const { field, target } of noteMutationCandidates(data.__schema?.mutationType?.fields ?? [])) {
+    const inputArg = field.args.find((a) => a.name !== (target === 'request' ? 'requestId' : 'clientId') && baseOf(a.type).kind === 'INPUT_OBJECT');
+    const payloadName = baseOf(field.type).name;
+    if (!inputArg || !payloadName) { problems.push(`${field.name} has unexpected arguments.`); continue; }
+    const types = await jobber.graphqlRequest<{ input?: { inputFields?: Field[] } | null; payload?: { fields?: Field[] } | null }>(
+      NOTE_TYPES_QUERY, { input: String(baseOf(inputArg.type).name), payload: payloadName },
+    );
+    try {
+      const shape = noteShape(field, target, types.input?.inputFields ?? [], types.payload?.fields ?? []);
+      cachedShape = { shape, at: now };
+      return shape;
+    } catch (err) {
+      if (!(err instanceof NoteSchemaMismatch)) throw err;
+      problems.push(err.message);
+    }
+  }
+  throw new NoteSchemaMismatch(problems.join(' '));
 }
 
 export function noteMutationText(shape: NoteShape): string {
@@ -264,10 +289,16 @@ function toRecord(row: Row): JobberNoteRecord {
 
 /** A claim older than this is treated as abandoned (the worker died mid-write) and may be retried. */
 const STALE_CLAIM_MS = 2 * 60_000;
-const NOTE_ID_RE = /^jn_[a-z_]+_[A-Za-z0-9_:=+/.-]{1,200}$/;
+export const NOTE_ID_RE = /^jn_[a-z_]+_[A-Za-z0-9_:=+/.-]{1,200}$/;
 
-export function noteKey(kind: 'contact' | 'mark' | 'close', ref: string): string {
+export function noteKey(kind: 'contact' | 'mark' | 'close' | 'review', ref: string): string {
   return `jn_${kind}_${ref}`;
+}
+
+/** A short, fixed-length stand-in for a request id inside a note key (ids can be long). */
+export async function requestKeyPart(requestId: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(requestId));
+  return Array.from(new Uint8Array(digest).slice(0, 8)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 export interface NoteWriterDeps {
@@ -322,9 +353,12 @@ export class JobberNoteWriter {
     const now = this.now();
     const at = new Date(now).toISOString();
     const staleBefore = new Date(now - STALE_CLAIM_MS).toISOString();
+    const token = crypto.randomUUID();
+    // Taking over an abandoned 'posting' claim means that write may have landed: mark it uncertain so
+    // Jobber is checked before posting again. The token makes only this attempt able to finish the row.
     const claim = await this.deps.db
-      .prepare("UPDATE lead_jobber_notes SET status = 'posting', attempts = attempts + 1, updated_at = ? WHERE id = ? AND (status IN ('pending', 'failed') OR (status = 'posting' AND updated_at < ?))")
-      .bind(at, id, staleBefore)
+      .prepare("UPDATE lead_jobber_notes SET uncertain = CASE WHEN status = 'posting' THEN 1 ELSE uncertain END, status = 'posting', attempts = attempts + 1, claim_token = ?, updated_at = ? WHERE id = ? AND (status IN ('pending', 'failed') OR (status = 'posting' AND updated_at < ?))")
+      .bind(token, at, id, staleBefore)
       .run();
     const current = await this.get(id);
     if (!current) throw new Error('Note record vanished.');
@@ -332,9 +366,10 @@ export class JobberNoteWriter {
     if (!claim.meta?.changes) return current;
 
     const finish = async (status: NoteStatus, fields: { noteId?: string | null; error?: string | null; uncertain?: boolean }) => {
+      // Only the attempt holding the claim may finish it; one that lost its claim leaves the row alone.
       await this.deps.db
-        .prepare('UPDATE lead_jobber_notes SET status = ?, jobber_note_id = ?, error = ?, uncertain = ?, updated_at = ? WHERE id = ?')
-        .bind(status, fields.noteId ?? null, fields.error ?? null, fields.uncertain ? 1 : 0, new Date(this.now()).toISOString(), id)
+        .prepare('UPDATE lead_jobber_notes SET status = ?, jobber_note_id = ?, error = ?, uncertain = ?, claim_token = NULL, updated_at = ? WHERE id = ? AND claim_token = ?')
+        .bind(status, fields.noteId ?? null, fields.error ?? null, fields.uncertain ? 1 : 0, new Date(this.now()).toISOString(), id, token)
         .run();
       return (await this.get(id))!;
     };

@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS lead_jobber_notes (
   -- 1 when the last attempt may have reached Jobber; the next attempt checks the request's notes first.
   uncertain INTEGER NOT NULL DEFAULT 0,
   attempts INTEGER NOT NULL DEFAULT 0,
+  -- Set by the attempt that holds the claim; only that attempt may record the outcome.
+  claim_token TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   created_by_user_id TEXT NOT NULL

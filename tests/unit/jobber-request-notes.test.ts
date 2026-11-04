@@ -32,21 +32,28 @@ const clientCreateNote = {
   type: nn(object('ClientCreateNotePayload')),
 };
 const inputFields = [{ name: 'message', type: nn(scalar('String')) }, { name: 'attachments', type: { kind: 'LIST', name: null, ofType: input('X') } }];
-const payloadFields = [{ name: 'requestNote', type: object('RequestNote') }, { name: 'userErrors', type: nn({ kind: 'LIST', name: null, ofType: object('UserError') }) }];
+const userErrors = { name: 'userErrors', type: nn({ kind: 'LIST', name: null, ofType: object('UserError') }) };
+const payloadFields = [{ name: 'requestNote', type: object('RequestNote') }, userErrors];
+const clientPayloadFields = [{ name: 'clientNote', type: object('ClientNote') }, userErrors];
 
 /** A Jobber client that answers introspection and records mutations. */
-function fakeJobber(opts: { mutations?: object[]; fail?: 'reject' | 'network'; existingNotes?: string[] } = {}) {
+function fakeJobber(opts: { mutations?: object[]; fail?: 'reject' | 'network'; existingNotes?: string[]; requestInputFields?: object[] } = {}) {
   const calls: Array<{ query: string; variables?: Record<string, unknown> }> = [];
   const graphqlRequest = vi.fn(async (query: string, variables?: Record<string, unknown>) => {
     calls.push({ query, variables });
     if (query.includes('CotizaNoteMutations')) return { __schema: { mutationType: { fields: opts.mutations ?? [requestCreateNote, clientCreateNote] } } };
-    if (query.includes('CotizaNoteTypes')) return { input: { inputFields }, payload: { fields: payloadFields } };
+    if (query.includes('CotizaNoteTypes')) {
+      const isClient = variables?.payload === 'ClientCreateNotePayload';
+      return { input: { inputFields: isClient ? inputFields : opts.requestInputFields ?? inputFields }, payload: { fields: isClient ? clientPayloadFields : payloadFields } };
+    }
     if (query.includes('CotizaRecentNotes')) return { request: { notes: { edges: (opts.existingNotes ?? []).map((m, i) => ({ node: { id: `N${i}`, message: m } })) } } };
     if (query.includes('CotizaRequestClient')) return { request: { id: REQ, client: { id: 'C1' } } };
     if (query.includes('CotizaAddNote')) {
       if (opts.fail === 'network') throw new Error('Jobber API error (502): bad gateway');
       if (opts.fail === 'reject') return { requestCreateNote: { requestNote: null, userErrors: [{ message: 'Message is too long' }] } };
-      return { requestCreateNote: { requestNote: { id: 'NOTE1' }, userErrors: [] }, clientCreateNote: { clientNote: { id: 'CNOTE1' }, userErrors: [] } };
+      // Answer only with the fields the mutation actually selected, as Jobber would.
+      if (query.includes('requestCreateNote')) return { requestCreateNote: { ...(query.includes('requestNote { id }') ? { requestNote: { id: 'NOTE1' } } : {}), userErrors: [] } };
+      return { clientCreateNote: { ...(query.includes('clientNote { id }') ? { clientNote: { id: 'CNOTE1' } } : {}), userErrors: [] } };
     }
     throw new Error(`unexpected query ${query.slice(0, 40)}`);
   });
@@ -67,17 +74,19 @@ function fakeDb() {
             if (!rows.has(id)) rows.set(id, { id, jobber_request_id: req, message, status: 'pending', jobber_note_id: null, error: null, uncertain: 0, attempts: 0, created_at: created, updated_at: updated, created_by_user_id: user });
             return { meta: { changes: 1 } };
           }
-          if (sql.startsWith("UPDATE lead_jobber_notes SET status = 'posting'")) {
-            const [at, id, staleBefore] = args as string[];
+          if (sql.startsWith('UPDATE lead_jobber_notes SET uncertain = CASE')) {
+            const [token, at, id, staleBefore] = args as string[];
             const row = rows.get(id);
             const claimable = row && (row.status === 'pending' || row.status === 'failed' || (row.status === 'posting' && String(row.updated_at) < staleBefore));
             if (!claimable) return { meta: { changes: 0 } };
-            Object.assign(row!, { status: 'posting', attempts: Number(row!.attempts) + 1, updated_at: at });
+            Object.assign(row!, { uncertain: row!.status === 'posting' ? 1 : row!.uncertain, status: 'posting', attempts: Number(row!.attempts) + 1, claim_token: token, updated_at: at });
             return { meta: { changes: 1 } };
           }
           if (sql.startsWith('UPDATE lead_jobber_notes SET status = ?')) {
-            const [status, noteId, error, uncertain, at, id] = args as [string, string | null, string | null, number, string, string];
-            Object.assign(rows.get(id)!, { status, jobber_note_id: noteId, error, uncertain, updated_at: at });
+            const [status, noteId, error, uncertain, at, id, token] = args as [string, string | null, string | null, number, string, string, string];
+            const row = rows.get(id)!;
+            if (row.claim_token !== token) return { meta: { changes: 0 } };
+            Object.assign(row, { status, jobber_note_id: noteId, error, uncertain, claim_token: null, updated_at: at });
             return { meta: { changes: 1 } };
           }
           throw new Error(`unexpected run ${sql}`);
@@ -107,6 +116,12 @@ describe('formatJobberNote', () => {
     expect(formatJobberNote({ kind: 'contact', channel: 'other', direction: 'outgoing', note: null, stepLabel: stepLabel('draft_quote') }, 'Denzel')).toBe('Cotiza · Quote drafting marked done by Denzel');
     expect(formatJobberNote({ kind: 'not_a_lead' }, 'Denzel')).toBe('Cotiza · Marked not a lead by Denzel');
     expect(formatJobberNote({ kind: 'not_a_lead' }, '')).toBe('Cotiza · Marked not a lead by the team');
+  });
+
+  it('redacts international and local numbers too, but keeps short numbers', () => {
+    const note = formatJobberNote({ kind: 'contact', channel: 'call', direction: 'outgoing', note: 'Called +44 20 7946 0958 and 555-0100, quote for 3 windows, 12 ft' }, 'Denzel');
+    expect(note).not.toMatch(/7946|555-0100/);
+    expect(note).toContain('3 windows, 12 ft');
   });
 
   it('keeps contact details out and cuts long text', () => {
@@ -171,9 +186,10 @@ describe('JobberNoteWriter', () => {
     rows.set(id, { id, jobber_request_id: REQ, message: 'm', status: 'posting', jobber_note_id: null, error: null, uncertain: 0, attempts: 1, created_at: '2026-11-04T18:00:00.000Z', updated_at: '2026-11-04T18:00:00.000Z', created_by_user_id: 'u' });
     expect((await writer.retry(id, 'u'))?.status).toBe('posting');
     expect(jobber.mutationCalls()).toHaveLength(0);
-    // A claim abandoned for minutes may be taken over.
+    // A claim abandoned for minutes may be taken over, but that write may have landed: Jobber is checked first.
     now += 5 * 60_000;
     expect((await writer.retry(id, 'u'))?.status).toBe('posted');
+    expect(jobber.calls.some((c) => c.query.includes('CotizaRecentNotes'))).toBe(true);
   });
 
   it('reports a rejected note as failed, keeps the action, and retries cleanly', async () => {
@@ -214,9 +230,29 @@ describe('JobberNoteWriter', () => {
     const { db } = fakeDb();
     const jobber = fakeJobber({ mutations: [clientCreateNote] });
     const note = await new JobberNoteWriter({ db, jobber: jobber.client }).write(noteKey('contact', 'lct_5'), REQ, 'm', 'u');
-    expect(note.status).toBe('posted');
-    expect(jobber.mutationCalls()[0].query).toContain('clientCreateNote(clientId: $id');
+    expect(note).toMatchObject({ status: 'posted', jobberNoteId: 'CNOTE1' });
+    expect(jobber.mutationCalls()[0].query).toContain('clientCreateNote(clientId: $id, input: $input) { clientNote { id } userErrors { message } }');
     expect(jobber.mutationCalls()[0].variables).toEqual({ id: 'C1', input: { message: 'm' } });
+  });
+
+  it('falls back to a client note when the request note needs fields Cotiza cannot fill', async () => {
+    const { db } = fakeDb();
+    const jobber = fakeJobber({ requestInputFields: [...inputFields, { name: 'linkedTo', type: nn(scalar('ID')) }] });
+    const note = await new JobberNoteWriter({ db, jobber: jobber.client }).write(noteKey('contact', 'lct_6'), REQ, 'm', 'u');
+    expect(note).toMatchObject({ status: 'posted', jobberNoteId: 'CNOTE1' });
+    expect(jobber.mutationCalls()[0].query).toContain('clientCreateNote');
+  });
+
+  it('an attempt that lost its claim cannot overwrite the outcome', async () => {
+    const { db, rows } = fakeDb();
+    const id = noteKey('contact', 'lct_7');
+    const writer = new JobberNoteWriter({ db, jobber: fakeJobber().client });
+    await writer.write(id, REQ, 'm', 'u');
+    // Someone else's token now holds the row: a late finish from an old attempt changes nothing.
+    rows.get(id)!.claim_token = 'other';
+    const stmt = db.prepare('UPDATE lead_jobber_notes SET status = ?').bind('failed', null, 'late', 0, 'x', id, 'old-token');
+    expect((await stmt.run()).meta.changes).toBe(0);
+    expect(rows.get(id)!.status).toBe('posted');
   });
 });
 

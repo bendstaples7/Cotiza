@@ -1370,6 +1370,8 @@ export interface LeadBundle {
   outreachSteps: Array<{ step: string; contactedAt: string }>;
   /** Cotiza actions whose note did not reach the Jobber request yet. */
   unsentJobberNotes?: JobberNoteStatus[];
+  /** True when Cotiza could not check for unsent Jobber notes (not the same as none). */
+  unsentJobberNotesUnavailable?: boolean;
 }
 
 /** The Jobber note Cotiza adds for an action. "failed" means the action is saved in Cotiza but Jobber didn't get the note. */
@@ -1378,6 +1380,8 @@ export interface JobberNoteStatus {
   status: 'pending' | 'posting' | 'posted' | 'failed';
   error: string | null;
   message: string | null;
+  /** False when Cotiza could not record the note at all, so there is nothing to retry. */
+  retryable?: boolean;
 }
 
 /** Shows a warning toast when an action saved in Cotiza but its Jobber note did not go through. */
@@ -1387,7 +1391,9 @@ export function warnIfJobberNoteFailed(note: JobberNoteStatus | null | undefined
     severity: 'warning',
     component: 'LeadHub',
     operation: 'jobber_note',
-    message: 'Saved in Cotiza; couldn\u2019t add the Jobber note. Open the lead and press Retry.',
+    message: note.retryable === false
+      ? `Saved in Cotiza; couldn\u2019t add the Jobber note. ${note.error ?? 'Add it in Jobber by hand.'}`
+      : 'Saved in Cotiza; couldn\u2019t add the Jobber note. Open the lead and press Retry.',
     actions: [],
   });
 }

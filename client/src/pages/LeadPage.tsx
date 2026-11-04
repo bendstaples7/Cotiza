@@ -116,7 +116,7 @@ export default function LeadPage() {
         </div>
       </header>
 
-      <JobberNotesBanner notes={lead.unsentJobberNotes ?? []} onChanged={reload} />
+      <JobberNotesBanner notes={lead.unsentJobberNotes ?? []} unavailable={lead.unsentJobberNotesUnavailable === true} onChanged={reload} />
 
       {workflow && <ProgressBar progress={workflow.progress} />}
 
@@ -793,15 +793,27 @@ const confirmBox: React.CSSProperties = { marginTop: '0.75rem', padding: '0.75re
  * Cotiza actions whose note did not reach the Jobber request. The action itself is saved in Cotiza;
  * this says so plainly and offers a retry, so a failed Jobber write is never hidden.
  */
-export function JobberNotesBanner({ notes, onChanged }: { notes: JobberNoteStatus[]; onChanged: () => void }) {
+export function JobberNotesBanner({ notes, unavailable = false, onChanged }: { notes: JobberNoteStatus[]; unavailable?: boolean; onChanged: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  if (unavailable) {
+    return (
+      <section role="alert" style={{ border: '1px solid #fcd34d', background: '#fffbeb', borderRadius: 12, padding: '12px 16px', fontSize: 14, color: '#92400e' }}>
+        Cotiza couldn&rsquo;t check whether every action here reached Jobber as a note. Reload to check again.
+      </section>
+    );
+  }
   if (!notes.length) return null;
   const retry = async (id: string) => {
     setBusy(id);
     try {
       const { jobberNote } = await retryJobberNote(id);
-      if (jobberNote.status === 'failed') setErrors((e) => ({ ...e, [id]: jobberNote.error ?? 'Jobber still did not take the note.' }));
+      setErrors((e) => {
+        const next = { ...e };
+        if (jobberNote.status === 'failed') next[id] = jobberNote.error ?? 'Jobber still did not take the note.';
+        else delete next[id];
+        return next;
+      });
       onChanged();
     } catch (err) {
       setErrors((e) => ({ ...e, [id]: (err as ErrorResponse).message ?? 'Jobber still did not take the note.' }));
@@ -820,7 +832,7 @@ export function JobberNotesBanner({ notes, onChanged }: { notes: JobberNoteStatu
             {n.message && <span style={{ fontSize: 13, color: '#4b5563', overflowWrap: 'anywhere' }}>{n.message}</span>}
             {(errors[n.id] ?? n.error) && <span style={{ fontSize: 13, color: '#991b1b' }}>{errors[n.id] ?? n.error}</span>}
           </div>
-          <button type="button" disabled={busy === n.id} onClick={() => { void retry(n.id); }}
+          <button type="button" disabled={busy === n.id} onClick={() => { void retry(n.id); }} aria-label={`Retry adding the Jobber note: ${n.message ?? n.id}`}
             style={{ minHeight: 44, padding: '0 16px', border: '1px solid #991b1b', background: '#ffffff', color: '#991b1b', borderRadius: 8, font: 'inherit', fontSize: 14, fontWeight: 600 }}>
             {busy === n.id ? 'Retrying…' : 'Retry'}
           </button>
