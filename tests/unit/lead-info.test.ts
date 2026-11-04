@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { LeadInfoError, LeadInfoService, summarize } from '../../worker/src/services/lead-info-service.js';
 import { callLeadTool, LeadToolArgsError } from '../../worker/src/services/lead-info-tools.js';
-import { ManualRequestService } from '../../worker/src/services/manual-request-service.js';
 import { CallBudget, type AssistantDirectory, type AssistantPrincipal } from '../../worker/src/services/assistant-access.js';
 import { OpsAssistantRead } from '../../worker/src/services/ops-assistant-read.js';
 import { handleMcpPost, readMcpJsonBody } from '../../worker/src/routes/ops-assistant.js';
@@ -143,22 +142,38 @@ describe('lead connector tools', () => {
     expect(read.items[0]).toMatchObject({ createdVia: 'assistant', untrusted: true });
   });
 
-  it('lists open Jobber leads with their checklist summaries', async () => {
+  it('lists open Jobber leads live from Jobber, newest first, with checklist summaries', async () => {
     const { d1 } = sqliteD1();
     await callLeadTool(d1, principal, 'set_lead_info', { requestId: REQ, add: [{ question: 'Tile size?' }] });
-    const listSpy = vi.spyOn(ManualRequestService.prototype, 'list').mockResolvedValue([
-      { id: 'a', jobberRequestId: REQ, customerName: 'Keeley', customerPhone: '773-555-0100', customerEmail: 'sentinel@example.com', requestTitle: 'Shower', createdAt: '2026-11-02T00:00:00Z', ageSeconds: 2 * 86400, quoteSentAt: null },
-      { id: 'b', jobberRequestId: OTHER, customerName: 'Nick', requestTitle: null, createdAt: '2026-11-03T00:00:00Z', ageSeconds: 3600, quoteSentAt: null },
-      { id: 'c', jobberRequestId: 'Z2lkOi8vSm9iYmVyL1JlcXVlc3QvMg==', customerName: 'Sent', createdAt: '2026-11-01T00:00:00Z', ageSeconds: 9e5, quoteSentAt: '2026-11-03T00:00:00Z' },
-      { id: 'd', jobberRequestId: null, customerName: 'Manual', createdAt: '2026-11-01T00:00:00Z', ageSeconds: 9e5, quoteSentAt: null },
-    ] as never);
-    const result = await callLeadTool(d1, principal, 'list_open_leads', { limit: 10 }) as { total: number; leads: Array<{ client: string; ageDays: number; infoNeeded: { total: number } }> };
-    expect(listSpy).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-a', sortBy: 'age_asc' }));
-    expect(result.total).toBe(2);
-    expect(result.leads.map((l) => [l.client, l.ageDays, l.infoNeeded.total])).toEqual([['Keeley', 2, 1], ['Nick', 0, 0]]);
-    expect(JSON.stringify(result)).not.toMatch(/773-555-0100|sentinel@example\.com|customerPhone|customerEmail/);
-    await expect(callLeadTool(d1, principal, 'list_open_leads', { limit: 0 })).rejects.toThrow('limit');
-    listSpy.mockRestore();
+    const now = Date.parse('2026-11-04T12:00:00Z');
+    const node = (id: string, status: string, createdAt: string, first = 'Keeley ', last = 'Sorokti') =>
+      ({ node: { id, title: ' Shower ', requestStatus: status, createdAt, jobberWebUri: 'https://secure.getjobber.com/work_requests/1', companyName: null, client: { firstName: first, lastName: last, companyName: null } } });
+    const pages = [
+      { requests: { edges: [node(REQ, 'new', '2026-11-02T12:00:00Z'), node('Z2lkOi8vSm9iYmVyL1JlcXVlc3QvMw==', 'converted', '2026-11-01T00:00:00Z')], pageInfo: { hasNextPage: true, endCursor: 'c1' } } },
+      { requests: { edges: [node(OTHER, 'assessment_completed', '2026-10-20T00:00:00Z', '', ''), node('Z2lkOi8vSm9iYmVyL1JlcXVlc3QvNA==', 'new', '2026-08-01T00:00:00Z')], pageInfo: { hasNextPage: true, endCursor: 'c2' } } },
+    ];
+    const graphqlRequest = vi.fn().mockImplementation(async (_q: string, vars: { after: string | null }) => (vars.after === null ? pages[0] : pages[1]));
+    const result = await callLeadTool(d1, principal, 'list_open_leads', { limit: 10 }, { graphqlRequest } as never, now) as {
+      outcome: string; total: number; totalIsComplete: boolean; leads: Array<{ requestId: string; client: string | null; title: string; jobberStatus: string; ageDays: number; infoNeeded: { total: number } }>;
+    };
+    expect(graphqlRequest).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ outcome: 'ok', total: 2, totalIsComplete: true });
+    expect(result.leads.map((l) => [l.requestId, l.client, l.title, l.jobberStatus, l.ageDays, l.infoNeeded.total])).toEqual([
+      [REQ, 'Keeley Sorokti', 'Shower', 'new', 2, 1],
+      [OTHER, null, 'Shower', 'assessment_completed', 15, 0],
+    ]);
+    await expect(callLeadTool(d1, principal, 'list_open_leads', { limit: 0 }, { graphqlRequest } as never)).rejects.toThrow('limit');
+    await expect(callLeadTool(d1, principal, 'list_open_leads', { days: 0 }, { graphqlRequest } as never)).rejects.toThrow('days');
+  });
+
+  it('reports a failed Jobber read as failed, not as an empty list', async () => {
+    const { d1 } = sqliteD1();
+    const graphqlRequest = vi.fn().mockRejectedValue(new Error('Jobber 502'));
+    const failed = await callLeadTool(d1, principal, 'list_open_leads', {}, { graphqlRequest } as never) as { outcome: string; failure: { message: string } };
+    expect(failed.outcome).toBe('failed');
+    expect(failed.failure.message).toMatch(/not an empty list/);
+    const missing = await callLeadTool(d1, principal, 'list_open_leads', {}, null) as { outcome: string };
+    expect(missing.outcome).toBe('failed');
   });
 
   it('writes nothing when any question in the batch is invalid', async () => {

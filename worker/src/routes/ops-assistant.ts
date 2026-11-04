@@ -308,7 +308,7 @@ export async function handleMcpPost(request: Request, deps: {
       const result = isQuoteWrite
         ? await applyQuoteEdits(deps.jobber!, args)
         : isLead
-        ? await callLeadTool(deps.db, principal, name, args)
+        ? await callLeadTool(deps.db, principal, name, args, deps.jobber)
         : name === 'weekly_payout_report'
         ? await callFinanceTool(deps.jobber, name, args)
         : REVIEW_TOOL_NAMES.has(name)
