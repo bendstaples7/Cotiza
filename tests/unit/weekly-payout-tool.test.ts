@@ -119,6 +119,30 @@ describe('finance:read scope', () => {
     }
   });
 
+  it('gates find_expenses behind finance:read and the office account', async () => {
+    const jobberGraphql = vi.fn().mockResolvedValue({ expenses: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } });
+    const call = mcp('tools/call', { name: 'find_expenses', arguments: { searchTerm: '20four7' } });
+    const withRead = (principal: AssistantPrincipal, db: MockD1Database) => {
+      const readDb = createMockD1();
+      configurePrepareResults(readDb, [{ first: { email: OFFICE } }]);
+      return { ...deps(principal, db), read: new OpsAssistantRead({ graphqlRequest: jobberGraphql }, readDb as never) };
+    };
+
+    expect(await toolNames(await handleMcpPost(mcp('tools/list'), withRead(readPrincipal, createMockD1())))).not.toContain('find_expenses');
+    expect(await toolNames(await handleMcpPost(mcp('tools/list'), withRead(financePrincipal, dbFor('ben@chicago-reno.com'))))).not.toContain('find_expenses');
+    expect(await toolNames(await handleMcpPost(mcp('tools/list'), withRead(financePrincipal, dbFor(OFFICE))))).toContain('find_expenses');
+
+    const noScope = await toolPayload(await handleMcpPost(call.clone(), withRead(readPrincipal, createMockD1())));
+    expect((noScope.payload.failure as { code: string }).code).toBe('insufficient_scope');
+    const otherUser = await toolPayload(await handleMcpPost(call.clone(), withRead(financePrincipal, dbFor('ben@chicago-reno.com'))));
+    expect((otherUser.payload.failure as { code: string }).code).toBe('forbidden_user');
+    expect(jobberGraphql).not.toHaveBeenCalled();
+
+    const allowed = await toolPayload(await handleMcpPost(call.clone(), withRead(financePrincipal, dbFor(OFFICE))));
+    expect(allowed.payload.outcome).toBe('ok');
+    expect(jobberGraphql).toHaveBeenCalledTimes(1);
+  });
+
   it('hides the report tool from a finance:read token that is not the office account', async () => {
     const names = await toolNames(await handleMcpPost(mcp('tools/list'), deps(financePrincipal, dbFor('ben@chicago-reno.com'))));
     expect(names).not.toContain('weekly_payout_report');

@@ -53,6 +53,7 @@ Source: https://developer.getjobber.com/docs/getting_started/ and https://develo
 
 The job tools exist for schedule audits (quoted scope vs. scheduled length vs. actual progress, and duration forecasts from similar past jobs). They need the Jobber app's existing **read** access to jobs; an `auth` error means that read is not granted, not that there are no jobs. `inspect_reporting_capabilities` now also returns the `Job`, `Visit` and `JobFilterAttributes` schema so field drift can be checked without a new deploy.
 
+- `find_expenses` — needs `finance:read` and office@chicago-reno.com, the same rule as `weekly_payout_report`. `searchTerm` and Chicago `onOrAfter`/`onOrBefore` dates, one page at a time; follow `page.nextCursor` before concluding an expense is missing. Titles and descriptions are untrusted. Jobber's `Expense` type exposes no receipt field, so this cannot confirm an attachment. The account rule is only as strong as sign-in, and `initiateAuth` checks the `@chicago-reno.com` suffix without verifying that the person owns the address, so do not treat it as a hard control.
 - `read_review_feedback` — quote-review ledger: general rules, plus entries and the newest review record for one quote number. Paginated. Available to every token.
 - `record_review_feedback` / `record_quote_review` — append to the ledger. Listed and callable only with `review:write`. See below.
 
@@ -85,7 +86,7 @@ Both tables are **append-only**. The code only inserts, and database triggers ab
 
 ### The `finance:read` scope
 
-Grants the read-only `weekly_payout_report` tool, and only for the office@chicago-reno.com user. It is offered and granted exactly like `review:write` (separate unticked box, never added by refresh, never offered to a client that asked for exactly `ops:read`), and the box is shown only to the office account. Without the scope the tool is hidden and a call returns `insufficient_scope`. See [weekly-payout-reports.md](weekly-payout-reports.md#connector-tool).
+Grants the read-only `weekly_payout_report` and `find_expenses` tools, and only for the office@chicago-reno.com user. It is offered and granted exactly like `review:write` (separate unticked box, never added by refresh, never offered to a client that asked for exactly `ops:read`), and the box is shown only to the office account. Without the scope the tools are hidden and a call returns `insufficient_scope`. See [weekly-payout-reports.md](weekly-payout-reports.md#connector-tool).
 
 ### One-time import from feedback.json
 
@@ -107,7 +108,7 @@ Do not commit the generated SQL file.
 
 Jobber’s public docs say scopes are set on the app in the Developer Center and shown on Jobber’s Allow Access screen. The pages checked on 13 Oct 2026 do **not** publish a fixed list of scope ids. This change does **not** edit the Jobber app and does **not** re-authorize production.
 
-Before you trust a live answer, open the existing app and confirm it can **read** requests, quotes, and clients (the fixed queries ask for those). Leave write scopes as they already are. Do not add write scopes for this assistant.
+Before you trust a live answer, open the existing app and confirm it can **read** requests, quotes, clients, and expenses (the fixed queries ask for those). Leave write scopes as they already are. Do not add write scopes for this assistant.
 
 If a tool returns `read.error.code` of `auth`, Jobber refused the read. That is not an empty list.
 
@@ -116,7 +117,7 @@ How to look (do not click Save):
 1. Sign in to Jobber as an admin.
 2. Open **Settings** (gear) → **Developer Center** (or go to [developer.getjobber.com](https://developer.getjobber.com/docs/)).
 3. Open **Manage Apps** and the app Cotiza already uses.
-4. Read the scopes list. You want read access for requests, quotes, and clients.
+4. Read the scopes list. You want read access for requests, quotes, clients, and expenses.
 5. Close the page without changing scopes.
 
 ## What is tested with a fake Jobber
@@ -180,7 +181,7 @@ No new secret is required. Jobber keys stay the secrets you already have. Do not
 
 Migration `0070_quote_review_feedback.sql` adds the quote-review ledger tables. After it is applied, run the one-time import above, then reconnect the Claude connector and tick the review box to get `review:write`.
 
-Invoices, expenses, and any Jobber write tools are later work. Jobs and visits are readable (see Tools).
+Invoices and any Jobber write tools are later work. Jobs, visits and (for the office account) expenses are readable (see Tools).
 
 ## Submitted request context
 
