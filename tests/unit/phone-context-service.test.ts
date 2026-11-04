@@ -163,6 +163,14 @@ describe('PhoneContextService', () => {
       expect(new URL(firstCallUrl).searchParams.getAll('phoneNumbers')).toEqual(['+15551234567']);
     });
 
+    it('does not fail the read when only the optional conversations lookup fails', async () => {
+      const fetchMock = vi.fn().mockImplementation(async (u: string) => (new URL(u).pathname === '/v1/conversations'
+        ? { ok: false, status: 404, json: async () => ({}) }
+        : { ok: true, status: 200, json: async () => ({ data: [], totalItems: 0, nextPageToken: null }) }));
+      vi.stubGlobal('fetch', fetchMock);
+      expect(await new PhoneContextService('sk-test-key', 'PN123').fetchContextResult('+15551234567')).toEqual({ status: 'ok', text: '' });
+    });
+
     it('sends participants as a plain list', async () => {
       const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ data: [], totalItems: 0, nextPageToken: null }) });
       vi.stubGlobal('fetch', fetchMock);

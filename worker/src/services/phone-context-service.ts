@@ -152,6 +152,10 @@ export class PhoneContextService {
    * Uses the conversations endpoint which can be filtered by participant phone number.
    */
   private async fetchConversations(customerPhone: string): Promise<OpenPhoneConversation[]> {
+    // Optional: only used when messages and calls come back empty. Quo answers 404 here for some
+    // workspaces, which must not turn an otherwise good read into a failed one.
+    const failedBefore = this.lastReadFailed;
+    const failureBefore = this.lastFailure;
     const result = await this.apiFetch<ApiListResponse<OpenPhoneConversation>>(
       '/conversations',
       {
@@ -159,6 +163,8 @@ export class PhoneContextService {
         phoneNumbers: [customerPhone],
       },
     );
+    this.lastReadFailed = failedBefore;
+    this.lastFailure = failureBefore;
     return result?.data ?? [];
   }
 
