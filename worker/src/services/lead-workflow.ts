@@ -172,7 +172,14 @@ export interface LeadWorkflow {
   step: CadenceStep;
   stage: string;
   next: { on: string; source: 'set' | 'suggested'; overdue: boolean; dueToday: boolean; daysOverdue: number };
+  /** The main button: always the step that moves the lead toward a sent quote. */
   action: LeadAction;
+  /**
+   * A smaller extra action, shown under the main one. The handbook "quote in progress" update when
+   * it is due and we haven't been in touch for 3 days, or "Reply today" when the customer is waiting
+   * on an answer while the main action is drafting the quote.
+   */
+  secondary: LeadAction | null;
   progress: LeadProgress;
   /** Days since the lead came in (Chicago calendar days), null when unknown. */
   ageDays: number | null;
@@ -213,7 +220,8 @@ export function shortAsk(question: string): string {
 }
 
 const QUOTE_UPDATE_AFTER_DAYS = 3;
-const QUOTE_UPDATE_REPEAT_DAYS = 3;
+/** No "quote in progress" update when we were in touch with the customer within this many Chicago calendar days. */
+const QUIET_DAYS_BEFORE_UPDATE = 3;
 
 function formatShortDay(date: string): string {
   return new Date(`${date}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
@@ -274,18 +282,27 @@ function computeOpenWorkflow(input: WorkflowInput): LeadWorkflow {
   const teamNotes = events.some((e) => e.channel === 'note' && e.direction === 'outgoing');
   const likelySpam = !input.notALead && !input.hasTitle && !teamNotes && cadence.touches.length === 0 && !cadence.engaged
     && info.total === 0 && (ageDays ?? 0) >= 3;
-  const quoteUpdateRecent = events.some((e) => e.step === 'quote_update' && Date.parse(e.at) >= now - QUOTE_UPDATE_REPEAT_DAYS * 86400_000);
+  // Any outreach from us (text, call, email, a team note recording outreach, a logged step) counts.
+  // A team note counts when it records outreach, a conversation, or a logged step. Chicago calendar days.
+  const contactedRecently = events.some((e) => e.direction === 'outgoing' && e.channel !== 'request'
+    && (e.channel !== 'note' || e.outreach || e.conversation || e.step)
+    && Number.isFinite(Date.parse(e.at)) && daysBetween(chicagoDate(Date.parse(e.at)), today) < QUIET_DAYS_BEFORE_UPDATE);
 
   // Jobber quote states: draft; sent and waiting on the customer; or settled (approved / converted to a job).
   const quoteStatuses = (input.quotes ?? []).map((q) => String(q.status ?? '').toLowerCase()).filter((st) => st && st !== 'archived');
   const quoteSettled = quoteStatuses.some((st) => st === 'approved' || st === 'converted');
   const quoteSent = quoteSettled || quoteStatuses.some((st) => st === 'sent' || st === 'awaiting_response' || st === 'changes_requested');
   const quoteDrafted = quoteStatuses.length > 0;
-  const oldNoQuote = (ageDays ?? 0) >= QUOTE_UPDATE_AFTER_DAYS && !quoteUpdateRecent;
+  const oldNoQuote = (ageDays ?? 0) >= QUOTE_UPDATE_AFTER_DAYS;
 
   const stage = quoteDrafted && !quoteSent ? input.quoteStage ?? null : null;
   const withBen = stage?.kind === 'ben_review';
   const cadenceDue = next.overdue || next.dueToday;
+  // The handbook update rides along with drafting or Ben's review: only when a touch is due and we've been quiet.
+  const quoteUpdate = (why: string): LeadAction | null => (oldNoQuote && cadenceDue && !contactedRecently
+    ? { kind: 'quote_update', label: 'Send \u201cquote in progress\u201d text', why, step: 'quote_update', channel: 'text' }
+    : null);
+  let secondary: LeadAction | null = null;
   const stageAction = (prefix = ''): LeadAction | null => {
     if (!stage) return null;
     const n = stage.quote?.number ? `#${stage.quote.number}` : '';
@@ -308,28 +325,32 @@ function computeOpenWorkflow(input: WorkflowInput): LeadWorkflow {
   } else if (quoteSent) {
     action = { kind: 'quote_follow_up', label: 'Follow up on the quote', why: 'A quote has gone out. Make sure they got it and answer questions.', step: 'quote_follow_up', channel: 'text' };
   } else if (cadence.step === 'replied') {
-    // Their message gets an answer today. When we can quote, the answer is that the quote is coming.
-    action = !info.readyToQuote
-      ? { kind: 'reply', label: 'Reply today', why: 'They got back to us. Answer the same day.', step: 'reply', channel: 'text' }
-      : quoteDrafted
-        // A reply always gets an answer: while the quote is with Ben (or its review is unknown) that answer is the action.
-        ? stage?.kind === 'ben_review' || stage?.kind === 'unknown'
-          ? { kind: 'reply', label: 'Reply today', why: `They got back to us. Answer the same day. ${stage.why}`, step: 'reply', channel: 'text' }
-          : stageAction('They replied: answer them today. ') ?? { kind: 'draft_quote', label: 'Finish the quote', why: 'They replied and we have what we need to quote. Answer them, then get the quote out.', step: 'draft_quote', channel: 'other' }
-        : !oldNoQuote
-          ? { kind: 'draft_quote', label: 'Draft quote', why: 'They replied and we have what we need to quote. Answer them, then get the quote out.', step: 'draft_quote', channel: 'other' }
-          : { kind: 'quote_update', label: 'Reply: quote is coming', why: `They replied and the lead is ${ageDays} days old with no quote. Answer today and let them know it\u2019s coming.`, step: 'quote_update', channel: 'text' };
-  } else if (withBen && cadenceDue && oldNoQuote) {
-    // While Ben reviews, the customer still hears from us on the handbook schedule.
-    action = { kind: 'quote_update', label: 'Send \u201cquote in progress\u201d text', why: `Quote is with Ben for review and the lead is ${ageDays} days old. Let them know it\u2019s coming.`, step: 'quote_update', channel: 'text' };
+    // They spoke last: they get an answer today. When we can quote, drafting stays the main action
+    // and the answer rides along as the secondary one.
+    const reply: LeadAction = { kind: 'reply', label: 'Reply today', why: 'They got back to us. Answer the same day.', step: 'reply', channel: 'text' };
+    if (!info.readyToQuote && !quoteDrafted) {
+      action = reply;
+    } else if (!quoteDrafted) {
+      action = { kind: 'draft_quote', label: 'Draft quote', why: 'We have what we need to quote. They also got back to us: answer them today.', step: 'draft_quote', channel: 'other' };
+      secondary = reply;
+    } else if (stage?.kind === 'ben_review' || stage?.kind === 'unknown') {
+      // Nothing for the team to do on the quote, so the answer is the main action.
+      action = { ...reply, why: `They got back to us. Answer the same day. ${stage.why}` };
+    } else {
+      action = stageAction() ?? { kind: 'draft_quote', label: 'Finish the quote', why: 'A draft quote is in Jobber. Finish it and send it.', step: 'draft_quote', channel: 'other' };
+      secondary = reply;
+    }
+  } else if (withBen) {
+    action = stageAction()!;
+    secondary = quoteUpdate(`Quote is with Ben and the lead is ${ageDays} days old. Let them know it\u2019s coming.`);
   } else if (quoteDrafted) {
     action = stageAction() ?? { kind: 'draft_quote', label: 'Finish the quote', why: 'A draft quote is in Jobber. Finish it and send it.', step: 'draft_quote', channel: 'other' };
+    secondary = quoteUpdate(`Lead is ${ageDays} days old and the quote isn\u2019t out yet. Let them know it\u2019s coming.`);
   } else if (cadence.count === 0) {
     action = { kind: 'intro_text', label: 'Send intro text', why: likelySpam ? 'No project described yet. Send one intro text or mark it not a lead.' : 'Nobody has contacted them yet.', step: 'intro_text', channel: 'text' };
-  } else if (info.readyToQuote && oldNoQuote) {
-    action = { kind: 'quote_update', label: 'Send \u201cquote in progress\u201d text', why: `Lead is ${ageDays} days old with no quote. Let them know it\u2019s coming.`, step: 'quote_update', channel: 'text' };
   } else if (info.readyToQuote) {
-    action = { kind: 'draft_quote', label: 'Draft quote', why: 'We have what we need to quote.', step: 'draft_quote', channel: 'other' };
+    action = { kind: 'draft_quote', label: 'Draft quote', why: 'We have what we need to quote. No open questions.', step: 'draft_quote', channel: 'other' };
+    secondary = quoteUpdate(`Lead is ${ageDays} days old with no quote and we haven\u2019t been in touch for ${QUIET_DAYS_BEFORE_UPDATE}+ days. Let them know it\u2019s coming.`);
   } else if (info.firstAsk) {
     const ask = shortAsk(info.firstAsk);
     action = { kind: 'ask_info', label: `Text: ask for ${ask}`, why: `Still need ${ask} to quote.`, step: 'follow_up', channel: 'text' };
@@ -340,7 +361,8 @@ function computeOpenWorkflow(input: WorkflowInput): LeadWorkflow {
   const bucket: LeadBucket = input.notALead || likelySpam ? 'review'
     : quoteSettled ? 'waiting'
     // With Ben and nothing due with the customer: nothing for the team to do.
-    : action.kind === 'wait_review' ? 'waiting'
+    : action.kind === 'wait_review' && !secondary ? 'waiting'
+    : action.kind === 'wait_review' ? 'do_now'
     : ((info.readyToQuote || quoteDrafted) && !quoteSent) || cadenceDue ? 'do_now'
     : 'waiting';
   const progress: LeadProgress = quoteSent ? 'quote_sent'
@@ -357,6 +379,7 @@ function computeOpenWorkflow(input: WorkflowInput): LeadWorkflow {
     stage: nextSet ? `${cadence.stage} · date set by the team` : cadence.stage,
     next,
     action,
+    secondary,
     progress,
     ageDays,
     likelySpam,
@@ -383,6 +406,7 @@ export function applyClosure(w: LeadWorkflow, closed: LeadClosure | null | undef
     return {
       ...w, closed, bucket: 'do_now', stage: 'Postponed → every 3 months',
       next: { on, source: 'set', overdue, dueToday: on === today, daysOverdue: Math.max(0, daysBetween(on, today)) },
+      secondary: null,
       action: { kind: 'check_back', label: 'Check back in', why: `Postponed${closed.note ? ` (${closed.note})` : ''}. See if they’re ready to go ahead.`, step: 'check_back', channel: 'text' },
       // The open-lead cadence no longer applies: one row for the check-back.
       plan: [{ label: `${formatShortDay(on)} · Check back in`, detail: overdue ? `Missed: was due ${formatShortDay(on)}. Do it today.` : 'Due today', state: overdue ? 'missed' : 'due' }],
@@ -393,6 +417,7 @@ export function applyClosure(w: LeadWorkflow, closed: LeadClosure | null | undef
     // No contact is due on a closed lead: next shows the check-back day for a postponed one, and nothing is "due".
     next: { on: closed.checkBackOn ?? today, source: 'set', overdue: false, dueToday: false, daysOverdue: 0 },
     stage: closed.reason === 'postponed' ? `Postponed → back on ${formatShortDay(closed.checkBackOn ?? today)}` : `Closed · ${closed.label}`,
+    secondary: null,
     action: { kind: 'none', label: 'Lead closed', why: `Closed: ${closed.label}${closed.note ? ` — ${closed.note}` : ''}.`, step: 'none', channel: 'other' },
     plan: closed.reason === 'postponed' && closed.checkBackOn
       ? [{ label: `${formatShortDay(closed.checkBackOn)} · Check back in`, detail: 'Postponed; it comes back to Do now that day', state: 'upcoming' }]

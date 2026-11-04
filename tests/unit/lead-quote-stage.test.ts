@@ -86,7 +86,8 @@ describe('the lead workflow uses the quote stage', () => {
   it('with Ben on an old lead with a follow-up due: the customer still hears from us', () => {
     const old: ContactEvent = { ...lead, at: '2026-10-28T14:00:00Z' };
     const w = run(stage({ requested: { Q1: '2026-11-04T15:00:00Z' } }), [old, { ...touch, at: '2026-10-28T15:00:00Z' }]);
-    expect(w).toMatchObject({ bucket: 'do_now', action: { kind: 'quote_update' } });
+    // Waiting on Ben stays the main action; the update to the customer is the secondary one.
+    expect(w).toMatchObject({ bucket: 'do_now', action: { kind: 'wait_review' }, secondary: { kind: 'quote_update' } });
   });
 
   it('ready to send and Ben’s edits', () => {

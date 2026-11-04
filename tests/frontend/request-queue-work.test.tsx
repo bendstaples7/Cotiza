@@ -127,4 +127,46 @@ describe('Requests work queue', () => {
     await userEvent.click(within(review).getByRole('button', { name: 'Not a lead' }));
     expect(api.setLeadNotALead).toHaveBeenCalledWith('K', true);
   });
+
+  it('shows a "Lead received" badge and the secondary action under the main one', async () => {
+    api.fetchLeadContactStatuses.mockResolvedValue({
+      statuses: {
+        A: status(workflow({ bucket: 'waiting', next: { on: '2099-11-10', source: 'suggested', overdue: false, dueToday: false, daysOverdue: 0 } })),
+        K: status(workflow({ bucket: 'review', likelySpam: true })),
+        J: status(workflow({
+          ageDays: 7, progress: 'ready_to_quote',
+          action: { kind: 'draft_quote', label: 'Draft quote', why: 'We have what we need to quote. No open questions.', step: 'draft_quote', channel: 'other' },
+          secondary: { kind: 'quote_update', label: 'Send “quote in progress” text', why: 'Let them know it’s coming.', step: 'quote_update', channel: 'text' },
+        })),
+      },
+    });
+    renderQueue();
+    const doNow = await screen.findByRole('region', { name: 'Do now' });
+    const row = await within(doNow).findByRole('article', { name: 'Lead: John Oconnell' });
+    expect(within(row).getByTestId('lead-received-badge')).toHaveTextContent('Lead received ·7 days ago');
+    expect(within(within(row).getByTestId('lead-received-badge')).getByText('Nov 2')).toBeInTheDocument();
+    expect(within(row).queryByText(/^Lead in /)).toBeNull();
+    expect(within(row).getByRole('button', { name: /Also: Send “quote in progress” text/ })).toBeInTheDocument();
+    await userEvent.click(within(row).getByRole('button', { name: 'Draft quote' }));
+    expect(screen.getByTestId('where')).toHaveTextContent('/quotes/leads/J?action=draft_quote');
+  });
+
+  it('the secondary "Also:" button opens the lead on that action', async () => {
+    api.fetchLeadContactStatuses.mockResolvedValue({
+      statuses: {
+        A: status(workflow({ bucket: 'waiting', next: { on: '2099-11-10', source: 'suggested', overdue: false, dueToday: false, daysOverdue: 0 } })),
+        K: status(workflow({ bucket: 'review', likelySpam: true })),
+        J: status(workflow({
+          progress: 'ready_to_quote',
+          action: { kind: 'draft_quote', label: 'Draft quote', why: 'We have what we need to quote.', step: 'draft_quote', channel: 'other' },
+          secondary: { kind: 'quote_update', label: 'Send “quote in progress” text', why: 'Let them know it’s coming.', step: 'quote_update', channel: 'text' },
+        })),
+      },
+    });
+    renderQueue();
+    const doNow = await screen.findByRole('region', { name: 'Do now' });
+    const row = await within(doNow).findByRole('article', { name: 'Lead: John Oconnell' });
+    await userEvent.click(within(row).getByRole('button', { name: /Also: Send “quote in progress” text/ }));
+    expect(screen.getByTestId('where')).toHaveTextContent('/quotes/leads/J?action=quote_update');
+  });
 });
