@@ -18,6 +18,7 @@ import type { LeadInfoItem } from './lead-info-service.js';
 import { summarize } from './lead-info-service.js';
 import { computeLeadWorkflow, type LeadWorkflow } from './lead-workflow.js';
 import { isCotizaNote } from './jobber-request-notes.js';
+import type { QuoteStage } from './lead-quote-stage.js';
 
 type Field<T> = { availability?: string; value?: T } | undefined;
 export type RequestDetail = {
@@ -149,6 +150,8 @@ export async function gatherLeadWorkflow(input: Parameters<typeof gatherContactS
    * may already be out, so no next step is offered (workflow null). Omit when not looked up.
    */
   quotes?: Array<{ status: string | null }> | 'unknown';
+  /** Where the drafted quote is (with Ben, ready to send…), from lead-quote-stage.ts. */
+  quoteStage?: QuoteStage | null;
 }): Promise<{ status: ContactStatus; logged: LoggedContact[]; workflow: LeadWorkflow | null }> {
   const [gathered, notALead] = await Promise.all([
     gatherContactStatus(input),
@@ -163,6 +166,7 @@ export async function gatherLeadWorkflow(input: Parameters<typeof gatherContactS
     hasTitle: Boolean(present(input.detail?.title)?.trim()),
     notALead,
     quotes: input.quotes,
+    quoteStage: input.quoteStage ?? null,
     now: input.now,
   });
   return { status: gathered.status, logged: gathered.logged, workflow };

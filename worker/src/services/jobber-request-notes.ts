@@ -48,7 +48,8 @@ export type NoteAction =
   | { kind: 'not_a_lead' }
   | { kind: 'not_a_lead_cleared' }
   | { kind: 'lead_closed'; reason: string; note?: string | null; checkBackOn?: string | null }
-  | { kind: 'lead_reopened' };
+  | { kind: 'lead_reopened' }
+  | { kind: 'review_requested'; quoteNumber: string | null };
 
 const CONTACT_WORDS: Record<string, [string, string]> = {
   call: ['Call logged', 'Call from customer logged'],
@@ -80,6 +81,11 @@ export function formatJobberNote(action: NoteAction, userName: string): string {
       return `${COTIZA_NOTE_PREFIX} Lead closed by ${by} — ${clean(action.reason)}${back}${action.note ? `: ${excerpt(action.note)}` : ''}`;
     }
     case 'lead_reopened': return `${COTIZA_NOTE_PREFIX} Lead reopened by ${by}`;
+    case 'review_requested': {
+      // A quote number is an identifier, not contact text: keep it whole (any length), just strip odd characters.
+      const n = (action.quoteNumber ?? '').replace(/[^A-Za-z0-9-]/g, '');
+      return `${COTIZA_NOTE_PREFIX} Quote ${n ? `#${n} ` : ''}sent to Ben for review by ${by}`;
+    }
   }
 }
 
@@ -89,6 +95,7 @@ const STEP_LABELS: Record<string, string> = {
   reply: 'Reply',
   quote_update: 'Quote-in-progress update',
   draft_quote: 'Quote drafting',
+  send_quote: 'Quote sent to the customer',
   quote_follow_up: 'Quote follow-up',
   check_back: 'Check-back',
 };

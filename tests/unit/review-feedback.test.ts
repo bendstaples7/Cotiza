@@ -290,6 +290,11 @@ describe('append-only ledger', () => {
     await expect(record({ notes: ['call 312-555-0100'] })).rejects.toThrow(/contact/);
   });
 
+  it('accepts only a known review decision', async () => {
+    const store = new ReviewFeedbackStore(createMockD1() as never);
+    await expect(store.recordQuoteReview(writePrincipal, { author: 'Ben', source: 's', quoteNumber: '706', record: { decision: 'maybe' } })).rejects.toThrow(/record.decision/);
+  });
+
   it('allows the company email in text', async () => {
     const db = createMockD1();
     configurePrepareResults(db, [{ first: { id: 'F074', created_at: 'now' } }]);

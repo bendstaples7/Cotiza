@@ -13,6 +13,7 @@
  * PUT    /api/leads/:requestId/not-a-lead    mark (true) or unmark (false) a lead as not a real lead
  * POST   /api/leads/:requestId/send-text  send one confirmed text through Quo and log it
  * POST   /api/leads/jobber-notes/:noteId/retry  try again to add a Cotiza note to the Jobber request
+ * POST   /api/leads/:requestId/quotes/:quoteId/review-request  the team sent a draft quote to Ben for review
  *
  * Logging a contact, sending a text through Quo and the not-a-lead mark also add a short
  * "Cotiza · …" note to the Jobber request (jobber-request-notes.ts), so the team records each
@@ -33,6 +34,7 @@ import { LeadContactError, LeadContactService, validateContact } from '../servic
 import { gatherLeadWorkflow, type RequestDetail } from '../services/lead-contact-status.js';
 import { formatJobberNote, JobberNoteWriter, NOTE_ID_RE, noteKey, requestKeyPart, stepLabel, type JobberNoteRecord, type NoteAction } from '../services/jobber-request-notes.js';
 import { ActivityLogService } from '../services/activity-log-service.js';
+import { gatherQuoteStage, requestReview, type QuoteRef, type QuoteStage } from '../services/lead-quote-stage.js';
 
 type Env = { Bindings: Bindings; Variables: { user: { id: string; email: string } } };
 const app = new Hono<Env>();
@@ -91,13 +93,21 @@ async function addJobberNote(env: Bindings, userId: string, id: string, requestI
   }
 }
 
-type QuoteList = { jobberQuotes?: { outcome?: string; items?: Array<{ status?: { availability?: string; value?: string } }>; page?: { hasNextPage?: boolean } } };
+type Avail = { availability?: string; value?: string };
+type QuoteList = { jobberQuotes?: { outcome?: string; items?: Array<{ id?: string; quoteNumber?: Avail; status?: Avail; jobberWebUri?: Avail }>; page?: { hasNextPage?: boolean } } };
+const avail = (f: Avail | undefined) => (f?.availability === 'present' ? f.value ?? null : null);
 
-/** The request's quote statuses, or 'unknown' when they are not fully known (failed read, more pages). */
-function knownQuotes(quotes: unknown): Array<{ status: string | null }> | 'unknown' {
+/** The request's quotes, or 'unknown' when they are not fully known (failed read, more pages). */
+function knownQuotes(quotes: unknown): QuoteRef[] | 'unknown' {
   const list = (quotes as QuoteList | null)?.jobberQuotes;
   if (!list || list.outcome !== 'ok' || list.page?.hasNextPage) return 'unknown';
-  return (list.items ?? []).map((q) => ({ status: q.status?.availability === 'present' ? q.status.value ?? null : null }));
+  return (list.items ?? []).map((q) => ({ id: String(q.id ?? ''), number: avail(q.quoteNumber), status: avail(q.status), webUri: avail(q.jobberWebUri) }));
+}
+
+/** Where the quote is, when there is one; null when there are no quotes or they couldn't be read. */
+async function quoteStageFor(db: D1Database, requestId: string, quotes: QuoteRef[] | 'unknown'): Promise<QuoteStage | null> {
+  if (quotes === 'unknown' || !quotes.some((q) => q.status && q.status !== 'archived')) return null;
+  return gatherQuoteStage(db, requestId, quotes);
 }
 
 const MAX_STATUS_IDS = 50;
@@ -127,7 +137,9 @@ app.get('/contact-status', async (c) => {
         ]);
         // One set of services per lead: each tracks its own failed-read flag.
         const { email, phone } = contextServices(c.env);
-        const { status, workflow } = await gatherLeadWorkflow({ requestId, detail: request.request, requestFailed: request.outcome !== 'ok', contacts, phone, email, now, items, quotes: knownQuotes(quotes) });
+        const known = knownQuotes(quotes);
+        const quoteStage = await quoteStageFor(c.env.DB, requestId, known);
+        const { status, workflow } = await gatherLeadWorkflow({ requestId, detail: request.request, requestFailed: request.outcome !== 'ok', contacts, phone, email, now, items, quotes: known, quoteStage });
         statuses[requestId] = { ...status, workflow };
       } catch (err) {
         console.warn('[leads] contact status failed', sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 180));
@@ -168,6 +180,8 @@ app.get('/:requestId', async (c) => {
   const { email, phone } = contextServices(c.env);
   const timeline = contextServices(c.env);
   const failed = { status: 'failed' as const };
+  const known = knownQuotes(quotes);
+  const quoteStage = await quoteStageFor(c.env.DB, requestId, known);
   const [emailResult, phoneResult, contactTimeline] = await Promise.all([
     email.isAvailable() && contact.email ? email.fetchContextResult(contact.email).catch(() => failed) : Promise.resolve(null),
     phone.isAvailable() && contact.phone ? phone.fetchContextResult(contact.phone).catch(() => failed) : Promise.resolve(null),
@@ -180,7 +194,8 @@ app.get('/:requestId', async (c) => {
       email: timeline.email,
       now: Date.now(),
       items,
-      quotes: knownQuotes(quotes),
+      quotes: known,
+      quoteStage,
     }),
   ]);
 
@@ -335,6 +350,29 @@ app.post('/:requestId/send-text', async (c) => {
     console.error('[leads] quo text sent but not logged', sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 180));
     return c.json({ sent: true, logged: false, warning: 'The text was sent, but Cotiza could not log it. Use "Log contact" to record it. Do not send it again.' });
   }
+});
+
+/**
+ * The team sent a draft quote to Ben for review. The quote must be a draft on this request (read from
+ * Jobber, never trusted from the browser). Adds "Cotiza · Quote #N sent to Ben for review" to Jobber.
+ */
+app.post('/:requestId/quotes/:quoteId/review-request', async (c) => {
+  let requestId: string;
+  try { requestId = requireRequestId(c.req.param('requestId')); } catch (err) { return c.json(badRequest(err), 400); }
+  const quoteId = c.req.param('quoteId');
+  const userId = c.get('user').id;
+  const { jobberIntegration } = await openJobberIntegration(c.env.DB, c.env);
+  const read = new OpsAssistantRead(jobberIntegration, c.env.DB, c.env.IMAGES);
+  const known = knownQuotes(await read.listRequestQuotes(userId, { requestId }).catch(() => null));
+  if (known === 'unknown') return c.json({ error: 'The quotes on this request could not be read from Jobber, so nothing was changed.' }, 502);
+  const quote = known.find((q) => q.id === quoteId);
+  if (!quote) return c.json({ error: 'That quote is not on this request.' }, 404);
+  if (String(quote.status ?? '').toLowerCase() !== 'draft') return c.json({ error: 'Only a draft quote can be sent to Ben for review.' }, 409);
+  const requestedAt = await requestReview(c.env.DB, requestId, quote, userId);
+  const jobberNote = await addJobberNote(c.env, userId, noteKey('review', `${await requestKeyPart(quoteId)}_${Date.parse(requestedAt)}`), requestId, {
+    kind: 'review_requested', quoteNumber: quote.number,
+  });
+  return c.json({ requestedAt, quoteStage: await gatherQuoteStage(c.env.DB, requestId, known), jobberNote });
 });
 
 app.post('/jobber-notes/:noteId/retry', async (c) => {
