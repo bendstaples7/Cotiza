@@ -5,9 +5,12 @@ import {
   addLeadInfo,
   fetchLead,
   fetchLeadPhotoUrl,
+  logLeadContact,
+  setLeadNextContact,
   updateLeadInfo,
 } from '../api';
-import type { LeadBundle, LeadInfoItem, LeadInfoStatus } from '../api';
+import type { LeadBundle, LeadContactChannel, LeadContactStatus, LeadInfoItem, LeadInfoStatus } from '../api';
+import { formatDay, sourceList, timeAgo } from '../components/LeadContactLine';
 
 /**
  * Lead hub: everything known about one Jobber request, and the "info needed" list the team
@@ -19,6 +22,10 @@ export default function LeadPage() {
   const [lead, setLead] = useState<LeadBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Bumped after logging a contact or changing the next-contact date, to refresh the contact status.
+  const [reloadKey, setReloadKey] = useState(0);
+  const reload = () => setReloadKey((k) => k + 1);
 
   useEffect(() => {
     // Ignore a slower response for a lead the user has already navigated away from.
@@ -32,6 +39,17 @@ export default function LeadPage() {
       .finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
   }, [requestId]);
+
+  useEffect(() => {
+    if (reloadKey === 0) return;
+    // Refresh in place: the page stays up, and a failed refresh keeps what is shown.
+    let current = true;
+    fetchLead(requestId)
+      .then((bundle) => { if (current && bundle.requestId === requestId) setLead(bundle); })
+      .catch(() => undefined);
+    return () => { current = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadKey]);
 
   const replaceItem = (item: LeadInfoItem) => setLead((prev) => {
     // A save that finishes after the user moved to another lead must not land on it.
@@ -74,6 +92,8 @@ export default function LeadPage() {
         </div>
         <ReadyBadge ready={summary.readyToQuote} total={summary.total} open={summary.open + summary.asked} />
       </header>
+
+      {lead.contactStatus && <ContactPanel requestId={lead.requestId} status={lead.contactStatus} onChanged={reload} />}
 
       <section style={card}>
         <h2 style={h2}>Info needed</h2>
@@ -142,6 +162,110 @@ export default function LeadPage() {
         <ContextText block={lead.phone} kind="phone" />
       </section>
     </div>
+  );
+}
+
+const CHANNELS: Array<{ value: LeadContactChannel; label: string }> = [
+  { value: 'call', label: 'Call' },
+  { value: 'text', label: 'Text' },
+  { value: 'email', label: 'Email' },
+  { value: 'in_person', label: 'In person' },
+  { value: 'other', label: 'Other' },
+];
+
+const SOURCE_NAME: Record<string, string> = { quo: 'Quo', gmail: 'Gmail', jobber: 'Jobber', cotiza: 'logged in Cotiza' };
+
+/** Last contact, next contact, a way to log outreach done elsewhere, and the recent timeline. */
+function ContactPanel({ requestId, status, onChanged }: { requestId: string; status: LeadContactStatus; onChanged: () => void }) {
+  const [channel, setChannel] = useState<LeadContactChannel>('call');
+  const [direction, setDirection] = useState<'outgoing' | 'incoming'>('outgoing');
+  const [note, setNote] = useState('');
+  const [date, setDate] = useState(status.next.source === 'set' ? status.next.on : '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  useEffect(() => { setDate(status.next.source === 'set' ? status.next.on : ''); }, [status.next.on, status.next.source]);
+
+  const run = async (fn: () => Promise<unknown>, after?: () => void) => {
+    setSaving(true);
+    setError(null);
+    try {
+      await fn();
+      after?.();
+      onChanged();
+    } catch (err) {
+      setError((err as ErrorResponse).message ?? 'Could not save.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const next = status.next;
+  const nextStyle = next.overdue ? { color: '#b91c1c', fontWeight: 600 } : next.dueToday ? { color: '#92400e', fontWeight: 600 } : {};
+  const recent = showAll ? status.recent : status.recent.slice(0, 5);
+  return (
+    <section style={card}>
+      <h2 style={h2}>Contact</h2>
+      <div style={contactGrid}>
+        <div>
+          <span style={label}>Last contact</span>
+          <p style={{ margin: '0.15rem 0 0' }}>
+            {status.last ? <>{status.last.label} · {timeAgo(status.last.at)} <span style={muted}>({SOURCE_NAME[status.last.source]})</span></> : 'No contact yet'}
+          </p>
+        </div>
+        <div>
+          <span style={label}>Next contact</span>
+          <p style={{ margin: '0.15rem 0 0', ...nextStyle }}>
+            {formatDay(next.on)}{next.overdue ? ' · overdue' : ''}
+            <span style={{ ...muted, fontWeight: 400 }}> · {next.source === 'suggested' ? `suggested: ${next.reason}` : 'set by the team'}</span>
+          </p>
+          <div style={{ ...actions, marginTop: '0.35rem' }}>
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} aria-label="Next contact date" style={dateInput} />
+            <button type="button" style={btn} disabled={saving || !date || date === (next.source === 'set' ? next.on : '')} onClick={() => run(() => setLeadNextContact(requestId, date))}>Set date</button>
+            {next.source === 'set' && <button type="button" style={btn} disabled={saving} onClick={() => run(() => setLeadNextContact(requestId, null))}>Use suggestion</button>}
+          </div>
+        </div>
+      </div>
+      {(status.unavailable.length > 0 || status.notConnected.length > 0) && (
+        <p style={{ ...muted, marginTop: '0.5rem' }}>
+          {status.unavailable.length > 0 && <>Could not read {sourceList(status.unavailable)} right now, so contact history may be incomplete. </>}
+          {status.notConnected.length > 0 && <>{sourceList(status.notConnected)} not connected to Cotiza.</>}
+        </p>
+      )}
+
+      <form
+        style={{ ...addRow, flexWrap: 'wrap', marginTop: '0.75rem' }}
+        onSubmit={(e) => { e.preventDefault(); void run(() => logLeadContact(requestId, { channel, direction, note: note.trim() || undefined }), () => setNote('')); }}
+      >
+        <select value={channel} onChange={(e) => setChannel(e.target.value as LeadContactChannel)} aria-label="Contact type" style={select}>
+          {CHANNELS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+        </select>
+        <select value={direction} onChange={(e) => setDirection(e.target.value as 'outgoing' | 'incoming')} aria-label="Who reached out" style={select}>
+          <option value="outgoing">We reached out</option>
+          <option value="incoming">Customer reached us</option>
+        </select>
+        <input style={{ ...input, minWidth: 180 }} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. left voicemail)" aria-label="Contact note" maxLength={500} />
+        <button type="submit" style={primaryBtn} disabled={saving}>Log contact</button>
+      </form>
+      {error && <p role="alert" style={inlineError}>{error}</p>}
+
+      {status.recent.length > 0 && (
+        <>
+          <h3 style={h3}>Recent activity</h3>
+          <ul style={list}>
+            {recent.map((e, i) => (
+              <li key={`${e.at}-${i}`} style={timelineRow}>
+                <span>{e.label}{e.note ? <span style={muted}> — {e.note}</span> : null}</span>
+                <span style={muted}>{timeAgo(e.at)} · {SOURCE_NAME[e.source]}</span>
+              </li>
+            ))}
+          </ul>
+          {status.recent.length > 5 && (
+            <button type="button" style={linkBtn} onClick={() => setShowAll((v) => !v)}>{showAll ? 'Show less' : `Show all ${status.recent.length}`}</button>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -303,3 +427,8 @@ const quoteRow: React.CSSProperties = { display: 'flex', gap: '0.75rem', alignIt
 const photoGrid: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '0.5rem' };
 const photoBox: React.CSSProperties = { aspectRatio: '4 / 3', background: '#f3f4f6', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', textAlign: 'center' };
 const photo: React.CSSProperties = { width: '100%', height: '100%', objectFit: 'cover' };
+const contactGrid: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem' };
+const dateInput: React.CSSProperties = { font: 'inherit', fontSize: '0.85rem', padding: '0.3rem 0.4rem', border: '1px solid #d1d5db', borderRadius: 6 };
+const select: React.CSSProperties = { font: 'inherit', padding: '0.45rem', border: '1px solid #d1d5db', borderRadius: 6, background: '#fff' };
+const timelineRow: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: '0.75rem', fontSize: '0.88rem', flexWrap: 'wrap' };
+const linkBtn: React.CSSProperties = { font: 'inherit', fontSize: '0.85rem', background: 'none', border: 'none', color: '#00a89d', cursor: 'pointer', padding: '0.25rem 0' };

@@ -368,6 +368,30 @@ export class EmailContextService {
     return parts.join('\n');
   }
 
+  /**
+   * Emails with the customer as dated events (newest first), for last-contact tracking. Bodies
+   * are not returned. A failed read is reported, never an empty history.
+   */
+  async fetchActivityResult(customerEmail: string): Promise<
+    { status: 'ok'; events: Array<{ at: string; direction: 'incoming' | 'outgoing' }> } | { status: 'failed' }
+  > {
+    this.lastReadFailed = false;
+    if (!this.isAvailable() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail)) return { status: 'ok', events: [] };
+    const accessToken = await this.getAccessToken();
+    if (!accessToken) return { status: 'failed' };
+    const messages = await this.fetchMessages(accessToken, customerEmail);
+    if (this.lastReadFailed) return { status: 'failed' };
+    const events = messages.map((msg) => {
+      const from = extractEmail(this.getHeader(msg.payload?.headers ?? [], 'From'));
+      const ms = Number(msg.internalDate);
+      return {
+        at: Number.isFinite(ms) ? new Date(ms).toISOString() : '',
+        direction: from.toLowerCase() === customerEmail.toLowerCase() ? 'incoming' as const : 'outgoing' as const,
+      };
+    }).filter((e) => e.at);
+    return { status: 'ok', events };
+  }
+
   /** Like fetchContext, but reports a failed read instead of returning an empty string for it. */
   async fetchContextResult(customerEmail: string): Promise<{ status: 'ok'; text: string } | { status: 'failed' }> {
     this.lastReadFailed = false;

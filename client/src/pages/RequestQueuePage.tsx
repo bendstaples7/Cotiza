@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import DeathclockBadge from '../components/DeathclockBadge';
 import RequestJobberQuoteModal from '../components/RequestJobberQuoteModal';
+import LeadContactLine from '../components/LeadContactLine';
 import type { ErrorResponse } from 'shared';
 import { isPlaceholderJobberClientName } from 'shared';
 import {
@@ -13,8 +14,9 @@ import {
   resolveRequestQuote,
   fetchRequestJobberQuotes,
   fetchLeadSummaries,
+  fetchLeadContactStatuses,
 } from '../api';
-import type { JobberQueueStatus, LeadInfoSummary, ManualRequestWithDeathclock, ResolveRequestQuoteResult } from '../api';
+import type { JobberQueueStatus, LeadContactStatus, LeadInfoSummary, ManualRequestWithDeathclock, ResolveRequestQuoteResult } from '../api';
 
 // ---------------------------------------------------------------------------
 // Deathclock color → hex map (mirrors DeathclockBadge component)
@@ -77,6 +79,8 @@ export default function RequestQueuePage() {
   const [generatingForId, setGeneratingForId] = useState<string | null>(null);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [leadSummaries, setLeadSummaries] = useState<Record<string, LeadInfoSummary>>({});
+  const [contactStatuses, setContactStatuses] = useState<Record<string, LeadContactStatus | null>>({});
+  const contactLoadGeneration = useRef(0);
   const [jobberQuoteBadges, setJobberQuoteBadges] = useState<
     Record<string, Array<{ quoteNumber: string; quoteStatus: string }>>
   >({});
@@ -161,6 +165,12 @@ export default function RequestQueuePage() {
         try {
           fetchLeadSummaries(leadIds)
             .then(({ summaries }) => setLeadSummaries(summaries))
+            .catch(() => undefined);
+          // Last/next contact reads Jobber, Quo and Gmail per lead, so it arrives after the cards.
+          // A slower response from an earlier load must not overwrite a newer one.
+          const generation = ++contactLoadGeneration.current;
+          fetchLeadContactStatuses(leadIds.slice(0, 50))
+            .then(({ statuses }) => { if (generation === contactLoadGeneration.current) setContactStatuses(statuses); })
             .catch(() => undefined);
         } catch {
           // Lead badges are optional; never block the queue.
@@ -573,6 +583,9 @@ export default function RequestQueuePage() {
                       </button>
                     )}
                   </div>
+                  {req.jobberRequestId && contactStatuses[req.jobberRequestId] && (
+                    <LeadContactLine status={contactStatuses[req.jobberRequestId]!} />
+                  )}
                 </div>
               </div>
             );
