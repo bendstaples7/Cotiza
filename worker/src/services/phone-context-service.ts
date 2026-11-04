@@ -335,7 +335,8 @@ export class PhoneContextService {
     if (!to) return { status: 'failed', reason: 'The customer has no usable phone number in Jobber.' };
     this.lastReadFailed = false;
     const [from] = await this.ourNumberIds();
-    if (!from) return { status: 'failed', reason: 'No Quo number to send from.' };
+    if (this.lastReadFailed) return { status: 'failed', reason: 'Could not read Chicago Reno\'s Quo numbers, so nothing was sent. Try again in a minute.' };
+    if (!from) return { status: 'failed', reason: 'There is no Quo number to send from, so nothing was sent.' };
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
     try {
@@ -345,7 +346,12 @@ export class PhoneContextService {
         body: JSON.stringify({ content, from, to: [to] }),
         signal: controller.signal,
       });
-      if (!res.ok) return { status: 'failed', reason: `Quo did not send the text (HTTP ${res.status}).` };
+      if (!res.ok) {
+        // A 4xx is a refusal; a 5xx doesn't prove the text didn't go out.
+        return res.status >= 500
+          ? { status: 'failed', reason: `Quo returned an error (HTTP ${res.status}). The text may have gone out: check Quo before sending again.` }
+          : { status: 'failed', reason: `Quo did not send the text (HTTP ${res.status}).` };
+      }
       const body = await res.json().catch(() => null) as { data?: { id?: string } } | null;
       return { status: 'sent', id: body?.data?.id ?? null };
     } catch {

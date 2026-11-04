@@ -12,7 +12,7 @@ import {
 } from '../api';
 import type { LeadBundle, LeadContactChannel, LeadContactStatus, LeadInfoItem, LeadInfoStatus } from '../api';
 import { formatDay, sourceList, timeAgo } from '../components/LeadContactLine';
-import { buildOutreach, itemKind, mailtoLink, OUTREACH_STEPS, smsLink, type ItemKind } from '../leadOutreach';
+import { ASSUMED_PREFIX, buildOutreach, itemKind, mailtoLink, MAX_TEXT_LENGTH, OUTREACH_STEPS, smsLink, type ItemKind } from '../leadOutreach';
 
 /**
  * Lead hub: everything known about one Jobber request, and the "info needed" list the team
@@ -184,8 +184,7 @@ function OutreachPanel({ lead, onChanged }: { lead: LeadBundle; onChanged: () =>
   const phone = lead.contact.phone;
   const email = lead.contact.email;
   const mailto = email ? mailtoLink(email, messages.emailSubject, messages.emailBody) : null;
-  const done = new Map<string, string>();
-  for (const c of lead.loggedContacts ?? []) if (c.step && !done.has(c.step)) done.set(c.step, c.contactedAt);
+  const done = new Map<string, string>((lead.outreachSteps ?? []).map((s) => [s.step, s.contactedAt]));
 
   const copy = async (what: string, value: string) => {
     try {
@@ -214,9 +213,9 @@ function OutreachPanel({ lead, onChanged }: { lead: LeadBundle; onChanged: () =>
     setBusy(true);
     setError(null);
     try {
-      await sendLeadText(lead.requestId, text.trim(), done.has('intro_text') ? undefined : 'intro_text');
+      const result = await sendLeadText(lead.requestId, text.trim(), done.has('intro_text') ? undefined : 'intro_text');
       setConfirming(false);
-      setNotice('Text sent through Quo and logged.');
+      setNotice(result.logged ? 'Text sent through Quo and logged.' : result.warning);
       onChanged();
     } catch (err) {
       setError((err as ErrorResponse).message ?? 'The text was not sent.');
@@ -246,7 +245,7 @@ function OutreachPanel({ lead, onChanged }: { lead: LeadBundle; onChanged: () =>
       </ol>
 
       <h3 style={h3}>Proposed text</h3>
-      <textarea style={{ ...textarea, minHeight: 120 }} value={text} onChange={(e) => { setText(e.target.value); setEdited(true); }} aria-label="Proposed text message" />
+      <textarea style={{ ...textarea, minHeight: 120 }} maxLength={MAX_TEXT_LENGTH} value={text} onChange={(e) => { setText(e.target.value); setEdited(true); }} aria-label="Proposed text message" />
       <div style={{ ...actions, marginTop: '0.5rem' }}>
         <button type="button" style={btn} onClick={() => copy('text', text)}>{copied === 'text' ? 'Copied' : 'Copy text'}</button>
         {phone && <a style={btnLink} href={smsLink(phone, text)}>Text from my phone</a>}
@@ -273,6 +272,7 @@ function OutreachPanel({ lead, onChanged }: { lead: LeadBundle; onChanged: () =>
         {mailto && <a style={btnLink} href={mailto}>Open in my email</a>}
       </div>
       {!email && <p style={muted}>No email address in Jobber for this lead.</p>}
+      {email && !mailto && <p style={muted}>The email address in Jobber doesn't look usable, so it can't be opened here. Copy the email instead.</p>}
       <p style={{ ...muted, marginTop: '0.5rem' }}>After sending from your own phone or email, tick the step above so it's logged.</p>
       {notice && <p role="status" style={{ ...muted, color: '#166534' }}>{notice}</p>}
       {error && <p role="alert" style={inlineError}>{error}</p>}
@@ -508,7 +508,8 @@ function AddQuestion({ requestId, onAdded }: { requestId: string; onAdded: (item
     setSaving(true);
     setError(null);
     try {
-      onAdded((await addLeadInfo(requestId, question.trim())).item);
+      // An "Assumed: …" line is a documented assumption, not an ask: it never holds the quote back.
+      onAdded((await addLeadInfo(requestId, question.trim(), !ASSUMED_PREFIX.test(question.trim()))).item);
       setQuestion('');
     } catch (err) {
       setError((err as ErrorResponse).message ?? 'Could not add the question.');

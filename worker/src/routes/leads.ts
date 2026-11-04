@@ -86,10 +86,11 @@ app.get('/:requestId', async (c) => {
   const read = new OpsAssistantRead(jobberIntegration, c.env.DB, c.env.IMAGES);
   const info = new LeadInfoService(c.env.DB);
 
-  const [request, quotes, items] = await Promise.all([
+  const [request, quotes, items, outreachSteps] = await Promise.all([
     read.readRequest(userId, { requestId }),
     read.listRequestQuotes(userId, { requestId }),
     info.list(requestId),
+    new LeadContactService(c.env.DB).completedSteps(requestId),
   ]);
   const detail = (request as { request?: { phone?: { value?: string }; email?: { value?: string } } | null }).request;
   const contact = { email: detail?.email?.value ?? null, phone: detail?.phone?.value ?? null };
@@ -123,6 +124,7 @@ app.get('/:requestId', async (c) => {
     infoNeeded: { items, summary: summarize(items) },
     contactStatus: contactTimeline.status,
     loggedContacts: contactTimeline.logged,
+    outreachSteps,
   });
 });
 
@@ -226,8 +228,14 @@ app.post('/:requestId/send-text', async (c) => {
     console.warn('[leads] quo send failed', sanitizeLogText(sent.reason));
     return c.json({ error: sent.reason }, 502);
   }
-  const contact = await contacts.log(requestId, { channel: 'text', note: 'Sent from Cotiza via Quo', step: body?.step ?? undefined }, c.get('user').id);
-  return c.json({ sent: true, contact });
+  // The text is out: a failed log must not read as a failed send, or the team may send it twice.
+  try {
+    const contact = await contacts.log(requestId, { channel: 'text', note: 'Sent from Cotiza via Quo', step: body?.step ?? undefined }, c.get('user').id);
+    return c.json({ sent: true, logged: true, contact });
+  } catch (err) {
+    console.error('[leads] quo text sent but not logged', sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 180));
+    return c.json({ sent: true, logged: false, warning: 'The text was sent, but Cotiza could not log it. Use "Log contact" to record it. Do not send it again.' });
+  }
 });
 
 export default app;

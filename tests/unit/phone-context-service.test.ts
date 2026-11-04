@@ -249,10 +249,22 @@ describe('PhoneContextService', () => {
     });
 
     it('reports a failed send and refuses without a key or number', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 400, json: () => Promise.resolve({}) }));
+      const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 400, json: () => Promise.resolve({}) });
+      vi.stubGlobal('fetch', fetchMock);
       expect(await new PhoneContextService('sk-test-key', 'PN1').sendText('+17735550100', 'Hi')).toEqual({ status: 'failed', reason: 'Quo did not send the text (HTTP 400).' });
+      fetchMock.mockResolvedValue({ ok: false, status: 503, json: () => Promise.resolve({}) });
+      expect(await new PhoneContextService('sk-test-key', 'PN1').sendText('+17735550100', 'Hi')).toMatchObject({ status: 'failed', reason: expect.stringContaining('check Quo before sending again') });
+      fetchMock.mockClear();
+      // Refusals never reach Quo.
       expect((await new PhoneContextService('').sendText('+17735550100', 'Hi')).status).toBe('failed');
       expect((await new PhoneContextService('sk-test-key', 'PN1').sendText('n/a', 'Hi')).status).toBe('failed');
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('reports a failed number lookup as a failed read, not a missing number', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, json: () => Promise.resolve({}) }));
+      const result = await new PhoneContextService('sk-test-key').sendText('+17735550100', 'Hi');
+      expect(result).toMatchObject({ status: 'failed', reason: expect.stringContaining('Could not read') });
     });
   });
 });

@@ -7,6 +7,7 @@ import type { LeadInfoItem } from './api';
 
 export const ASSUMED_PREFIX = /^assumed:\s*/i;
 export const OPTIONAL_PREFIX = /^optional:\s*/i;
+export const MAX_TEXT_LENGTH = 1600;
 
 export type ItemKind = 'ask' | 'assumption' | 'optional';
 
@@ -25,8 +26,9 @@ function firstName(clientName: string | null): string {
   return first && first.toLowerCase() !== 'unknown' ? first : 'there';
 }
 
+/** Lowercases a plain capitalized first word ("About" -> "about"); leaves "I", acronyms and names' casing alone otherwise. */
 function lowerFirst(text: string): string {
-  return text ? text[0].toLowerCase() + text.slice(1) : text;
+  return /^[A-Z][a-z]/.test(text) ? text[0].toLowerCase() + text.slice(1) : text;
 }
 
 function sentence(text: string): string {
@@ -95,5 +97,7 @@ export function smsLink(phone: string, body: string): string {
 export function mailtoLink(email: string, subject: string, body: string): string | null {
   const address = email.trim();
   if (!/^[^\s@,;?&]+@[^\s@,;?&]+\.[^\s@,;?&]+$/.test(address)) return null;
-  return `mailto:${address}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  const at = address.lastIndexOf('@');
+  const safe = `${encodeURIComponent(address.slice(0, at))}@${encodeURIComponent(address.slice(at + 1))}`;
+  return `mailto:${safe}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }

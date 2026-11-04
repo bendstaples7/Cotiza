@@ -51,6 +51,9 @@ describe('buildOutreach', () => {
     expect(none.text).toContain("We're putting your quote together now.");
     expect(none.asks).toEqual([]);
     expect(none.assumptions).toEqual(['standard tune-up']);
+    const caps = buildOutreach({ clientName: 'A', title: 'T', items: [item('Assumed: ADU permit is in place.', false), item('Assumed: I-beam stays.', false)] });
+    expect(caps.emailBody).toContain("- We're assuming ADU permit is in place");
+    expect(caps.emailBody).toContain("- We're assuming I-beam stays");
   });
 
   it('classifies items', () => {
@@ -65,5 +68,6 @@ describe('links', () => {
     expect(smsLink('(773) 555-0100', 'Hi & bye')).toBe('sms:7735550100?&body=Hi%20%26%20bye');
     expect(mailtoLink('a@b.co', 'S', 'B')).toBe('mailto:a@b.co?subject=S&body=B');
     expect(mailtoLink('a@b.co?cc=evil@x.com', 'S', 'B')).toBeNull();
+    expect(mailtoLink('a#1@b.co', 'S', 'B')).toBe('mailto:a%231@b.co?subject=S&body=B');
   });
 });
