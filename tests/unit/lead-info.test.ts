@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { LeadInfoError, LeadInfoService, summarize } from '../../worker/src/services/lead-info-service.js';
 import { callLeadTool, LeadToolArgsError } from '../../worker/src/services/lead-info-tools.js';
 import { CallBudget, type AssistantDirectory, type AssistantPrincipal } from '../../worker/src/services/assistant-access.js';
 import { OpsAssistantRead } from '../../worker/src/services/ops-assistant-read.js';
 import { handleMcpPost, readMcpJsonBody } from '../../worker/src/routes/ops-assistant.js';
 
+// Vitest 2's resolver doesn't know node:sqlite, so load it through Node's own require.
+const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
 const MIGRATION = readFileSync(new URL('../../worker/src/migrations/0071_lead_info_items.sql', import.meta.url), 'utf8');
 const REQ = 'Z2lkOi8vSm9iYmVyL1JlcXVlc3QvMzU3NDIzMDM=';
 const OTHER = 'Z2lkOi8vSm9iYmVyL1JlcXVlc3QvMQ==';
