@@ -13,6 +13,7 @@ import type { ManualRequestWithDeathclock } from '../../client/src/api';
 const mockFetchManualRequests = vi.hoisted(() => vi.fn<() => Promise<ManualRequestWithDeathclock[]>>());
 vi.mock('../../client/src/api', () => ({
   fetchManualRequests: mockFetchManualRequests,
+  fetchLeadSummaries: vi.fn().mockResolvedValue({ summaries: {} }),
 }));
 
 // ---------------------------------------------------------------------------

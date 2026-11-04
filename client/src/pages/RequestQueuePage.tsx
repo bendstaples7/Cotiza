@@ -12,8 +12,9 @@ import {
   deleteDraft,
   resolveRequestQuote,
   fetchRequestJobberQuotes,
+  fetchLeadSummaries,
 } from '../api';
-import type { ManualRequestWithDeathclock, ResolveRequestQuoteResult } from '../api';
+import type { LeadInfoSummary, ManualRequestWithDeathclock, ResolveRequestQuoteResult } from '../api';
 
 // ---------------------------------------------------------------------------
 // Deathclock color → hex map (mirrors DeathclockBadge component)
@@ -74,6 +75,7 @@ export default function RequestQueuePage() {
   const [error, setError] = useState<string | null>(null);
   const [generatingForId, setGeneratingForId] = useState<string | null>(null);
   const [generateError, setGenerateError] = useState<string | null>(null);
+  const [leadSummaries, setLeadSummaries] = useState<Record<string, LeadInfoSummary>>({});
   const [jobberQuoteBadges, setJobberQuoteBadges] = useState<
     Record<string, Array<{ quoteNumber: string; quoteStatus: string }>>
   >({});
@@ -150,6 +152,17 @@ export default function RequestQueuePage() {
         .filter((r) => r.jobberRequestId)
         .map((r) => r.jobberRequestId as string)
         .slice(0, MAX_BACKGROUND_QUEUE_IDS);
+      // Info-needed counts for the lead badges (best-effort; the queue works without them).
+      const leadIds = result.filter((r) => r.jobberRequestId).map((r) => r.jobberRequestId as string).slice(0, 200);
+      if (leadIds.length > 0) {
+        try {
+          fetchLeadSummaries(leadIds)
+            .then(({ summaries }) => setLeadSummaries(summaries))
+            .catch(() => undefined);
+        } catch {
+          // Lead badges are optional; never block the queue.
+        }
+      }
       const activeBadgeIds = new Set(jobberIdsForBadges);
       if (jobberIdsForBadges.length > 0) {
         setJobberQuoteBadges((prev) => {
@@ -284,6 +297,15 @@ export default function RequestQueuePage() {
     } finally {
       endGenerating();
     }
+  };
+
+  /** Jobber requests open their lead page; manual requests keep the quote builder flow. */
+  const openRequest = (req: ManualRequestWithDeathclock) => {
+    if (req.jobberRequestId) {
+      navigate('/quotes/leads/' + encodeURIComponent(req.jobberRequestId));
+      return;
+    }
+    void handleRequestClick(req);
   };
 
   const handleRequestClick = async (req: ManualRequestWithDeathclock) => {
@@ -443,13 +465,14 @@ export default function RequestQueuePage() {
                   pointerEvents: generatingForId ? 'none' : 'auto',
                   ...(shouldPulse ? { '--dc-card-rgb': hexToRgb(colorHex), animation: 'dc-card-glow 2s ease-in-out infinite' } as React.CSSProperties : {}),
                 }}
-                onClick={() => { handleRequestClick(req); }}
+                onClick={() => { openRequest(req); }}
                 role="button"
                 tabIndex={0}
                 onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return;
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
-                      handleRequestClick(req);
+                      openRequest(req);
                     }
                   }}
                 aria-label={`Request from ${req.customerName}`}
@@ -514,6 +537,22 @@ export default function RequestQueuePage() {
                       <span style={jobberQuoteBadgeStyle}>
                         Jobber quote #{linkedQuotes[0].quoteNumber} · {linkedQuotes[0].quoteStatus.replace(/_/g, ' ')}
                       </span>
+                    )}
+                    {req.jobberRequestId && leadSummaries[req.jobberRequestId] && (
+                      <span style={leadInfoBadgeStyle(leadSummaries[req.jobberRequestId])}>
+                        {leadSummaries[req.jobberRequestId].readyToQuote
+                          ? 'Ready to quote'
+                          : `${leadSummaries[req.jobberRequestId].open + leadSummaries[req.jobberRequestId].asked} info needed`}
+                      </span>
+                    )}
+                    {req.jobberRequestId && (
+                      <button
+                        type="button"
+                        style={quoteBuilderButtonStyle}
+                        onClick={(e) => { e.stopPropagation(); handleRequestClick(req); }}
+                      >
+                        Quote builder
+                      </button>
                     )}
                   </div>
                 </div>
@@ -735,3 +774,20 @@ function decodeJobberId(id: string): string {
     return id.slice(0, 12);
   }
 }
+
+function leadInfoBadgeStyle(summary: LeadInfoSummary): React.CSSProperties {
+  return summary.readyToQuote
+    ? { ...jobberQuoteBadgeStyle, background: '#dcfce7', color: '#166534' }
+    : { ...jobberQuoteBadgeStyle, background: '#fef3c7', color: '#92400e' };
+}
+
+const quoteBuilderButtonStyle: React.CSSProperties = {
+  marginLeft: 'auto',
+  font: 'inherit',
+  fontSize: '0.78rem',
+  padding: '0.2rem 0.6rem',
+  border: '1px solid #d1d5db',
+  borderRadius: 6,
+  background: '#fff',
+  cursor: 'pointer',
+};
