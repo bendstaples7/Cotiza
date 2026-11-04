@@ -1368,6 +1368,37 @@ export interface LeadBundle {
   workflow?: LeadWorkflow | null;
   loggedContacts: LoggedLeadContact[];
   outreachSteps: Array<{ step: string; contactedAt: string }>;
+  /** Cotiza actions whose note did not reach the Jobber request yet. */
+  unsentJobberNotes?: JobberNoteStatus[];
+}
+
+/** The Jobber note Cotiza adds for an action. "failed" means the action is saved in Cotiza but Jobber didn't get the note. */
+export interface JobberNoteStatus {
+  id: string;
+  status: 'pending' | 'posting' | 'posted' | 'failed';
+  error: string | null;
+  message: string | null;
+}
+
+/** Shows a warning toast when an action saved in Cotiza but its Jobber note did not go through. */
+export function warnIfJobberNoteFailed(note: JobberNoteStatus | null | undefined): void {
+  if (!note || note.status !== 'failed') return;
+  globalErrorListener?.({
+    severity: 'warning',
+    component: 'LeadHub',
+    operation: 'jobber_note',
+    message: 'Saved in Cotiza; couldn\u2019t add the Jobber note. Open the lead and press Retry.',
+    actions: [],
+  });
+}
+
+/** Tries again to add a Cotiza note to the Jobber request. */
+export async function retryJobberNote(noteId: string): Promise<{ jobberNote: JobberNoteStatus }> {
+  const res = await fetch(API_BASE + '/api/leads/jobber-notes/' + encodeURIComponent(noteId) + '/retry', {
+    method: 'POST',
+    headers: { ...authHeaders() },
+  });
+  return handleResponse(res);
 }
 
 export type LeadContactChannel = 'call' | 'text' | 'email' | 'in_person' | 'other';
@@ -1431,7 +1462,7 @@ export async function fetchLeadContactStatuses(requestIds: string[]): Promise<{ 
 export async function logLeadContact(
   requestId: string,
   contact: { channel: LeadContactChannel; direction?: 'outgoing' | 'incoming'; note?: string; step?: string },
-): Promise<{ contact: LoggedLeadContact }> {
+): Promise<{ contact: LoggedLeadContact; jobberNote?: JobberNoteStatus | null }> {
   const res = await fetch(API_BASE + '/api/leads/' + encodeURIComponent(requestId) + '/contacts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -1450,7 +1481,7 @@ export async function setLeadNextContact(requestId: string, nextContactOn: strin
 }
 
 /** Marks a lead as not a real lead (true), or clears the mark (false). */
-export async function setLeadNotALead(requestId: string, notALead: boolean): Promise<{ notALead: boolean }> {
+export async function setLeadNotALead(requestId: string, notALead: boolean): Promise<{ notALead: boolean; jobberNote?: JobberNoteStatus | null }> {
   const res = await fetch(API_BASE + '/api/leads/' + encodeURIComponent(requestId) + '/not-a-lead', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -1461,7 +1492,7 @@ export async function setLeadNotALead(requestId: string, notALead: boolean): Pro
 
 /** Sends one text through Quo after the team confirmed it. The server takes the number from Jobber. */
 export async function sendLeadText(requestId: string, text: string, step?: string): Promise<
-  { sent: true; logged: true; contact: LoggedLeadContact } | { sent: true; logged: false; warning: string }
+  { sent: true; logged: true; contact: LoggedLeadContact; jobberNote?: JobberNoteStatus | null } | { sent: true; logged: false; warning: string }
 > {
   const res = await fetch(API_BASE + '/api/leads/' + encodeURIComponent(requestId) + '/send-text', {
     method: 'POST',

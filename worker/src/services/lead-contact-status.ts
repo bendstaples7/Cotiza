@@ -17,6 +17,7 @@ import {
 import type { LeadInfoItem } from './lead-info-service.js';
 import { summarize } from './lead-info-service.js';
 import { computeLeadWorkflow, type LeadWorkflow } from './lead-workflow.js';
+import { isCotizaNote } from './jobber-request-notes.js';
 
 type Field<T> = { availability?: string; value?: T } | undefined;
 export type RequestDetail = {
@@ -63,6 +64,8 @@ export function requestEvents(detail: RequestDetail): ContactEvent[] {
   if (created) events.push({ at: created, channel: 'request', direction: 'incoming', source: 'jobber', label: 'Request came in' });
   for (const note of detail?.notes ?? []) {
     if (!note.createdAt || (note.createdBy !== 'team' && note.createdBy !== 'client')) continue;
+    // Cotiza's own notes repeat contacts already logged in Cotiza; counting them would double the touch.
+    if (isCotizaNote(note.message)) continue;
     const raw = (note.message ?? '').replace(/\s+/g, ' ').trim();
     const text = redactContactDetails(raw);
     if (!text) continue;

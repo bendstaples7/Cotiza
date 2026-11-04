@@ -6,12 +6,13 @@ import {
   fetchLead,
   fetchLeadPhotoUrl,
   logLeadContact,
+  retryJobberNote,
   sendLeadText,
   setLeadNextContact,
   setLeadNotALead,
   updateLeadInfo,
 } from '../api';
-import type { LeadBundle, LeadContactChannel, LeadContactStatus, LeadInfoItem, LeadInfoStatus, LeadWorkflow } from '../api';
+import type { JobberNoteStatus, LeadBundle, LeadContactChannel, LeadContactStatus, LeadInfoItem, LeadInfoStatus, LeadWorkflow } from '../api';
 import { formatDay, sourceList, timeAgo } from '../components/LeadContactLine';
 import { ASSUMED_PREFIX, buildActionMessage, itemKind, mailtoLink, MAX_TEXT_LENGTH, smsLink, type ItemKind } from '../leadOutreach';
 
@@ -114,6 +115,8 @@ export default function LeadPage() {
           <ReadyBadge ready={summary.readyToQuote} total={summary.total} open={summary.open + summary.asked} workflow={workflow} />
         </div>
       </header>
+
+      <JobberNotesBanner notes={lead.unsentJobberNotes ?? []} onChanged={reload} />
 
       {workflow && <ProgressBar progress={workflow.progress} />}
 
@@ -785,3 +788,44 @@ const linkBtn: React.CSSProperties = { font: 'inherit', fontSize: '0.85rem', bac
 const btnLink: React.CSSProperties = { font: 'inherit', fontSize: '0.88rem', minHeight: 40, padding: '0 0.9rem', border: '1px solid #d1d5db', borderRadius: 8, background: '#fff', color: '#374151', textDecoration: 'none', display: 'inline-flex', alignItems: 'center' };
 const primaryLink: React.CSSProperties = { ...btnLink, background: '#1d4ed8', borderColor: '#1d4ed8', color: '#fff', fontWeight: 600 };
 const confirmBox: React.CSSProperties = { marginTop: '0.75rem', padding: '0.75rem', border: '1px solid #f59e0b', background: '#fffbeb', borderRadius: 8 };
+
+/**
+ * Cotiza actions whose note did not reach the Jobber request. The action itself is saved in Cotiza;
+ * this says so plainly and offers a retry, so a failed Jobber write is never hidden.
+ */
+export function JobberNotesBanner({ notes, onChanged }: { notes: JobberNoteStatus[]; onChanged: () => void }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  if (!notes.length) return null;
+  const retry = async (id: string) => {
+    setBusy(id);
+    try {
+      const { jobberNote } = await retryJobberNote(id);
+      if (jobberNote.status === 'failed') setErrors((e) => ({ ...e, [id]: jobberNote.error ?? 'Jobber still did not take the note.' }));
+      onChanged();
+    } catch (err) {
+      setErrors((e) => ({ ...e, [id]: (err as ErrorResponse).message ?? 'Jobber still did not take the note.' }));
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <section role="alert" style={{ border: '1px solid #fca5a5', background: '#fef2f2', borderRadius: 12, padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {notes.map((n) => (
+        <div key={n.id} style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+            <span style={{ fontSize: 14, fontWeight: 600, color: '#991b1b' }}>
+              {n.status === 'posting' || n.status === 'pending' ? 'Adding the note to Jobber…' : 'Saved in Cotiza; couldn\u2019t add the Jobber note'}
+            </span>
+            {n.message && <span style={{ fontSize: 13, color: '#4b5563', overflowWrap: 'anywhere' }}>{n.message}</span>}
+            {(errors[n.id] ?? n.error) && <span style={{ fontSize: 13, color: '#991b1b' }}>{errors[n.id] ?? n.error}</span>}
+          </div>
+          <button type="button" disabled={busy === n.id} onClick={() => { void retry(n.id); }}
+            style={{ minHeight: 44, padding: '0 16px', border: '1px solid #991b1b', background: '#ffffff', color: '#991b1b', borderRadius: 8, font: 'inherit', fontSize: 14, fontWeight: 600 }}>
+            {busy === n.id ? 'Retrying…' : 'Retry'}
+          </button>
+        </div>
+      ))}
+    </section>
+  );
+}
