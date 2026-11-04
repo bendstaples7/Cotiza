@@ -46,6 +46,7 @@ function fakeJobber(opts: { mutations?: object[]; fail?: 'reject' | 'network'; e
       const isClient = variables?.payload === 'ClientCreateNotePayload';
       return { input: { inputFields: isClient ? inputFields : opts.requestInputFields ?? inputFields }, payload: { fields: isClient ? clientPayloadFields : payloadFields } };
     }
+    if (query.includes('CotizaRecentClientNotes')) return { request: { client: { notes: { edges: (opts.existingNotes ?? []).map((m, i) => ({ node: { id: `CN${i}`, message: m } })) } } } };
     if (query.includes('CotizaRecentNotes')) return { request: { notes: { edges: (opts.existingNotes ?? []).map((m, i) => ({ node: { id: `N${i}`, message: m } })) } } };
     if (query.includes('CotizaRequestClient')) return { request: { id: REQ, client: { id: 'C1' } } };
     if (query.includes('CotizaAddNote')) {
@@ -241,6 +242,16 @@ describe('JobberNoteWriter', () => {
     const note = await new JobberNoteWriter({ db, jobber: jobber.client }).write(noteKey('contact', 'lct_6'), REQ, 'm', 'u');
     expect(note).toMatchObject({ status: 'posted', jobberNoteId: 'CNOTE1' });
     expect(jobber.mutationCalls()[0].query).toContain('clientCreateNote');
+  });
+
+  it('with client notes, a lost write is looked for on the client before posting again', async () => {
+    const { db } = fakeDb();
+    const id = noteKey('contact', 'lct_8');
+    await new JobberNoteWriter({ db, jobber: fakeJobber({ mutations: [clientCreateNote], fail: 'network' }).client }).write(id, REQ, 'm', 'u');
+    const landed = fakeJobber({ mutations: [clientCreateNote], existingNotes: ['m'] });
+    const retried = await new JobberNoteWriter({ db, jobber: landed.client }).retry(id, 'u');
+    expect(retried).toMatchObject({ status: 'posted', jobberNoteId: 'CN0' });
+    expect(landed.mutationCalls()).toHaveLength(0);
   });
 
   it('an attempt that lost its claim cannot overwrite the outcome', async () => {

@@ -262,4 +262,3 @@ export class LeadContactService {
     return { notALead: true, changed: Boolean(res.meta?.changes) };
   }
 }
-}

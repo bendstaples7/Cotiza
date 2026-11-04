@@ -7,8 +7,8 @@
  * the schema has neither or asks for fields this code does not know how to fill.
  *
  * Notes are idempotent: each Cotiza action gets one row in lead_jobber_notes, claimed before the
- * write, so a retry or a double click never posts twice. A write whose result is unknown is
- * checked against the request's recent notes before it is tried again.
+ * write, so a retry or a double click never posts twice. A write whose result is unknown (or a
+ * claim abandoned mid-write) is checked against Jobber's recent notes before it is tried again.
  *
  * Note text never carries contact details: phone numbers and emails are replaced with [contact].
  */
@@ -251,11 +251,29 @@ export async function postJobberNote(jobber: JobberReadClient, requestId: string
   return { noteId: note?.id ?? null, mutation: shape.mutation, target: shape.target };
 }
 
-/** True when the request already carries this exact note (a write whose answer was lost). Only for request notes. */
-export async function noteAlreadyOnRequest(jobber: JobberReadClient, requestId: string, message: string): Promise<{ found: boolean; noteId: string | null }> {
-  const data = await jobber.graphqlRequest<{ request?: { notes?: { edges?: Array<{ node?: { id?: string; message?: string } | null }> } } | null }>(RECENT_NOTES_QUERY, { id: requestId });
-  const hit = (data.request?.notes?.edges ?? []).map((e) => e.node).find((n) => (n?.message ?? '').trim() === message.trim());
+export const RECENT_CLIENT_NOTES_QUERY = `query CotizaRecentClientNotes($id: EncodedId!) {
+  request(id: $id) { client { notes(first: 50) { edges { node { ... on ClientNote { id message } } } } } }
+}`;
+
+type NoteEdges = { edges?: Array<{ node?: { id?: string; message?: string } | null }> } | null | undefined;
+
+function findNote(edges: NoteEdges, message: string) {
+  const hit = (edges?.edges ?? []).map((e) => e.node).find((n) => (n?.message ?? '').trim() === message.trim());
   return { found: Boolean(hit), noteId: hit?.id ?? null };
+}
+
+/**
+ * True when Jobber already carries this exact note (a write whose answer was lost). Looks where the
+ * note would have gone: the request's notes, or its client's when Jobber only offers client notes.
+ */
+export async function noteAlreadyPosted(jobber: JobberReadClient, requestId: string, message: string): Promise<{ found: boolean; noteId: string | null }> {
+  const shape = await loadNoteShape(jobber);
+  if (shape.target === 'client') {
+    const data = await jobber.graphqlRequest<{ request?: { client?: { notes?: NoteEdges } | null } | null }>(RECENT_CLIENT_NOTES_QUERY, { id: requestId });
+    return findNote(data.request?.client?.notes, message);
+  }
+  const data = await jobber.graphqlRequest<{ request?: { notes?: NoteEdges } | null }>(RECENT_NOTES_QUERY, { id: requestId });
+  return findNote(data.request?.notes, message);
 }
 
 // ── Storage and retries ─────────────────────────────────────────────────────
@@ -382,7 +400,7 @@ export class JobberNoteWriter {
     try {
       // A previous attempt may have reached Jobber without us hearing back: look before writing again.
       if (current.uncertain) {
-        const seen = await noteAlreadyOnRequest(jobber, current.requestId, current.message);
+        const seen = await noteAlreadyPosted(jobber, current.requestId, current.message);
         if (seen.found) {
           await this.deps.log?.('jobber_note', `note=${id} outcome=posted (found existing) user=${userId}`, 'info');
           return finish('posted', { noteId: seen.noteId });

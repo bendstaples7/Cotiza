@@ -79,12 +79,14 @@ function noteView(note: JobberNoteRecord | null) {
 
 /** Adds the Cotiza note for an action to the Jobber request. Never throws: a failure is reported, not hidden. */
 async function addJobberNote(env: Bindings, userId: string, id: string, requestId: string, action: NoteAction) {
+  const writer = await noteWriter(env, userId);
   try {
-    const writer = await noteWriter(env, userId);
     return noteView(await writer.write(id, requestId, formatJobberNote(action, await userName(env.DB, userId)), userId));
   } catch (err) {
-    // Cotiza could not even record the note (its database is unreachable), so there is nothing to retry.
     console.error('[leads] jobber note failed', sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 180));
+    // If the note was recorded before the failure, the lead page can retry it; only say "by hand" when it wasn't.
+    const recorded = await writer.get(id).catch(() => null);
+    if (recorded) return { ...noteView(recorded)!, status: recorded.status === 'posted' ? recorded.status : 'failed' as const, error: recorded.error ?? 'Jobber did not confirm the note.' };
     return { id, status: 'failed' as const, error: 'Cotiza could not record the Jobber note, so it cannot be retried. Add a note in Jobber by hand.', message: null, retryable: false };
   }
 }
