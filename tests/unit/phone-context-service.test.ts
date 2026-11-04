@@ -158,6 +158,21 @@ describe('PhoneContextService', () => {
       const firstCallUrl = fetchMock.mock.calls[0][0] as string;
       expect(firstCallUrl).toContain('phoneNumbers');
       expect(firstCallUrl).toContain('%2B15551234567');
+      // Quo takes list parameters as repeated keys, never JSON text.
+      expect(firstCallUrl).not.toContain('%5B');
+      expect(new URL(firstCallUrl).searchParams.getAll('phoneNumbers')).toEqual(['+15551234567']);
+    });
+
+    it('sends participants as a plain list and reports why a read failed', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({}) });
+      vi.stubGlobal('fetch', fetchMock);
+      const service = new PhoneContextService('sk-bad-key', 'PN123');
+      const result = await service.fetchContextResult('(773) 555-0100');
+      expect(result).toEqual({ status: 'failed', reason: expect.stringContaining('rejected the API key (HTTP 401)') });
+      const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+      const withParticipants = urls.find((u) => u.includes('participants'));
+      if (withParticipants) expect(new URL(withParticipants).searchParams.getAll('participants')).toEqual(['+17735550100']);
+      expect(JSON.stringify(result)).not.toContain('sk-bad-key');
     });
 
     it('returns conversations-only fallback when messages and calls are unavailable', async () => {

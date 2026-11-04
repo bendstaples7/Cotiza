@@ -803,7 +803,8 @@ function ContextText({ block, kind }: { block: LeadBundle['email']; kind: 'email
     no_number: 'Jobber has no phone number on this request.',
     failed: kind === 'email' ? 'Email could not be read right now. This is not an empty history.' : 'Quo could not be read right now. This is not an empty history.',
   };
-  return <p style={muted}>{messages[block.status]}</p>;
+  const reason = block.status === 'failed' && block.reason ? block.reason : null;
+  return <p style={muted}>{messages[block.status]}{reason ? ` ${reason}` : ''}</p>;
 }
 
 // ── Styles ──
