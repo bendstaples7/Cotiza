@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { PhoneContextService } from '../../worker/src/services/phone-context-service.js';
+import { PhoneContextService, toE164 } from '../../worker/src/services/phone-context-service.js';
 
 function mockFetch(response: unknown, ok = true) {
   return vi.fn().mockResolvedValue({
@@ -179,6 +179,57 @@ describe('PhoneContextService', () => {
 
       expect(result).toContain('[Conversation Threads Found: 1]');
       expect(result).toContain('Test Customer');
+    });
+  });
+
+  describe('without QUO_PHONE_NUMBER_ID', () => {
+    const empty = { data: [], totalItems: 0, nextPageToken: null };
+    const route = (handlers: Record<string, unknown>) => vi.fn().mockImplementation(async (url: string) => {
+      const path = new URL(url).pathname.replace('/v1', '');
+      const params = new URL(url).searchParams;
+      const key = `${path}${params.get('phoneNumberId') ? `@${params.get('phoneNumberId')}` : ''}`;
+      if (!(key in handlers)) return { ok: true, json: () => Promise.resolve(empty) };
+      const value = handlers[key];
+      return value === 'fail' ? { ok: false, json: () => Promise.resolve({}) } : { ok: true, json: () => Promise.resolve(value) };
+    });
+
+    it('looks up the workspace numbers once and searches all of them', async () => {
+      const fetchMock = route({
+        '/phone-numbers': { data: [{ id: 'PN1' }, { id: 'PN2' }] },
+        '/messages@PN1': { data: [{ id: 'm1', to: [], from: '+1', text: 'Older text', direction: 'outgoing', status: 'delivered', createdAt: '2026-11-01T10:00:00Z', userId: 'u' }] },
+        '/messages@PN2': { data: [{ id: 'm2', to: [], from: '+1', text: 'Newer text', direction: 'incoming', status: 'delivered', createdAt: '2026-11-02T10:00:00Z', userId: null }] },
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const service = new PhoneContextService('sk-test-key');
+      const result = await service.fetchContextResult('(555) 123-4567');
+      expect(result.status).toBe('ok');
+      const text = (result as { text: string }).text;
+      expect(text.indexOf('Older text')).toBeLessThan(text.indexOf('Newer text'));
+      const paths = fetchMock.mock.calls.map(([u]) => new URL(u as string).pathname);
+      expect(paths.filter((p) => p === '/v1/phone-numbers')).toHaveLength(1);
+      expect(fetchMock.mock.calls.some(([u]) => (u as string).includes('%2B15551234567'))).toBe(true);
+    });
+
+    it('reports a failed number lookup as a failed read, not an empty history', async () => {
+      const fetchMock = route({ '/phone-numbers': 'fail' });
+      vi.stubGlobal('fetch', fetchMock);
+      const service = new PhoneContextService('sk-test-key');
+      expect(await service.fetchContextResult('+15551234567')).toEqual({ status: 'failed' });
+      // A failed lookup is not cached: the next read asks Quo again.
+      expect(await service.fetchContextResult('+15551234567')).toEqual({ status: 'failed' });
+      const lookups = fetchMock.mock.calls.filter(([u]) => new URL(u as string).pathname === '/v1/phone-numbers');
+      expect(lookups).toHaveLength(2);
+    });
+  });
+
+  describe('toE164', () => {
+    it('turns Jobber-style US numbers into +1 numbers', () => {
+      expect(toE164('(773) 555-0100')).toBe('+17735550100');
+      expect(toE164('1-773-555-0100')).toBe('+17735550100');
+      expect(toE164('+44 20 7946 0958')).toBe('+442079460958');
+      expect(toE164('(773) 555-0100 x123')).toBe('+17735550100');
+      expect(toE164('773-555-0100 ext. 4')).toBe('+17735550100');
+      expect(toE164('n/a')).toBeNull();
     });
   });
 });

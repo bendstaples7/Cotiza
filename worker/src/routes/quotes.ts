@@ -338,7 +338,7 @@ app.get('/manual-requests', async (c) => {
   }
 
   const manualRequestService = new ManualRequestService(db);
-  const stored = await manualRequestService.list({ userId, sortBy, includeDeathclock });
+  const stored = await manualRequestService.list({ userId, sortBy: sortBy || 'age_asc', includeDeathclock });
 
   // Jobber cards come from Jobber's own open leads (last 60 days, not converted or archived).
   // Cotiza's stored rows alone cannot tell a lead quoted directly in Jobber from an open one.
@@ -347,7 +347,7 @@ app.get('/manual-requests', async (c) => {
   try {
     const { jobberIntegration } = await createJobberIntegration(db, c.env);
     const loaded = await loadOpenLeads(jobberIntegration, OPEN_LEAD_DAYS, Date.now());
-    rows = mergeQueueWithOpenLeads(stored, loaded.open, sortBy ?? 'age_desc', userId, Date.now());
+    rows = mergeQueueWithOpenLeads(stored, loaded.open, sortBy || 'age_asc', userId, Date.now());
     jobber = { status: 'live', days: OPEN_LEAD_DAYS, complete: loaded.complete };
   } catch (err) {
     console.error(`[quotes] open leads unavailable: ${sanitizeQueueError(err)}`);

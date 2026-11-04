@@ -22,7 +22,7 @@ function objectArgs(raw: unknown, allowed: string[]): Record<string, unknown> {
 export const LEAD_READ_TOOLS = [
   {
     name: 'list_open_leads',
-    description: 'List open leads: Jobber requests from the last N days that are still new or in assessment (not converted to a quote or job, not archived), newest first, with each one\'s Jobber status and info-needed counts. Read live from Jobber. No contact details. Read-only. A failed lookup is not an empty list.',
+    description: 'List open leads: Jobber requests from the last N days that are still new or in assessment (not converted to a quote or job, not archived), oldest first (the lead waiting longest comes first), with each one\'s Jobber status and info-needed counts. Read live from Jobber. No contact details. Read-only. A failed lookup is not an empty list.',
     inputSchema: {
       type: 'object', additionalProperties: false,
       properties: {
@@ -89,7 +89,9 @@ export async function callLeadTool(db: D1Database, principal: AssistantPrincipal
         console.error(`[lead-info] ${sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 180)}`);
         return { outcome: 'failed' as const, leads: [], failure: { code: 'jobber_read_failed', message: 'Jobber requests could not be read. This is not an empty list.' } };
       }
-      const page = loaded.open.slice(0, limit);
+      // Jobber is read newest first; the team works the lead waiting longest first.
+      const oldestFirst = [...loaded.open].reverse();
+      const page = oldestFirst.slice(0, limit);
       const summaries = await info.summaries(page.map((node) => node.id));
       return {
         outcome: 'ok' as const,
