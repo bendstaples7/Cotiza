@@ -80,6 +80,7 @@ export default function RequestQueuePage() {
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [leadSummaries, setLeadSummaries] = useState<Record<string, LeadInfoSummary>>({});
   const [contactStatuses, setContactStatuses] = useState<Record<string, LeadContactStatus | null>>({});
+  const contactLoadGeneration = useRef(0);
   const [jobberQuoteBadges, setJobberQuoteBadges] = useState<
     Record<string, Array<{ quoteNumber: string; quoteStatus: string }>>
   >({});
@@ -166,8 +167,10 @@ export default function RequestQueuePage() {
             .then(({ summaries }) => setLeadSummaries(summaries))
             .catch(() => undefined);
           // Last/next contact reads Jobber, Quo and Gmail per lead, so it arrives after the cards.
+          // A slower response from an earlier load must not overwrite a newer one.
+          const generation = ++contactLoadGeneration.current;
           fetchLeadContactStatuses(leadIds.slice(0, 50))
-            .then(({ statuses }) => setContactStatuses(statuses))
+            .then(({ statuses }) => { if (generation === contactLoadGeneration.current) setContactStatuses(statuses); })
             .catch(() => undefined);
         } catch {
           // Lead badges are optional; never block the queue.

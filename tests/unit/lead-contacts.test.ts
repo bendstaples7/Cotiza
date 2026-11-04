@@ -9,7 +9,7 @@ import {
   validateContact,
   type ContactEvent,
 } from '../../worker/src/services/lead-contact-service.js';
-import { gatherContactStatus, requestEvents } from '../../worker/src/services/lead-contact-status.js';
+import { gatherContactStatus, redactContactDetails, requestEvents } from '../../worker/src/services/lead-contact-status.js';
 
 const REQ = 'Z2lkOi8vSm9iYmVyL1JlcXVlc3QvMzU3NTY4NzI=';
 // Wed Nov 4 2026, 10:00 in Chicago.
@@ -94,6 +94,16 @@ describe('suggestNextContact', () => {
   });
 });
 
+describe('answered calls', () => {
+  it('treat a connected call we made as a conversation: follow up the next business day', () => {
+    const call: ContactEvent = { at: '2026-11-03T15:00:00Z', channel: 'call', direction: 'outgoing', source: 'quo', label: 'Call made', conversation: true };
+    expect(suggestNextContact([request('2026-11-02T12:00:00Z'), out('2026-11-02T15:00:00Z'), call], NOW))
+      .toEqual({ on: '2026-11-04', reason: 'Spoke with the customer; follow up' });
+    // Unanswered outreach after the conversation starts the cadence again.
+    expect(suggestNextContact([call, out('2026-11-04T15:00:00Z')], NOW).on).toBe('2026-11-05');
+  });
+});
+
 describe('computeContactStatus', () => {
   it('reports the newest event, overdue and set dates', () => {
     const events = [request('2026-11-01T12:00:00Z'), out('2026-11-02T15:00:00Z')];
@@ -171,6 +181,12 @@ describe('gatherContactStatus', () => {
     expect(status.unavailable).toEqual(['jobber']);
     expect(status.last).toBeNull();
     expect(phone.fetchActivityResult).not.toHaveBeenCalled();
+  });
+
+  it('never repeats contact details from notes', () => {
+    expect(redactContactDetails('Reach me at 630.220.1995 or a.b@example.com')).toBe('Reach me at [contact] or [contact]');
+    const [event] = requestEvents({ notes: [{ message: 'Call (773) 555-0100', createdAt: '2026-11-02T00:00:00Z', createdBy: 'team' }] });
+    expect(event.note).toBe('Call [contact]');
   });
 
   it('shortens long team notes', () => {

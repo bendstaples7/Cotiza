@@ -25,6 +25,12 @@ export type RequestDetail = {
 
 const present = <T,>(f: Field<T>): T | null => (f && f.availability === 'present' ? (f.value ?? null) : null);
 const NOTE_SNIPPET = 140;
+// Notes often carry a phone number or email; the status never repeats them.
+const CONTACT_DETAILS = /[^\s@]+@[^\s@]+\.[a-z]{2,}|(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/gi;
+
+export function redactContactDetails(text: string): string {
+  return text.replace(CONTACT_DETAILS, '[contact]');
+}
 
 export function requestEvents(detail: RequestDetail): ContactEvent[] {
   const events: ContactEvent[] = [];
@@ -32,7 +38,7 @@ export function requestEvents(detail: RequestDetail): ContactEvent[] {
   if (created) events.push({ at: created, channel: 'request', direction: 'incoming', source: 'jobber', label: 'Request came in' });
   for (const note of detail?.notes ?? []) {
     if (!note.createdAt || (note.createdBy !== 'team' && note.createdBy !== 'client')) continue;
-    const text = (note.message ?? '').replace(/\s+/g, ' ').trim();
+    const text = redactContactDetails((note.message ?? '').replace(/\s+/g, ' ').trim());
     if (!text) continue;
     events.push({
       at: note.createdAt,
@@ -77,7 +83,8 @@ export async function gatherContactStatus(input: {
       const label = e.kind === 'text'
         ? (out ? 'Text sent' : 'Text from customer')
         : out ? (e.answered ? 'Call made' : 'Call made, no answer') : (e.answered ? 'Call from customer' : 'Missed call from customer');
-      events.push({ at: e.at, channel: e.kind, direction: e.direction, source: 'quo', label });
+      // An answered call is a conversation, whoever dialled: the customer heard from us.
+      events.push({ at: e.at, channel: e.kind, direction: e.direction, source: 'quo', label, conversation: e.kind === 'call' && e.answered });
     }
   }
   if (!email.isAvailable()) notConnected.push('gmail');

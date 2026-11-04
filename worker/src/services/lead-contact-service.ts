@@ -24,6 +24,8 @@ export interface ContactEvent {
   /** Short plain label for the UI, e.g. "Text sent", "Call from customer". */
   label: string;
   note?: string | null;
+  /** True for a call that connected: we spoke with the customer, whoever dialled. */
+  conversation?: boolean;
 }
 
 export interface LoggedContact {
@@ -102,23 +104,26 @@ export function addBusinessDays(date: string, days: number): string {
 const CADENCE = [1, 2, 4];
 
 /**
- * Suggested next contact from the events: today when the customer spoke last (or nobody has
- * reached out yet); after our outreach with no reply, 1, 2, then 4 business days after the
- * latest attempt (4 thereafter).
+ * Suggested next contact from the events: today when the customer reached out last (or nobody
+ * has reached out yet); the next business day after a call where we spoke with them; after our
+ * outreach with no reply, 1, 2, then 4 business days after the latest attempt (4 thereafter).
  */
 export function suggestNextContact(events: ContactEvent[], now: number): { on: string; reason: string } {
   const today = chicagoDate(now);
   const sorted = sortNewestFirst(events);
   const outreach: ContactEvent[] = [];
+  let stop: ContactEvent | undefined;
   for (const event of sorted) {
-    if (event.direction === 'incoming') break;
+    if (event.direction === 'incoming' || event.conversation) { stop = event; break; }
     // Team notes record work on the lead, not a message the customer received.
     if (event.channel === 'note') continue;
     outreach.push(event);
   }
   if (outreach.length === 0) {
-    const replied = sorted.find((e) => e.direction === 'incoming');
-    return { on: today, reason: replied && replied.channel !== 'request' ? 'Customer replied; get back to them' : 'No outreach yet' };
+    if (stop?.conversation && stop.direction === 'outgoing') {
+      return { on: addBusinessDays(chicagoDate(Date.parse(stop.at)), 1), reason: 'Spoke with the customer; follow up' };
+    }
+    return { on: today, reason: stop && stop.channel !== 'request' ? 'Customer replied; get back to them' : 'No outreach yet' };
   }
   const step = CADENCE[Math.min(outreach.length, CADENCE.length) - 1];
   const due = addBusinessDays(chicagoDate(Date.parse(outreach[0].at)), step);

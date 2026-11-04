@@ -17,7 +17,10 @@ export function timeAgo(iso: string, now: number = Date.now()): string {
 export function formatDay(date: string, now: number = Date.now()): string {
   const today = chicagoDate(now);
   if (date === today) return 'Today';
-  if (date === chicagoDate(now + 86_400_000)) return 'Tomorrow';
+  // Calendar arithmetic on the date itself, so DST changes can't skip or repeat a day.
+  const tomorrow = new Date(`${today}T12:00:00Z`);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  if (date === tomorrow.toISOString().slice(0, 10)) return 'Tomorrow';
   return new Date(`${date}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
 
