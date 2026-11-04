@@ -16,6 +16,7 @@ vi.mock('../../client/src/api', () => ({
   fetchRequestQueue: mockFetchRequestQueue,
   fetchLeadSummaries: vi.fn().mockResolvedValue({ summaries: {} }),
   fetchLeadContactStatuses: vi.fn().mockResolvedValue({ statuses: {} }),
+  setLeadNotALead: vi.fn().mockResolvedValue({ notALead: true }),
 }));
 
 // ---------------------------------------------------------------------------

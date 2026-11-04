@@ -3,7 +3,7 @@
  * the project title, the questions still open, and the assumptions the quote will rest on.
  * Deterministic (no AI), in Chicago Reno's own voice, so the team can send it as-is or edit it.
  */
-import type { LeadInfoItem } from './api';
+import type { LeadActionKind, LeadInfoItem } from './api';
 
 export const ASSUMED_PREFIX = /^assumed:\s*/i;
 export const OPTIONAL_PREFIX = /^optional:\s*/i;
@@ -80,12 +80,43 @@ export function buildOutreach(input: { clientName: string | null; title: string 
   };
 }
 
-export const OUTREACH_STEPS = [
-  { step: 'intro_text', label: 'Send the intro text', channel: 'text' as const },
-  { step: 'email_followup', label: 'Email if no reply', channel: 'email' as const },
-  { step: 'call', label: 'Call', channel: 'call' as const },
-  { step: 'follow_up', label: 'Follow up on the next-contact date', channel: 'other' as const },
-];
+/**
+ * The message for the lead's next action (see the worker's lead-workflow.ts):
+ * - intro_text / ask_info / follow_up: the asks and assumptions (buildOutreach).
+ * - reply: thanks them for getting back to us, then any asks.
+ * - quote_update: the handbook's "quote still being created" update.
+ * - draft_quote / review: no customer message.
+ */
+export function buildActionMessage(kind: LeadActionKind, input: { clientName: string | null; title: string | null; items: LeadInfoItem[] }): OutreachMessages | null {
+  if (kind === 'draft_quote' || kind === 'review') return null;
+  const base = buildOutreach(input);
+  const name = firstName(input.clientName);
+  const project = (input.title ?? '').trim() || 'project';
+  if (kind === 'quote_update') {
+    return {
+      ...base,
+      text: [
+        `Hi ${name}, this is Chicago Reno following up on your ${project} request.`,
+        `We're putting the finishing touches on your quote and it should be over to you shortly. If you have any questions, or anything has changed on your side, just let us know.`,
+        '— Chicago Reno',
+      ].join('\n\n'),
+      emailSubject: `Your ${project} quote from Chicago Reno`,
+      emailBody: [
+        `Hi ${name},`,
+        `Just a quick update on your ${project} request: we're putting the finishing touches on your quote and it should be over to you shortly.`,
+        `If you have any questions in the meantime, or anything has changed on your side, just reply here.`,
+        'Thank you for your patience!\nChicago Reno',
+      ].join('\n\n'),
+    };
+  }
+  if (kind === 'reply') {
+    return {
+      ...base,
+      text: base.text.replace(`Hi ${name}, this is Chicago Reno about your ${project} request.`, `Hi ${name}, thanks for getting back to us about your ${project} request.`),
+    };
+  }
+  return base;
+}
 
 export function smsLink(phone: string, body: string): string {
   const number = phone.replace(/[^\d+]/g, '');

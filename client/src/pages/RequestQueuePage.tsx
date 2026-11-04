@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import DeathclockBadge from '../components/DeathclockBadge';
 import RequestJobberQuoteModal from '../components/RequestJobberQuoteModal';
-import LeadContactLine from '../components/LeadContactLine';
+import { formatDay, sourceList, timeAgo } from '../components/LeadContactLine';
 import type { ErrorResponse } from 'shared';
 import { isPlaceholderJobberClientName } from 'shared';
 import {
@@ -15,8 +15,9 @@ import {
   fetchRequestJobberQuotes,
   fetchLeadSummaries,
   fetchLeadContactStatuses,
+  setLeadNotALead,
 } from '../api';
-import type { JobberQueueStatus, LeadContactStatus, LeadInfoSummary, ManualRequestWithDeathclock, ResolveRequestQuoteResult } from '../api';
+import type { JobberQueueStatus, LeadContactStatus, LeadInfoSummary, LeadWorkflow, ManualRequestWithDeathclock, ResolveRequestQuoteResult } from '../api';
 
 // ---------------------------------------------------------------------------
 // Deathclock color → hex map (mirrors DeathclockBadge component)
@@ -27,14 +28,6 @@ const DEATHCLOCK_COLORS: Record<string, string> = {
   orange: '#f97316',
   red: '#ef4444',
 } as const;
-
-/** Convert #rrggbb hex to "r, g, b" string for CSS custom properties. */
-const hexToRgb = (hex: string): string => {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `${r}, ${g}, ${b}`;
-};
 
 /** Draft created before Jobber/email enrichment finished — should be regenerated. */
 function isSparseDraft(draft: {
@@ -313,13 +306,32 @@ export default function RequestQueuePage() {
     }
   };
 
-  /** Jobber requests open their lead page; manual requests keep the quote builder flow. */
-  const openRequest = (req: ManualRequestWithDeathclock) => {
+  /** Jobber requests open their lead page (with the next action, if any); manual requests keep the quote builder flow. */
+  const openRequest = (req: ManualRequestWithDeathclock, action?: string) => {
     if (req.jobberRequestId) {
-      navigate('/quotes/leads/' + encodeURIComponent(req.jobberRequestId));
+      navigate('/quotes/leads/' + encodeURIComponent(req.jobberRequestId) + (action ? '?action=' + encodeURIComponent(action) : ''));
       return;
     }
     void handleRequestClick(req);
+  };
+
+  const [markingId, setMarkingId] = useState<string | null>(null);
+  const markNotALead = async (requestId: string, notALead: boolean) => {
+    setMarkingId(requestId);
+    try {
+      await setLeadNotALead(requestId, notALead);
+      // Move the row right away; the next poll recomputes the rest.
+      setContactStatuses((prev) => {
+        const status = prev[requestId];
+        if (!status?.workflow) return prev;
+        return { ...prev, [requestId]: { ...status, workflow: { ...status.workflow, notALead, bucket: notALead ? 'review' : status.workflow.likelySpam ? 'review' : 'do_now' } } };
+      });
+      void loadRequests({ silent: true });
+    } catch {
+      // The API helper already shows a toast.
+    } finally {
+      setMarkingId(null);
+    }
   };
 
   const handleRequestClick = async (req: ManualRequestWithDeathclock) => {
@@ -369,10 +381,90 @@ export default function RequestQueuePage() {
     );
   }
 
-  // Check if any card needs the pulsing glow animation
-  const anyShouldPulse = requests.some(
-    (r) => !r.deathclock.frozen && !r.deathclock.isComplete && ['yellow', 'orange', 'red'].includes(r.deathclock.color)
-  );
+  void tick; // re-render each second so "x min ago" stays current
+  const now = Date.now();
+  const leads = requests.filter((r) => r.jobberRequestId);
+  const manual = requests.filter((r) => !r.jobberRequestId);
+  const workflowOf = (r: ManualRequestWithDeathclock): LeadWorkflow | null => contactStatuses[r.jobberRequestId as string]?.workflow ?? null;
+  // Rows keep the queue's order (oldest first by default) inside each section.
+  const doNow = leads.filter((r) => { const w = workflowOf(r); return !w || w.bucket === 'do_now'; });
+  const waiting = leads.filter((r) => workflowOf(r)?.bucket === 'waiting');
+  const review = leads.filter((r) => workflowOf(r)?.bucket === 'review');
+  const readyCount = leads.filter((r) => workflowOf(r)?.progress === 'ready_to_quote' && workflowOf(r)?.bucket !== 'review').length;
+  const statusesLoaded = leads.length === 0 || leads.some((r) => r.jobberRequestId! in contactStatuses);
+  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+
+  const renderLeadRow = (req: ManualRequestWithDeathclock) => {
+    const id = req.jobberRequestId as string;
+    const status = contactStatuses[id];
+    const w = status?.workflow ?? null;
+    const summary = leadSummaries[id];
+    const created = new Date(req.createdAt);
+    const ageDays = w?.ageDays ?? Math.max(0, Math.floor((now - created.getTime()) / 86400_000));
+    const linkedQuotes = jobberQuoteBadges[id];
+    return (
+      <article key={id} style={rowStyle} aria-label={`Lead: ${req.customerName}`}>
+        <div style={{ ...cellStyle, flex: '1.4 1 220px' }}>
+          <a
+            href={'/quotes/leads/' + encodeURIComponent(id)}
+            onClick={(e) => { e.preventDefault(); openRequest(req); }}
+            style={clientLinkStyle}
+          >
+            {req.customerName}
+          </a>
+          <span style={projectStyle}>{req.requestTitle?.trim() || req.serviceDescription?.trim() || 'Untitled request'}</span>
+          <span style={mutedSmall}>Lead in {created.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · {ageDays === 0 ? 'today' : `${ageDays} day${ageDays === 1 ? '' : 's'} ago`}</span>
+          {linkedQuotes && linkedQuotes.length > 0 && (
+            <span style={mutedSmall}>Jobber quote #{linkedQuotes[0].quoteNumber} · {linkedQuotes[0].quoteStatus.replace(/_/g, ' ')}</span>
+          )}
+        </div>
+        <div style={{ ...cellStyle, flex: '1 1 170px' }}>
+          <span style={eyebrowStyle}>Last contact</span>
+          {status === undefined ? <span style={mutedSmall}>Checking…</span> : !status ? <span style={mutedSmall}>Could not be read</span> : (
+            <>
+              <span style={valueStyle}>{status.last && status.last.channel !== 'request' ? status.last.label : 'No outreach yet'}</span>
+              <span style={mutedSmall}>
+                {status.last && status.last.channel !== 'request' ? timeAgo(status.last.at, now) : 'Only the request itself'}
+                {status.unavailable.length > 0 && ` · ${sourceList(status.unavailable)} couldn't be read`}
+              </span>
+            </>
+          )}
+        </div>
+        <div style={{ ...cellStyle, flex: '1 1 170px' }}>
+          <span style={eyebrowStyle}>Next contact</span>
+          {w ? (
+            <>
+              <span style={{ ...valueStyle, fontWeight: 600, color: dueColor(w) }}>{dueText(w, now)}</span>
+              <span style={mutedSmall}>{w.stage}</span>
+            </>
+          ) : <span style={mutedSmall}>{status === undefined ? 'Checking…' : 'Open the lead to see'}</span>}
+        </div>
+        <div style={{ ...cellStyle, flex: '1.3 1 240px', alignItems: 'flex-start', gap: 8 }}>
+          {w && <span style={whyStyle}>{w.action.why}</span>}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            {w?.bucket === 'review' ? (
+              <>
+                {w.notALead ? (
+                  <button type="button" style={secondaryButtonStyle} disabled={markingId === id} onClick={() => markNotALead(id, false)}>Undo: it is a lead</button>
+                ) : (
+                  <button type="button" style={secondaryButtonStyle} disabled={markingId === id} onClick={() => markNotALead(id, true)}>Not a lead</button>
+                )}
+                {!w.notALead && (
+                  <button type="button" style={secondaryButtonStyle} onClick={() => openRequest(req, 'intro_text')}>Send intro text</button>
+                )}
+              </>
+            ) : (
+              <button type="button" style={primaryButtonStyle} onClick={() => openRequest(req, w?.action.kind)}>
+                {w?.action.label ?? 'Open lead'}
+              </button>
+            )}
+            {w?.bucket !== 'review' && <span style={readinessChipStyle(w, summary)}>{readinessText(w, summary)}</span>}
+            <button type="button" style={linkButtonStyle} onClick={() => handleRequestClick(req)}>Quote builder</button>
+          </div>
+        </div>
+      </article>
+    );
+  };
 
   return (
     <div style={containerStyle}>
@@ -410,35 +502,31 @@ export default function RequestQueuePage() {
           </div>
         </>
       )}
-      {anyShouldPulse && (
-        <style>{`
-@keyframes dc-card-glow {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--dc-card-rgb), 0.3); }
-  50% { box-shadow: 0 0 8px 2px rgba(var(--dc-card-rgb), 0.15); }
-}
-`}</style>
-      )}
-      <h1 style={titleStyle}>Request Queue</h1>
 
-      {/* Sort toggle */}
-      <div style={sortToggleContainerStyle}>
-        <button
-          type="button"
-          style={currentSort === 'age_asc' ? sortToggleActiveStyle : sortToggleInactiveStyle}
-          onClick={() => handleSortChange('age_asc')}
-          aria-label="Sort oldest first"
-        >
-          Oldest First
-        </button>
-        <button
-          type="button"
-          style={currentSort === 'age_desc' ? sortToggleActiveStyle : sortToggleInactiveStyle}
-          onClick={() => handleSortChange('age_desc')}
-          aria-label="Sort newest first"
-        >
-          Newest First
-        </button>
-      </div>
+      <header style={headerStyle}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <h1 style={titleStyle}>Requests</h1>
+          <p style={subtitleStyle}>{today} · Work top to bottom. Goal: every lead to a sent quote.</p>
+        </div>
+        <div style={sortToggleContainerStyle}>
+          <button
+            type="button"
+            style={currentSort === 'age_asc' ? sortToggleActiveStyle : sortToggleInactiveStyle}
+            onClick={() => handleSortChange('age_asc')}
+            aria-label="Sort oldest first"
+          >
+            Oldest First
+          </button>
+          <button
+            type="button"
+            style={currentSort === 'age_desc' ? sortToggleActiveStyle : sortToggleInactiveStyle}
+            onClick={() => handleSortChange('age_desc')}
+            aria-label="Sort newest first"
+          >
+            Newest First
+          </button>
+        </div>
+      </header>
 
       {error && (
         <div role="alert" style={alertStyle}>{error}</div>
@@ -467,169 +555,183 @@ export default function RequestQueuePage() {
           </div>
         )
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          {requests.map((req) => {
-            const cardKey = req.jobberRequestId ?? req.id;
-            const colorHex = DEATHCLOCK_COLORS[req.deathclock.color] ?? '#10b981';
-            const liveAge = req.deathclock.ageSeconds + Math.floor((Date.now() - lastFetchedAtRef.current) / 1000);
-            const shouldPulse = !req.deathclock.frozen && !req.deathclock.isComplete &&
-              (req.deathclock.color === 'yellow' || req.deathclock.color === 'orange' || req.deathclock.color === 'red');
-            const isGenerating = generatingForId === cardKey;
-            const linkedQuotes = req.jobberRequestId ? jobberQuoteBadges[req.jobberRequestId] : undefined;
-            const bodyText = (req.requestBodyText ?? '').trim();
-            const noteHighlights = req.noteHighlights ?? [];
-            const titleDuplicatesBody = !!(
-              req.requestTitle?.trim()
-              && bodyText
-              && req.requestTitle.trim() === bodyText
-            );
-            return (
-              <div
-                key={cardKey}
-                style={{
-                  ...cardStyle,
-                  borderLeft: `4px solid ${colorHex}`,
-                  opacity: generatingForId && !isGenerating ? 0.6 : 1,
-                  pointerEvents: generatingForId ? 'none' : 'auto',
-                  ...(shouldPulse ? { '--dc-card-rgb': hexToRgb(colorHex), animation: 'dc-card-glow 2s ease-in-out infinite' } as React.CSSProperties : {}),
-                }}
-                onClick={() => { openRequest(req); }}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                    if (e.target !== e.currentTarget) return;
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      openRequest(req);
-                    }
-                  }}
-                aria-label={`Request from ${req.customerName}`}
-                aria-busy={isGenerating}
-              >
-                <div style={cardInnerStyle}>
-                  <div style={cardHeaderStyle}>
-                    <span style={customerNameStyle}>
-                      {req.customerName}
-                    </span>
-                    <DeathclockBadge
-                      ageSeconds={liveAge}
-                      color={req.deathclock.color}
-                      isComplete={req.deathclock.isComplete}
-                      frozen={req.deathclock.frozen}
-                      compact
-                    />
-                  </div>
-                  {req.requestTitle?.trim() && (
-                    <p style={requestTitleStyle}>{req.requestTitle}</p>
-                  )}
-                  {noteHighlights.length > 0 && (
-                    <div style={highlightsContainerStyle}>
-                      {noteHighlights.slice(0, 2).map((note, i) => (
-                        <div
-                          key={i}
-                          style={{
-                            ...highlightBoxStyle,
-                            ...(note.label === 'Client' ? clientHighlightStyle : {}),
-                          }}
-                        >
-                          <span style={highlightLabelStyle}>{note.label}</span>
-                          <p style={highlightTextStyle}>
-                            {note.message.length > 200
-                              ? note.message.slice(0, 200) + '…'
-                              : note.message}
-                          </p>
-                        </div>
-                      ))}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+          {leads.length > 0 && (
+            <div style={tilesStyle}>
+              <Tile label="Do now" color="#9a3412" count={statusesLoaded ? doNow.length : null} note="overdue, due today, or ready to quote" />
+              <Tile label="Ready to quote" color="#166534" count={statusesLoaded ? readyCount : null} note="enough info, draft the quote" />
+              <Tile label="Waiting on customer" color="#1e40af" count={statusesLoaded ? waiting.length : null} note="next touch is scheduled" />
+              <Tile label="Review" color="#4b5563" count={statusesLoaded ? review.length : null} note="likely not a lead" />
+            </div>
+          )}
+
+          {doNow.length > 0 && (
+            <Section title="Do now" note="One button per lead. Do it, and the next follow-up date sets itself.">
+              {doNow.map(renderLeadRow)}
+            </Section>
+          )}
+          {waiting.length > 0 && (
+            <Section title="Waiting on customer" note="Nothing to do until the date shown. These move to Do now on their own.">
+              {waiting.map(renderLeadRow)}
+            </Section>
+          )}
+          {review.length > 0 && (
+            <Section title="Review" note="No real project described, or marked not a lead. Archive in Jobber, or send one intro text.">
+              {review.map(renderLeadRow)}
+            </Section>
+          )}
+
+          {manual.length > 0 && (
+            <Section title="Manual requests" note="Requests entered in Cotiza. Open one to build its quote.">
+              {manual.map((req) => {
+                const isGenerating = generatingForId === req.id;
+                const liveAge = req.deathclock.ageSeconds + Math.floor((Date.now() - lastFetchedAtRef.current) / 1000);
+                const colorHex = DEATHCLOCK_COLORS[req.deathclock.color] ?? '#10b981';
+                return (
+                  <div
+                    key={req.id}
+                    style={{ ...manualCardStyle, borderLeft: `4px solid ${colorHex}`, opacity: generatingForId && !isGenerating ? 0.6 : 1 }}
+                    onClick={() => { openRequest(req); }}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.target !== e.currentTarget) return;
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        openRequest(req);
+                      }
+                    }}
+                    aria-label={`Request from ${req.customerName}`}
+                    aria-busy={isGenerating}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+                      <span style={{ fontWeight: 600, color: '#111827' }}>{req.customerName}</span>
+                      <DeathclockBadge
+                        ageSeconds={liveAge}
+                        color={req.deathclock.color}
+                        isComplete={req.deathclock.isComplete}
+                        frozen={req.deathclock.frozen}
+                        compact
+                      />
                     </div>
-                  )}
-                  {noteHighlights.length === 0 && bodyText && !titleDuplicatesBody && (
-                    <div style={highlightsContainerStyle}>
-                      <div style={highlightBoxStyle}>
-                        <span style={highlightLabelStyle}>Request</span>
-                        <p style={highlightTextStyle}>
-                          {bodyText.length > 200 ? bodyText.slice(0, 200) + '…' : bodyText}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                  <div style={metaRowStyle}>
-                    <span style={metaStyle}>
-                      Created {new Date(req.createdAt).toLocaleDateString()}
-                    </span>
-                    {req.jobberRequestId && (
-                      <span style={metaStyle}>
-                        Jobber #{decodeJobberId(req.jobberRequestId)}
-                      </span>
-                    )}
-                    {linkedQuotes && linkedQuotes.length > 0 && (
-                      <span style={jobberQuoteBadgeStyle}>
-                        Jobber quote #{linkedQuotes[0].quoteNumber} · {linkedQuotes[0].quoteStatus.replace(/_/g, ' ')}
-                      </span>
-                    )}
-                    {req.jobberRequestId && leadSummaries[req.jobberRequestId] && (
-                      <span style={leadInfoBadgeStyle(leadSummaries[req.jobberRequestId])}>
-                        {leadSummaries[req.jobberRequestId].readyToQuote
-                          ? 'Ready to quote'
-                          : `${leadSummaries[req.jobberRequestId].open + leadSummaries[req.jobberRequestId].asked} info needed`}
-                      </span>
-                    )}
-                    {req.jobberRequestId && (
-                      <button
-                        type="button"
-                        style={quoteBuilderButtonStyle}
-                        onClick={(e) => { e.stopPropagation(); handleRequestClick(req); }}
-                      >
-                        Quote builder
-                      </button>
-                    )}
+                    {req.serviceDescription?.trim() && <p style={{ margin: '4px 0 0', fontSize: 14, color: '#374151' }}>{req.serviceDescription}</p>}
+                    <span style={mutedSmall}>Created {new Date(req.createdAt).toLocaleDateString()}</span>
                   </div>
-                  {req.jobberRequestId && contactStatuses[req.jobberRequestId] && (
-                    <LeadContactLine status={contactStatuses[req.jobberRequestId]!} />
-                  )}
-                </div>
+                );
+              })}
+            </Section>
+          )}
+
+          {leads.length > 0 && (
+            <section style={keyStyle} aria-label="How next contact is set">
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>How next contact is set (from the handbook)</h2>
+              <div style={keyGridStyle}>
+                {CADENCE_KEY.map((k) => (
+                  <div key={k.title} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>{k.title}</span>
+                    <span style={{ fontSize: 13, color: '#4b5563' }}>{k.text}</span>
+                  </div>
+                ))}
               </div>
-            );
-          })}
+              <p style={{ margin: 0, fontSize: 13, color: '#4b5563' }}>
+                Customer replied? Answer them the same day. No quote 3+ days after the lead came in? Send a “quote in progress” update.
+              </p>
+            </section>
+          )}
         </div>
       )}
     </div>
   );
 }
 
+// ── Pieces ──
+
+const CADENCE_KEY = [
+  { title: '1 · Intake', text: 'Reach out the day the lead comes in.' },
+  { title: '2 · Next day', text: 'Follow up the business day after.' },
+  { title: '3 · Every 2–3 days', text: 'Until we get the photos or info we need.' },
+  { title: '4 · Weekly', text: 'If still no response.' },
+  { title: '5 · Monthly', text: 'After several weekly tries, until they reply or we close it.' },
+];
+
+function Tile({ label, color, count, note }: { label: string; color: string; count: number | null; note: string }) {
+  return (
+    <div style={tileStyle}>
+      <span style={{ fontSize: 13, fontWeight: 600, color }}>{label}</span>
+      <span style={{ fontSize: 30, fontWeight: 700, color: '#111827' }}>{count ?? '…'}</span>
+      <span style={{ fontSize: 13, color: '#4b5563' }}>{note}</span>
+    </div>
+  );
+}
+
+function Section({ title, note, children }: { title: string; note: string; children: React.ReactNode }) {
+  return (
+    <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }} aria-label={title}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+        <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>{title}</h2>
+        <span style={{ fontSize: 14, color: '#4b5563' }}>{note}</span>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function dueText(w: LeadWorkflow, now: number = Date.now()): string {
+  if (w.next.overdue) return `Overdue ${w.next.daysOverdue} day${w.next.daysOverdue === 1 ? '' : 's'}`;
+  if (w.next.dueToday) return 'Due today';
+  return formatDay(w.next.on, now);
+}
+
+function dueColor(w: LeadWorkflow): string {
+  return w.next.overdue ? '#b91c1c' : w.next.dueToday ? '#9a3412' : '#1e40af';
+}
+
+function readinessText(w: LeadWorkflow | null, summary: LeadInfoSummary | undefined): string {
+  if (w?.progress === 'ready_to_quote' || summary?.readyToQuote) return 'Ready to quote';
+  if (w?.action.kind === 'ask_info') return 'Need: ' + w.action.label.replace(/^Text: ask for /, '');
+  if (summary && summary.total > 0) return `${summary.open + summary.asked} info needed`;
+  return 'No checklist yet';
+}
+
+function readinessChipStyle(w: LeadWorkflow | null, summary: LeadInfoSummary | undefined): React.CSSProperties {
+  const ready = w?.progress === 'ready_to_quote' || summary?.readyToQuote;
+  const none = !ready && !(summary && summary.total > 0) && w?.action.kind !== 'ask_info';
+  return {
+    fontSize: 12,
+    fontWeight: 600,
+    padding: '4px 8px',
+    borderRadius: 999,
+    background: ready ? '#dcfce7' : none ? '#f3f4f6' : '#fef3c7',
+    color: ready ? '#166534' : none ? '#4b5563' : '#92400e',
+  };
+}
+
 // ── Styles ──
 
-const containerStyle: React.CSSProperties = { maxWidth: 800, margin: '0 auto' };
-const titleStyle: React.CSSProperties = { margin: '0 0 1.25rem', fontSize: '1.5rem' };
+const containerStyle: React.CSSProperties = { maxWidth: 1180, margin: '0 auto' };
+const headerStyle: React.CSSProperties = { display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16, marginBottom: 20 };
+const titleStyle: React.CSSProperties = { margin: 0, fontSize: 28, fontWeight: 700 };
+const subtitleStyle: React.CSSProperties = { margin: 0, fontSize: 14, color: '#4b5563' };
 
 const sortToggleContainerStyle: React.CSSProperties = {
   display: 'inline-flex',
   border: '1px solid #d0d0d0',
-  borderRadius: 6,
+  borderRadius: 8,
   overflow: 'hidden',
-  marginBottom: '1rem',
 };
 
 const sortToggleBaseStyle: React.CSSProperties = {
   border: 'none',
-  padding: '0.4rem 0.9rem',
+  minHeight: 40,
+  padding: '0 0.9rem',
   fontSize: '0.85rem',
   fontWeight: 500,
   cursor: 'pointer',
   transition: 'background 0.15s, color 0.15s',
-  outline: 'none',
-} as const;
-
-const sortToggleActiveStyle: React.CSSProperties = {
-  ...sortToggleBaseStyle,
-  background: '#00a89d',
-  color: '#fff',
 };
 
-const sortToggleInactiveStyle: React.CSSProperties = {
-  ...sortToggleBaseStyle,
-  background: '#fff',
-  color: '#555',
-};
+const sortToggleActiveStyle: React.CSSProperties = { ...sortToggleBaseStyle, background: '#1d4ed8', color: '#fff' };
+const sortToggleInactiveStyle: React.CSSProperties = { ...sortToggleBaseStyle, background: '#fff', color: '#374151' };
 
 const loadingContainerStyle: React.CSSProperties = {
   display: 'flex',
@@ -644,7 +746,7 @@ const spinnerStyle: React.CSSProperties = {
   width: 28,
   height: 28,
   border: '3px solid #e0e0e0',
-  borderTopColor: '#00a89d',
+  borderTopColor: '#1d4ed8',
   borderRadius: '50%',
   animation: 'spin 0.6s linear infinite',
 };
@@ -665,113 +767,75 @@ const emptyStyle: React.CSSProperties = {
   border: '1px solid #e0e0e0',
 };
 
-const cardStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
+const tilesStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 };
+const tileStyle: React.CSSProperties = { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column', gap: 4 };
+
+const rowStyle: React.CSSProperties = {
   background: '#fff',
-  border: '1px solid #e0e0e0',
+  border: '1px solid #e5e7eb',
+  borderRadius: 12,
+  padding: '16px 20px',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 20,
+  alignItems: 'center',
+};
+const cellStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 };
+const clientLinkStyle: React.CSSProperties = { fontSize: 16, fontWeight: 600, color: '#111827', textDecoration: 'none' };
+const projectStyle: React.CSSProperties = { fontSize: 14, color: '#374151' };
+const mutedSmall: React.CSSProperties = { fontSize: 13, color: '#6b7280' };
+const eyebrowStyle: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em' };
+const valueStyle: React.CSSProperties = { fontSize: 14, color: '#111827' };
+const whyStyle: React.CSSProperties = { fontSize: 13, color: '#374151' };
+
+const primaryButtonStyle: React.CSSProperties = {
+  minHeight: 44,
+  padding: '0 16px',
+  border: 0,
   borderRadius: 8,
-  overflow: 'hidden',
+  background: '#1d4ed8',
+  color: '#fff',
+  font: 'inherit',
+  fontSize: 14,
+  fontWeight: 600,
   cursor: 'pointer',
 };
-
-const cardInnerStyle: React.CSSProperties = {
-  flex: 1,
-  padding: '0.75rem 1rem',
-  minWidth: 0,
+const secondaryButtonStyle: React.CSSProperties = {
+  minHeight: 44,
+  padding: '0 14px',
+  border: '1px solid #d1d5db',
+  borderRadius: 8,
+  background: '#fff',
+  color: '#374151',
+  font: 'inherit',
+  fontSize: 14,
+  cursor: 'pointer',
+};
+const linkButtonStyle: React.CSSProperties = {
+  border: 0,
+  background: 'none',
+  padding: '0 4px',
+  minHeight: 44,
+  color: '#1d4ed8',
+  font: 'inherit',
+  fontSize: 13,
+  cursor: 'pointer',
+  textDecoration: 'underline',
 };
 
-const cardHeaderStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: '0.5rem',
-  marginBottom: '0.25rem',
-};
-
-const customerNameStyle: React.CSSProperties = {
-  fontWeight: 600,
-  fontSize: '0.95rem',
-  color: '#061216',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-};
-
-const requestTitleStyle: React.CSSProperties = {
-  margin: '0 0 0.5rem',
-  fontSize: '0.9rem',
-  fontWeight: 600,
-  color: '#00a89d',
-  lineHeight: 1.35,
-};
-
-const highlightsContainerStyle: React.CSSProperties = {
+const manualCardStyle: React.CSSProperties = {
+  background: '#fff',
+  border: '1px solid #e5e7eb',
+  borderRadius: 12,
+  padding: '12px 16px',
+  cursor: 'pointer',
   display: 'flex',
   flexDirection: 'column',
-  gap: '0.4rem',
-  marginBottom: '0.5rem',
+  gap: 4,
 };
 
-const highlightBoxStyle: React.CSSProperties = {
-  padding: '0.5rem 0.65rem',
-  background: '#f8f9fa',
-  borderLeft: '3px solid #cbd5e1',
-  borderRadius: 4,
-};
-
-const clientHighlightStyle: React.CSSProperties = {
-  background: '#f0fdf9',
-  borderLeftColor: '#00a89d',
-};
-
-const highlightLabelStyle: React.CSSProperties = {
-  display: 'block',
-  fontSize: '0.7rem',
-  fontWeight: 700,
-  textTransform: 'uppercase',
-  letterSpacing: '0.04em',
-  color: '#888',
-  marginBottom: '0.2rem',
-};
-
-const highlightTextStyle: React.CSSProperties = {
-  margin: 0,
-  fontSize: '0.85rem',
-  color: '#333',
-  lineHeight: 1.45,
-  whiteSpace: 'pre-wrap',
-};
-
-const descriptionStyle: React.CSSProperties = {
-  margin: '0 0 0.4rem',
-  fontSize: '0.9rem',
-  fontWeight: 500,
-  whiteSpace: 'nowrap',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-};
-
-const metaRowStyle: React.CSSProperties = {
-  display: 'flex',
-  gap: '0.75rem',
-  alignItems: 'center',
-  flexWrap: 'wrap',
-};
-
-const metaStyle: React.CSSProperties = {
-  fontSize: '0.8rem',
-  color: '#888',
-};
-
-const jobberQuoteBadgeStyle: React.CSSProperties = {
-  fontSize: '0.75rem',
-  fontWeight: 500,
-  color: '#1565c0',
-  background: '#e3f2fd',
-  padding: '0.1rem 0.4rem',
-  borderRadius: 4,
-};
+const keyStyle: React.CSSProperties = { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 20, display: 'flex', flexDirection: 'column', gap: 12 };
+const keyGridStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 };
 
 const generatingOverlayStyle: React.CSSProperties = {
   position: 'fixed',
@@ -789,36 +853,7 @@ const overlaySpinnerStyle: React.CSSProperties = {
   width: 40,
   height: 40,
   border: '4px solid #e0e0e0',
-  borderTopColor: '#00a89d',
+  borderTopColor: '#1d4ed8',
   borderRadius: '50%',
   animation: 'spin 0.7s linear infinite',
-};
-
-/** Decode a base64 Jobber GraphQL ID and extract the numeric request ID for display. */
-function decodeJobberId(id: string): string {
-  try {
-    const decoded = atob(id);
-    // Format: gid://Jobber/Request/29995593
-    const parts = decoded.split('/');
-    return parts[parts.length - 1] || id.slice(0, 12);
-  } catch {
-    return id.slice(0, 12);
-  }
-}
-
-function leadInfoBadgeStyle(summary: LeadInfoSummary): React.CSSProperties {
-  return summary.readyToQuote
-    ? { ...jobberQuoteBadgeStyle, background: '#dcfce7', color: '#166534' }
-    : { ...jobberQuoteBadgeStyle, background: '#fef3c7', color: '#92400e' };
-}
-
-const quoteBuilderButtonStyle: React.CSSProperties = {
-  marginLeft: 'auto',
-  font: 'inherit',
-  fontSize: '0.78rem',
-  padding: '0.2rem 0.6rem',
-  border: '1px solid #d1d5db',
-  borderRadius: 6,
-  background: '#fff',
-  cursor: 'pointer',
 };
