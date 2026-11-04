@@ -12,6 +12,7 @@
  */
 import type { JobberReadClient } from './ops-assistant-read.js';
 import { sanitizeLogText } from './jobber-log-sanitize.mjs';
+import { catalogKey, loadCatalog } from './ops-assistant-products.js';
 
 export const MAX_QUOTE_LINES = 100;
 /** Same shape read_quote accepts for Jobber encoded ids. */
@@ -44,6 +45,8 @@ export interface DesiredLine {
   description?: string;
   quantity: number;
   unitPrice: number;
+  /** New lines only: also save this line to Jobber Products & Services (skipped if the name is already there). */
+  saveToCatalog?: boolean;
 }
 
 export class QuoteEditArgsError extends Error {}
@@ -95,7 +98,7 @@ export function parseApplyArgs(raw: unknown): { quoteId: string; quoteVersion: s
     if (!item || typeof item !== 'object' || Array.isArray(item)) throw new QuoteEditArgsError(`lines[${index}] must be an object.`);
     const line = item as Record<string, unknown>;
     for (const key of Object.keys(line)) {
-      if (!['id', 'name', 'description', 'quantity', 'unitPrice'].includes(key)) throw new QuoteEditArgsError(`lines[${index}]: unknown field ${key}`);
+      if (!['id', 'name', 'description', 'quantity', 'unitPrice', 'saveToCatalog'].includes(key)) throw new QuoteEditArgsError(`lines[${index}]: unknown field ${key}`);
     }
     if (line.id !== undefined) {
       if (typeof line.id !== 'string' || !ID_RE.test(line.id)) throw new QuoteEditArgsError(`lines[${index}].id must be a line id from read_quote.`);
@@ -111,7 +114,12 @@ export function parseApplyArgs(raw: unknown): { quoteId: string; quoteVersion: s
     const unitPrice = num(line.unitPrice);
     if (!(quantity > 0) || quantity > 100000) throw new QuoteEditArgsError(`lines[${index}].quantity must be a positive number.`);
     if (!(unitPrice >= 0) || unitPrice > 1000000) throw new QuoteEditArgsError(`lines[${index}].unitPrice must be zero or more.`);
-    return { ...(line.id ? { id: line.id as string } : {}), name, ...(description === undefined ? {} : { description }), quantity, unitPrice };
+    if (line.saveToCatalog !== undefined && typeof line.saveToCatalog !== 'boolean') throw new QuoteEditArgsError(`lines[${index}].saveToCatalog must be true or false.`);
+    if (line.saveToCatalog === true && line.id !== undefined) throw new QuoteEditArgsError(`lines[${index}].saveToCatalog is only for new lines (no id).`);
+    return {
+      ...(line.id ? { id: line.id as string } : {}), name, ...(description === undefined ? {} : { description }), quantity, unitPrice,
+      ...(line.saveToCatalog === true ? { saveToCatalog: true } : {}),
+    };
   });
   return { quoteId: args.quoteId.trim(), quoteVersion: args.quoteVersion, lines };
 }
@@ -159,7 +167,10 @@ export function planEdits(current: QuoteLine[], requested: DesiredLine[]): EditP
     const before = byId.get(id)!;
     if (!sameContent(before, line)) updates.push({ id, name: line.name, description: line.description, quantity: line.quantity, unitPrice: line.unitPrice });
   }
-  const creates = desired.slice(recreateFrom).map(({ name, description, quantity, unitPrice }) => ({ name, description, quantity, unitPrice }));
+  // Only brand-new lines can be saved to the catalog; existing lines recreated to fix the order never are.
+  const creates = desired.slice(recreateFrom).map(({ id, name, description, quantity, unitPrice, saveToCatalog }) => ({
+    name, description, quantity, unitPrice, ...(!id && saveToCatalog ? { saveToCatalog: true } : {}),
+  }));
   const deletes = current.filter((l) => !keepIds.has(l.id)).map((l) => l.id);
   return { updates, creates, deletes, recreateFrom };
 }
@@ -249,6 +260,61 @@ export async function loadEditSchema(jobber: JobberReadClient): Promise<EditSche
   };
 }
 
+// ── Catalog saves ────────────────────────────────────────────────────────────
+
+type CreateLine = EditPlan['creates'][number];
+interface CatalogPlan {
+  toSave: Set<CreateLine>;
+  report: null | { requested: string[]; skippedExisting: string[]; notSaved?: string };
+}
+
+/** Decide which requested new lines Jobber should save to Products & Services. Never duplicates an existing name. */
+async function planCatalogSaves(jobber: JobberReadClient, creates: CreateLine[], supported: boolean): Promise<CatalogPlan> {
+  const wanted = creates.filter((l) => l.saveToCatalog);
+  if (!wanted.length) return { toSave: new Set(), report: null };
+  const requested = wanted.map((l) => l.name);
+  if (!supported) return { toSave: new Set(), report: { requested, skippedExisting: [], notSaved: 'This Jobber account does not offer saving quote lines to Products & Services. The quote lines were still applied.' } };
+  let existing: Set<string>;
+  try {
+    const { items, complete } = await loadCatalog(jobber);
+    if (!complete) throw new Error('catalog larger than the read limit');
+    existing = new Set(items.map((i) => catalogKey(i.name)));
+  } catch {
+    return { toSave: new Set(), report: { requested, skippedExisting: [], notSaved: 'Products & Services could not be read to rule out duplicates, so nothing was saved to it. The quote lines were still applied.' } };
+  }
+  // A name already in the catalog, or repeated earlier in this same request, is saved at most once.
+  const skippedExisting: string[] = [];
+  const toSave = new Set<CreateLine>();
+  for (const l of wanted) {
+    const key = catalogKey(l.name);
+    if (existing.has(key)) { skippedExisting.push(l.name); continue; }
+    existing.add(key);
+    toSave.add(l);
+  }
+  return { toSave, report: { requested, skippedExisting } };
+}
+
+/** Reread the catalog and report which saved names are now there. */
+async function verifyCatalogSaves(jobber: JobberReadClient, plan: CatalogPlan, createAttempted: boolean) {
+  const report = plan.report!;
+  if (report.notSaved) return { ...report, saved: [] as string[], verified: false };
+  const attempted = [...plan.toSave].map((l) => l.name);
+  if (!attempted.length) return { ...report, saved: [] as string[], verified: true };
+  if (!createAttempted) return { ...report, saved: [] as string[], attempted, verified: false, note: 'The new lines were not created, so nothing was saved to Products & Services.' };
+  try {
+    const { items, complete } = await loadCatalog(jobber);
+    const names = new Set(items.map((i) => catalogKey(i.name)));
+    const saved = attempted.filter((n) => names.has(catalogKey(n)));
+    const missing = attempted.filter((n) => !names.has(catalogKey(n)));
+    if (missing.length && !complete) {
+      return { ...report, saved, unconfirmed: missing, verified: false, note: 'The catalog is larger than the read limit, so some saves could not be confirmed.' };
+    }
+    return { ...report, saved, verified: missing.length === 0, ...(missing.length ? { missing } : {}) };
+  } catch {
+    return { ...report, saved: [] as string[], attempted, verified: false, note: 'Products & Services could not be reread to confirm the save.' };
+  }
+}
+
 // ── Apply ────────────────────────────────────────────────────────────────────
 
 function mutationText(shape: MutationShape) {
@@ -311,7 +377,10 @@ export async function applyQuoteEdits(jobber: JobberReadClient, rawArgs: unknown
     return { outcome: 'refused' as const, changed: false, quoteNumber: quote.quoteNumber ?? null, reason: `${reason} Nothing was changed.` };
   }
 
+  const catalog = await planCatalogSaves(jobber, plan.creates, schema.create.fields.has('saveToProductsAndServices'));
+
   const applied = { updated: 0, created: 0, deleted: 0 };
+  let createAttempted = false;
   let failure: string | null = null;
   try {
     if (plan.updates.length) {
@@ -322,10 +391,12 @@ export async function applyQuoteEdits(jobber: JobberReadClient, rawArgs: unknown
       applied.updated = plan.updates.length;
     }
     if (plan.creates.length) {
+      // Set before the call: a create can take effect and still return userErrors.
+      createAttempted = true;
       await runMutation(jobber, schema.create, args.quoteId, plan.creates.map((l) => ({
         name: l.name, quantity: l.quantity, unitPrice: l.unitPrice,
         ...(schema.create.fields.has('description') ? { description: l.description } : {}),
-        ...(schema.create.requiredSave ? { saveToProductsAndServices: false } : {}),
+        ...(schema.create.fields.has('saveToProductsAndServices') ? { saveToProductsAndServices: catalog.toSave.has(l) } : {}),
       })));
       applied.created = plan.creates.length;
     }
@@ -357,6 +428,7 @@ export async function applyQuoteEdits(jobber: JobberReadClient, rawArgs: unknown
     ...(problems.length ? { mismatches: problems } : {}),
     subtotal: after ? subtotal(afterLines) : null,
     version: afterVersion,
+    ...(catalog.report ? { catalog: await verifyCatalogSaves(jobber, catalog, createAttempted) } : {}),
     ...(failure || problems.length ? { warning: changed === false
       ? 'Nothing was changed.'
       : changed === 'unknown'
@@ -368,7 +440,7 @@ export async function applyQuoteEdits(jobber: JobberReadClient, rawArgs: unknown
 export const QUOTE_WRITE_TOOLS = [
   {
     name: 'apply_quote_edits',
-    description: 'Apply a Ben-approved line list to a DRAFT Jobber quote. Send the whole quote in order: existing lines keep their id from read_quote, new lines have no id, removed lines are left out. Requires quoteVersion from read_quote; refuses if the quote changed since. Edits lines in place, recreates lines whose position changed, deletes removed lines, then rereads and reports whether every line matches. Never sends the quote or changes its status, title or message. Use only after Ben approves the edits.',
+    description: 'Apply a Ben-approved line list to a DRAFT Jobber quote. Send the whole quote in order: existing lines keep their id from read_quote, new lines have no id, removed lines are left out. Requires quoteVersion from read_quote; refuses if the quote changed since. Edits lines in place, recreates lines whose position changed, deletes removed lines, then rereads and reports whether every line matches. New lines marked saveToCatalog are also added to Products & Services (never duplicating an existing name; check with find_products first). Never sends the quote or changes its status, title or message. Use only after Ben approves the edits.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -390,6 +462,7 @@ export const QUOTE_WRITE_TOOLS = [
               description: { type: 'string', description: 'Omit on an existing line to keep its current description.' },
               quantity: { type: 'number' },
               unitPrice: { type: 'number' },
+              saveToCatalog: { type: 'boolean', description: 'New lines only: also save this line (name, description, price) to Jobber Products & Services so the team can reuse it. Skipped if the catalog already has that name.' },
             },
           },
         },
