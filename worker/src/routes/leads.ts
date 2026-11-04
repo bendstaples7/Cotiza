@@ -136,11 +136,15 @@ type RequestFields = { jobberWebUri?: Avail; clientName?: Avail; contactName?: A
 
 /** Who the request is for, to find its Trello cards: the Jobber link first, then the client's name. */
 async function trelloIdentity(read: OpsAssistantRead, userId: string, requestId: string) {
-  const res = await read.readRequest(userId, { requestId }).catch(() => null) as { outcome?: string; request?: RequestFields } | null;
+  type Raw = { contactName?: string | null; client?: { firstName?: string | null; lastName?: string | null } | null };
+  const res = await read.readRequest(userId, { requestId }).catch(() => null) as { outcome?: string; request?: RequestFields; read?: { records?: Raw[] } } | null;
   const r = res?.outcome === 'ok' ? res.request : null;
+  // The display name can be a company ("Action builder"); cards are named for the person, so try those too.
+  const raw = res?.outcome === 'ok' ? res.read?.records?.[0] : undefined;
+  const person = [raw?.client?.firstName, raw?.client?.lastName].map((p) => (p ?? '').trim()).filter(Boolean).join(' ');
   return {
     jobberWebUri: avail(r?.jobberWebUri),
-    names: [avail(r?.clientName), avail(r?.contactName)].filter((n): n is string => Boolean(n)),
+    names: [person, raw?.contactName ?? null, avail(r?.clientName)].filter((n): n is string => Boolean(n && n.trim())),
   };
 }
 
@@ -160,7 +164,11 @@ async function otherOpenNames(jobber: Parameters<typeof loadOpenLeads>[0] | null
 /** Moves the lead's Trello cards for a close (or comments, for a postponed one). Never throws. */
 async function syncTrelloClose(env: Bindings, userId: string, requestId: string, closure: { reason: string; label: string; note: string | null; checkBackOn: string | null }): Promise<TrelloResult> {
   const client = trelloClient(env);
-  if (!client) return { status: 'not_configured', message: 'Trello is not connected to Cotiza. Also move the Trello card.', cards: [] };
+  if (!client) {
+    return closure.reason === 'postponed'
+      ? { status: 'not_configured', message: 'Trello is not connected to Cotiza. Leave the Trello card where it is and add a note that it\u2019s postponed.', cards: [] }
+      : { status: 'not_configured', message: 'Trello is not connected to Cotiza. Also move the Trello card.', cards: [] };
+  }
   const { jobberIntegration } = await openJobberIntegration(env.DB, env).catch(() => ({ jobberIntegration: null }));
   const read = new OpsAssistantRead(jobberIntegration, env.DB, env.IMAGES);
   const [who, others, user] = await Promise.all([

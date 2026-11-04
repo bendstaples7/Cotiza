@@ -501,7 +501,7 @@ export default function RequestQueuePage() {
                 {w?.action.label ?? 'Open lead'}
               </button>
             )}
-            {w && w.bucket !== 'review' && (w.progress === 'ready_to_quote' || quoteChip(w) || (summary?.total ?? 0) > 0) && (
+            {w && (w.bucket !== 'review' || w.lostInTrello) && (w.progress === 'ready_to_quote' || quoteChip(w) || (summary?.total ?? 0) > 0) && (
               <span style={readinessChipStyle(w, summary)}>{readinessText(w, summary)}</span>
             )}
             {w?.secondary && w.bucket !== 'review' && (
