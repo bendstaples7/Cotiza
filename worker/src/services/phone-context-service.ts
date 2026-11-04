@@ -253,13 +253,6 @@ export class PhoneContextService {
    * Gracefully degrades: returns empty string if API key is missing, network
    * fails, or no conversations are found.
    */
-  /** Like fetchContext, but reports a failed read instead of returning an empty string for it. */
-  async fetchContextResult(customerPhone: string): Promise<{ status: 'ok'; text: string } | { status: 'failed' }> {
-    this.lastReadFailed = false;
-    const text = await this.fetchContext(customerPhone);
-    return this.lastReadFailed ? { status: 'failed' } : { status: 'ok', text };
-  }
-
   async fetchContext(customerPhone: string): Promise<string> {
     if (!this.isAvailable()) {
       return '';
@@ -305,5 +298,12 @@ export class PhoneContextService {
 
     parts.push('\n--- End Phone Context ---');
     return parts.join('\n');
+  }
+
+  /** Like fetchContext, but reports a failed read instead of returning an empty string for it. */
+  async fetchContextResult(customerPhone: string): Promise<{ status: 'ok'; text: string } | { status: 'failed' }> {
+    this.lastReadFailed = false;
+    const text = await this.fetchContext(customerPhone);
+    return this.lastReadFailed ? { status: 'failed' } : { status: 'ok', text };
   }
 }

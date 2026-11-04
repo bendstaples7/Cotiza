@@ -34,7 +34,8 @@ export default function LeadPage() {
   }, [requestId]);
 
   const replaceItem = (item: LeadInfoItem) => setLead((prev) => {
-    if (!prev) return prev;
+    // A save that finishes after the user moved to another lead must not land on it.
+    if (!prev || prev.requestId !== item.requestId) return prev;
     const exists = prev.infoNeeded.items.some((i) => i.id === item.id);
     const items = exists ? prev.infoNeeded.items.map((i) => (i.id === item.id ? item : i)) : [...prev.infoNeeded.items, item];
     return { ...prev, infoNeeded: { items, summary: summarize(items) } };

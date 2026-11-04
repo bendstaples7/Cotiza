@@ -5,6 +5,8 @@ CREATE TABLE IF NOT EXISTS lead_info_items (
   id TEXT PRIMARY KEY,
   jobber_request_id TEXT NOT NULL,
   question TEXT NOT NULL,
+  -- Case- and Unicode-normalized question, set by the service; backs the duplicate check.
+  question_key TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'asked', 'answered', 'dropped')),
   answer TEXT,
   required INTEGER NOT NULL DEFAULT 1 CHECK (required IN (0, 1)),
@@ -16,5 +18,5 @@ CREATE TABLE IF NOT EXISTS lead_info_items (
   updated_via TEXT NOT NULL CHECK (updated_via IN ('app', 'assistant'))
 );
 CREATE INDEX IF NOT EXISTS idx_lead_info_items_request ON lead_info_items(jobber_request_id, created_at);
--- One live copy of each question per lead (case-insensitive); a dropped question can be asked again.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_info_items_question ON lead_info_items(jobber_request_id, lower(question)) WHERE status <> 'dropped';
+-- One live copy of each question per lead; a dropped question can be asked again.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_info_items_question ON lead_info_items(jobber_request_id, question_key) WHERE status <> 'dropped';

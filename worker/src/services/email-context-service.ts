@@ -336,14 +336,6 @@ export class EmailContextService {
    * Gracefully degrades: returns empty string if credentials are missing,
    * network fails, or no emails are found.
    */
-  /** Like fetchContext, but reports a failed read instead of returning an empty string for it. */
-  async fetchContextResult(customerEmail: string): Promise<{ status: 'ok'; text: string } | { status: 'failed' }> {
-    this.lastReadFailed = false;
-    if (this.isAvailable() && !(await this.getAccessToken())) return { status: 'failed' };
-    const text = await this.fetchContext(customerEmail);
-    return this.lastReadFailed ? { status: 'failed' } : { status: 'ok', text };
-  }
-
   async fetchContext(customerEmail: string): Promise<string> {
     if (!this.isAvailable() || !customerEmail) {
       return '';
@@ -374,6 +366,14 @@ export class EmailContextService {
     ];
 
     return parts.join('\n');
+  }
+
+  /** Like fetchContext, but reports a failed read instead of returning an empty string for it. */
+  async fetchContextResult(customerEmail: string): Promise<{ status: 'ok'; text: string } | { status: 'failed' }> {
+    this.lastReadFailed = false;
+    if (this.isAvailable() && !(await this.getAccessToken())) return { status: 'failed' };
+    const text = await this.fetchContext(customerEmail);
+    return this.lastReadFailed ? { status: 'failed' } : { status: 'ok', text };
   }
 }
 

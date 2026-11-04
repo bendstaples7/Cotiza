@@ -40,19 +40,19 @@ function sqliteD1() {
         async run() {
           if (sql.startsWith('INSERT INTO lead_info_items')) {
             // INSERT ... SELECT ... WHERE (count) < max ON CONFLICT DO NOTHING, plus the partial unique index.
-            const [id, jobber_request_id, question, required, created_at, updated_at, created_via, created_by_user_id, updated_by_user_id, updated_via, , max] = args;
+            const [id, jobber_request_id, question, question_key, required, created_at, updated_at, created_via, created_by_user_id, updated_by_user_id, updated_via, , max] = args;
             const sameLead = table.filter((r) => r.jobber_request_id === jobber_request_id);
-            const dup = sameLead.some((r) => r.status !== 'dropped' && String(r.question).toLowerCase() === String(question).toLowerCase());
+            const dup = sameLead.some((r) => r.status !== 'dropped' && r.question_key === question_key);
             if (sameLead.length >= Number(max) || dup) return { success: true, meta: { changes: 0 } };
-            table.push({ id, jobber_request_id, question, status: 'open', answer: null, required, created_at, updated_at, created_via, created_by_user_id, updated_by_user_id, updated_via });
+            table.push({ id, jobber_request_id, question, question_key, status: 'open', answer: null, required, created_at, updated_at, created_via, created_by_user_id, updated_by_user_id, updated_via });
             return { success: true, meta: { changes: 1 } };
           }
-          if (sql.startsWith('UPDATE lead_info_items SET question = ?, status = ?, answer = ?, updated_at = ?, updated_by_user_id = ?, updated_via = ? WHERE id = ?')) {
-            const row = table.find((r) => r.id === args[6]);
-            if (row && args[1] !== 'dropped' && table.some((r) => r !== row && r.jobber_request_id === row.jobber_request_id && r.status !== 'dropped' && String(r.question).toLowerCase() === String(args[0]).toLowerCase())) {
-              throw new Error('UNIQUE constraint failed: lead_info_items.jobber_request_id, lower(question)');
+          if (sql.startsWith('UPDATE lead_info_items SET question = ?, question_key = ?, status = ?, answer = ?, updated_at = ?, updated_by_user_id = ?, updated_via = ? WHERE id = ?')) {
+            const row = table.find((r) => r.id === args[7]);
+            if (row && args[2] !== 'dropped' && table.some((r) => r !== row && r.jobber_request_id === row.jobber_request_id && r.status !== 'dropped' && r.question_key === args[1])) {
+              throw new Error('UNIQUE constraint failed: lead_info_items.jobber_request_id, lead_info_items.question_key');
             }
-            if (row) Object.assign(row, { question: args[0], status: args[1], answer: args[2], updated_at: args[3], updated_by_user_id: args[4], updated_via: args[5] });
+            if (row) Object.assign(row, { question: args[0], question_key: args[1], status: args[2], answer: args[3], updated_at: args[4], updated_by_user_id: args[5], updated_via: args[6] });
             return { success: true, meta: { changes: row ? 1 : 0 } };
           }
           throw new Error(`unexpected run(): ${sql}`);
@@ -108,6 +108,9 @@ describe('LeadInfoService', () => {
     const second = await service.add(REQ, { question: 'Tile size?' }, team);
     expect(second.id).not.toBe(first.id);
     await expect(service.update(first.id, { status: 'open' }, team)).rejects.toThrow('already on the list');
+    // Accented and differently-cased forms are the same question.
+    const accent = await service.add(REQ, { question: 'Éclairage au plafond?' }, team);
+    expect((await service.add(REQ, { question: 'éclairage  au plafond?' }, team)).id).toBe(accent.id);
   });
 
   it('stops at 30 questions per lead', async () => {
@@ -144,7 +147,7 @@ describe('lead connector tools', () => {
     const { d1 } = sqliteD1();
     await callLeadTool(d1, principal, 'set_lead_info', { requestId: REQ, add: [{ question: 'Tile size?' }] });
     const listSpy = vi.spyOn(ManualRequestService.prototype, 'list').mockResolvedValue([
-      { id: 'a', jobberRequestId: REQ, customerName: 'Keeley', requestTitle: 'Shower', createdAt: '2026-11-02T00:00:00Z', ageSeconds: 2 * 86400, quoteSentAt: null },
+      { id: 'a', jobberRequestId: REQ, customerName: 'Keeley', customerPhone: '773-555-0100', customerEmail: 'sentinel@example.com', requestTitle: 'Shower', createdAt: '2026-11-02T00:00:00Z', ageSeconds: 2 * 86400, quoteSentAt: null },
       { id: 'b', jobberRequestId: OTHER, customerName: 'Nick', requestTitle: null, createdAt: '2026-11-03T00:00:00Z', ageSeconds: 3600, quoteSentAt: null },
       { id: 'c', jobberRequestId: 'Z2lkOi8vSm9iYmVyL1JlcXVlc3QvMg==', customerName: 'Sent', createdAt: '2026-11-01T00:00:00Z', ageSeconds: 9e5, quoteSentAt: '2026-11-03T00:00:00Z' },
       { id: 'd', jobberRequestId: null, customerName: 'Manual', createdAt: '2026-11-01T00:00:00Z', ageSeconds: 9e5, quoteSentAt: null },
@@ -153,7 +156,7 @@ describe('lead connector tools', () => {
     expect(listSpy).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-a', sortBy: 'age_asc' }));
     expect(result.total).toBe(2);
     expect(result.leads.map((l) => [l.client, l.ageDays, l.infoNeeded.total])).toEqual([['Keeley', 2, 1], ['Nick', 0, 0]]);
-    expect(JSON.stringify(result)).not.toMatch(/customerPhone|customerEmail/);
+    expect(JSON.stringify(result)).not.toMatch(/773-555-0100|sentinel@example\.com|customerPhone|customerEmail/);
     await expect(callLeadTool(d1, principal, 'list_open_leads', { limit: 0 })).rejects.toThrow('limit');
     listSpy.mockRestore();
   });

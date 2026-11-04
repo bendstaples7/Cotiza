@@ -61,6 +61,11 @@ export function validateQuestion(value: unknown): string {
   return cleanText(value, 'question', MAX_QUESTION, 3);
 }
 
+/** Duplicate key: Unicode-normalized, case-folded, single-spaced. Must match what the unique index stores. */
+export function questionKey(question: string): string {
+  return question.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 export const ITEM_ID_RE = /^lii_[0-9a-f-]{36}$/;
 
 function objectInput(input: unknown): Record<string, unknown> {
@@ -153,18 +158,18 @@ export class LeadInfoService {
     // the same moment can't both slip past them.
     const result = await this.db.prepare(
       `INSERT INTO lead_info_items
-         (id, jobber_request_id, question, status, answer, required, created_at, updated_at, created_via, created_by_user_id, updated_by_user_id, updated_via)
-       SELECT ?, ?, ?, 'open', NULL, ?, ?, ?, ?, ?, ?, ?
+         (id, jobber_request_id, question, question_key, status, answer, required, created_at, updated_at, created_via, created_by_user_id, updated_by_user_id, updated_via)
+       SELECT ?, ?, ?, ?, 'open', NULL, ?, ?, ?, ?, ?, ?, ?
        WHERE (SELECT COUNT(*) FROM lead_info_items WHERE jobber_request_id = ?) < ?
        ON CONFLICT DO NOTHING`,
-    ).bind(itemId, id, question, required, now, now, by.via, by.userId, by.userId, by.via, id, MAX_ITEMS_PER_LEAD).run();
+    ).bind(itemId, id, question, questionKey(question), required, now, now, by.via, by.userId, by.userId, by.via, id, MAX_ITEMS_PER_LEAD).run();
     if ((result.meta?.changes ?? 0) > 0) {
       return {
         id: itemId, requestId: id, question, status: 'open', answer: null, required: required === 1,
         createdAt: now, updatedAt: now, createdVia: by.via, updatedVia: by.via,
       };
     }
-    const duplicate = (await this.list(id)).find((i) => i.status !== 'dropped' && i.question.toLowerCase() === question.toLowerCase());
+    const duplicate = (await this.list(id)).find((i) => i.status !== 'dropped' && questionKey(i.question) === questionKey(question));
     if (duplicate) return duplicate;
     throw new LeadInfoError(`A lead can have at most ${MAX_ITEMS_PER_LEAD} questions.`);
   }
@@ -177,8 +182,8 @@ export class LeadInfoService {
     const now = this.now().toISOString();
     try {
       await this.db.prepare(
-        `UPDATE lead_info_items SET question = ?, status = ?, answer = ?, updated_at = ?, updated_by_user_id = ?, updated_via = ? WHERE id = ?`,
-      ).bind(next.question, next.status, next.answer, now, by.userId, by.via, itemId).run();
+        `UPDATE lead_info_items SET question = ?, question_key = ?, status = ?, answer = ?, updated_at = ?, updated_by_user_id = ?, updated_via = ? WHERE id = ?`,
+      ).bind(next.question, questionKey(next.question), next.status, next.answer, now, by.userId, by.via, itemId).run();
     } catch (err) {
       if (/UNIQUE/i.test(err instanceof Error ? err.message : '')) throw new LeadInfoError('That question is already on the list.');
       throw err;

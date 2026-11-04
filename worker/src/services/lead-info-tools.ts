@@ -1,12 +1,12 @@
 /**
  * Connector tools for the lead hub's "info needed" checklist.
- * Reads (list_open_leads, read_lead_info) come with ops:read; set_lead_info needs review:write,
- * the same tick that lets the assistant write the review ledger. Nothing here touches Jobber,
+ * Reads (list_open_leads, read_lead_info) come with ops:read; set_lead_info needs lead:write,
+ * its own consent tick ("Also allow updating lead questions"). Nothing here touches Jobber,
  * and contact details are never returned or stored.
  */
 import type { AssistantPrincipal } from './assistant-access.js';
 import { ManualRequestService } from './manual-request-service.js';
-import { applyChange, LeadInfoError, LeadInfoService, MAX_ITEMS_PER_LEAD, requireRequestId, summarize, validateQuestion } from './lead-info-service.js';
+import { applyChange, LeadInfoError, LeadInfoService, MAX_ITEMS_PER_LEAD, questionKey, requireRequestId, summarize, validateQuestion } from './lead-info-service.js';
 
 export class LeadToolArgsError extends Error {}
 
@@ -120,8 +120,8 @@ export async function callLeadTool(db: D1Database, principal: AssistantPrincipal
         if (e.required !== undefined && typeof e.required !== 'boolean') throw new LeadToolArgsError('required must be true or false.');
         return e;
       });
-      const newQuestions = new Set(adds.map((e) => String(e.question).trim().toLowerCase()));
-      const alreadyThere = current.filter((i) => newQuestions.has(i.question.toLowerCase())).length;
+      const newQuestions = new Set(adds.map((e) => questionKey(String(e.question))));
+      const alreadyThere = current.filter((i) => i.status !== 'dropped' && newQuestions.has(questionKey(i.question))).length;
       if (current.length + newQuestions.size - alreadyThere > MAX_ITEMS_PER_LEAD) {
         throw new LeadToolArgsError(`A lead can have at most ${MAX_ITEMS_PER_LEAD} questions; this batch would go over.`);
       }
