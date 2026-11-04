@@ -74,7 +74,7 @@ describe('Requests work queue', () => {
 
   it('sorts leads into Do now, Waiting on customer and Review with one action each', async () => {
     renderQueue();
-    await screen.findByText('Overdue 2 days'); // next steps loaded
+    await screen.findAllByText('Overdue 2 days'); // next steps loaded
     const doNow = screen.getByRole('region', { name: 'Do now' });
     expect(within(doNow).getByText('John Oconnell')).toBeInTheDocument();
     expect(within(doNow).getByText('Overdue 2 days')).toBeInTheDocument();
@@ -113,7 +113,7 @@ describe('Requests work queue', () => {
 
   it('opens the lead page with the action preselected', async () => {
     renderQueue();
-    await screen.findByText('Overdue 2 days');
+    await screen.findAllByText('Overdue 2 days');
     const doNow = screen.getByRole('region', { name: 'Do now' });
     await userEvent.click(within(doNow).getByRole('button', { name: 'Send intro text' }));
     expect(screen.getByTestId('where')).toHaveTextContent('/quotes/leads/J?action=intro_text');
