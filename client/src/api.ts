@@ -1427,6 +1427,16 @@ export async function setLeadNextContact(requestId: string, nextContactOn: strin
   return handleResponseWithToast(res);
 }
 
+/** Sends one text through Quo after the team confirmed it. The server takes the number from Jobber. */
+export async function sendLeadText(requestId: string, text: string, step?: string): Promise<{ sent: true; contact: LoggedLeadContact }> {
+  const res = await fetch(API_BASE + '/api/leads/' + encodeURIComponent(requestId) + '/send-text', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ text, step }),
+  });
+  return handleResponseWithToast(res);
+}
+
 export async function fetchLead(requestId: string): Promise<LeadBundle> {
   const res = await fetch(API_BASE + '/api/leads/' + encodeURIComponent(requestId), { headers: { ...authHeaders() } });
   return handleResponse(res);

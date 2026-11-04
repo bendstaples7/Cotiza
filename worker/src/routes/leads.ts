@@ -10,6 +10,7 @@
  * PATCH  /api/leads/info/:itemId          change status / answer / wording
  * POST   /api/leads/:requestId/contacts   log a call, text, email or visit
  * PUT    /api/leads/:requestId/next-contact  set (date) or clear (null) the next contact date
+ * POST   /api/leads/:requestId/send-text  send one confirmed text through Quo and log it
  */
 import { Hono } from 'hono';
 import type { Bindings } from '../bindings.js';
@@ -21,7 +22,7 @@ import { EmailContextService } from '../services/email-context-service.js';
 import { PhoneContextService } from '../services/phone-context-service.js';
 import { LeadInfoError, LeadInfoService, requireRequestId, summarize } from '../services/lead-info-service.js';
 import { sanitizeLogText } from '../services/jobber-log-sanitize.mjs';
-import { LeadContactError, LeadContactService } from '../services/lead-contact-service.js';
+import { LeadContactError, LeadContactService, validateContact } from '../services/lead-contact-service.js';
 import { gatherContactStatus, type RequestDetail } from '../services/lead-contact-status.js';
 
 type Env = { Bindings: Bindings; Variables: { user: { id: string; email: string } } };
@@ -198,6 +199,35 @@ app.put('/:requestId/next-contact', async (c) => {
     if (bad) return c.json(bad, 400);
     throw err;
   }
+});
+
+const MAX_TEXT = 1600;
+
+app.post('/:requestId/send-text', async (c) => {
+  let requestId: string;
+  try { requestId = requireRequestId(c.req.param('requestId')); } catch (err) { return c.json(badRequest(err), 400); }
+  const body = await c.req.json().catch(() => null) as { text?: unknown; step?: unknown } | null;
+  const text = typeof body?.text === 'string' ? body.text.trim() : '';
+  if (!text || text.length > MAX_TEXT) return c.json({ error: `text must be 1 to ${MAX_TEXT} characters.` }, 400);
+  const { phone } = contextServices(c.env);
+  if (!phone.isAvailable()) return c.json({ error: 'Quo is not connected to Cotiza.' }, 409);
+  // The recipient always comes from Jobber, never from the browser.
+  const { jobberIntegration } = await openJobberIntegration(c.env.DB, c.env);
+  const read = new OpsAssistantRead(jobberIntegration, c.env.DB, c.env.IMAGES);
+  const request = await read.readRequest(c.get('user').id, { requestId }) as unknown as { outcome?: string; request?: RequestDetail };
+  const to = request.request?.phone?.availability === 'present' ? request.request.phone.value ?? null : null;
+  if (request.outcome !== 'ok') return c.json({ error: 'The Jobber request could not be read, so nothing was sent.' }, 502);
+  if (!to) return c.json({ error: 'This lead has no phone number in Jobber, so nothing was sent.' }, 409);
+  const contacts = new LeadContactService(c.env.DB);
+  // Check the log entry before sending, so a bad step doesn't leave a sent text unlogged.
+  try { validateContact({ channel: 'text', step: body?.step ?? undefined }, Date.now()); } catch (err) { return c.json(badRequest(err), 400); }
+  const sent = await phone.sendText(to, text);
+  if (sent.status === 'failed') {
+    console.warn('[leads] quo send failed', sanitizeLogText(sent.reason));
+    return c.json({ error: sent.reason }, 502);
+  }
+  const contact = await contacts.log(requestId, { channel: 'text', note: 'Sent from Cotiza via Quo', step: body?.step ?? undefined }, c.get('user').id);
+  return c.json({ sent: true, contact });
 });
 
 export default app;
