@@ -6,6 +6,7 @@
  */
 import type { AssistantPrincipal } from './assistant-access.js';
 import type { JobberReadClient } from './ops-assistant-read.js';
+import { LEAD_MAX_PAGES, LEAD_PAGE_SIZE, leadClientName, loadOpenLeads, OPEN_LEAD_DAYS, type LeadNode } from './open-leads.js';
 import { sanitizeLogText } from './jobber-log-sanitize.mjs';
 import { applyChange, LeadInfoError, LeadInfoService, MAX_ITEMS_PER_LEAD, questionKey, requireRequestId, summarize, validateQuestion } from './lead-info-service.js';
 
@@ -71,50 +72,6 @@ export const LEAD_WRITE_TOOLS = [
 export const LEAD_READ_TOOL_NAMES = new Set<string>(LEAD_READ_TOOLS.map((t) => t.name));
 export const LEAD_WRITE_TOOL_NAMES = new Set<string>(LEAD_WRITE_TOOLS.map((t) => t.name));
 
-/** Jobber request statuses that mean the lead is handled: a quote or job was made, or it was dropped. */
-export const CLOSED_REQUEST_STATUSES = new Set(['converted', 'archived']);
-const LEAD_PAGE_SIZE = 50;
-const LEAD_MAX_PAGES = 10;
-
-export const OPEN_LEADS_QUERY = `
-  query AssistantOpenLeads($first: Int!, $after: String) {
-    requests(first: $first, after: $after, sort: [{ key: REQUESTED_AT, direction: DESCENDING }]) {
-      edges { node { id title requestStatus createdAt jobberWebUri companyName client { firstName lastName companyName } } }
-      pageInfo { hasNextPage endCursor }
-    }
-  }
-`;
-
-type LeadNode = {
-  id: string; title?: string | null; requestStatus?: string | null; createdAt?: string | null; jobberWebUri?: string | null;
-  companyName?: string | null; client?: { firstName?: string | null; lastName?: string | null; companyName?: string | null } | null;
-};
-type LeadPage = { requests?: { edges?: Array<{ node: LeadNode }>; pageInfo?: { hasNextPage?: boolean; endCursor?: string | null } } };
-
-function leadClientName(node: LeadNode): string | null {
-  const person = [node.client?.firstName, node.client?.lastName].map((part) => (part ?? '').trim()).filter(Boolean).join(' ');
-  return person || (node.client?.companyName ?? node.companyName ?? '').trim() || null;
-}
-
-/** Reads requests newest first until one is older than the window, keeping the ones not yet converted or archived. */
-async function loadOpenLeads(jobber: JobberReadClient, days: number, now: number): Promise<{ open: LeadNode[]; complete: boolean }> {
-  const cutoff = now - days * 86400_000;
-  const open: LeadNode[] = [];
-  let after: string | null = null;
-  for (let page = 0; page < LEAD_MAX_PAGES; page++) {
-    const data: LeadPage = await jobber.graphqlRequest<LeadPage>(OPEN_LEADS_QUERY, { first: LEAD_PAGE_SIZE, after });
-    const edges = data.requests?.edges ?? [];
-    for (const { node } of edges) {
-      const created = Date.parse(node.createdAt ?? '');
-      if (Number.isFinite(created) && created < cutoff) return { open, complete: true };
-      if (!CLOSED_REQUEST_STATUSES.has(String(node.requestStatus ?? '').toLowerCase())) open.push(node);
-    }
-    if (!data.requests?.pageInfo?.hasNextPage || !data.requests.pageInfo.endCursor) return { open, complete: true };
-    after = data.requests.pageInfo.endCursor;
-  }
-  return { open, complete: false };
-}
-
 export async function callLeadTool(db: D1Database, principal: AssistantPrincipal, name: string, rawArgs: unknown, jobber?: JobberReadClient | null, now: number = Date.now()) {
   const info = new LeadInfoService(db);
   try {
@@ -122,7 +79,7 @@ export async function callLeadTool(db: D1Database, principal: AssistantPrincipal
       const args = objectArgs(rawArgs, ['limit', 'days']);
       const limit = args.limit === undefined ? 25 : Number(args.limit);
       if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new LeadToolArgsError('limit must be 1 to 50.');
-      const days = args.days === undefined ? 60 : Number(args.days);
+      const days = args.days === undefined ? OPEN_LEAD_DAYS : Number(args.days);
       if (!Number.isInteger(days) || days < 1 || days > 365) throw new LeadToolArgsError('days must be 1 to 365.');
       if (!jobber) return { outcome: 'failed' as const, leads: [], failure: { code: 'jobber_unavailable', message: 'Jobber is not connected, so open leads could not be read. This is not an empty list.' } };
       let loaded: { open: LeadNode[]; complete: boolean };

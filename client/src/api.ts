@@ -775,14 +775,17 @@ export async function fetchManualRequest(id: string): Promise<ManualRequest> {
   return handleResponse(res);
 }
 
-export async function fetchManualRequests(sortBy?: 'age_asc' | 'age_desc'): Promise<ManualRequestWithDeathclock[]> {
+/** Whether the queue's Jobber cards came from Jobber's live open leads. */
+export type JobberQueueStatus = { status: 'live'; days: number; complete: boolean } | { status: 'unavailable'; days: number };
+
+/** The request queue: manual requests plus Jobber's open leads, with whether Jobber could be read. */
+export async function fetchRequestQueue(sortBy?: 'age_asc' | 'age_desc'): Promise<{ requests: ManualRequestWithDeathclock[]; jobber: JobberQueueStatus }> {
   const params = new URLSearchParams({ include_deathclock: 'true' });
   if (sortBy) params.set('sort_by', sortBy);
   const res = await fetch(API_BASE + '/api/quotes/manual-requests?' + params.toString(), {
     headers: { ...authHeaders() },
   });
-  const data = await handleResponse<{ requests: ManualRequestWithDeathclock[] }>(res);
-  return data.requests;
+  return handleResponse<{ requests: ManualRequestWithDeathclock[]; jobber: JobberQueueStatus }>(res);
 }
 
 export interface EnrichedManualRequestFields {

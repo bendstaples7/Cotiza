@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { QuoteDraft, ErrorResponse } from 'shared';
-import { fetchManualRequests, fetchImportableQuotes, importJobberQuote, generateQuote, fetchDrafts } from '../api';
+import { fetchImportableQuotes, importJobberQuote, generateQuote, fetchDrafts } from '../api';
 import type { ImportableQuote } from '../api';
 
 // ── Helpers ──

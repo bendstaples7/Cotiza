@@ -5,7 +5,7 @@ import RequestJobberQuoteModal from '../components/RequestJobberQuoteModal';
 import type { ErrorResponse } from 'shared';
 import { isPlaceholderJobberClientName } from 'shared';
 import {
-  fetchManualRequests,
+  fetchRequestQueue,
   enrichManualRequests,
   generateQuote,
   fetchDrafts,
@@ -14,7 +14,7 @@ import {
   fetchRequestJobberQuotes,
   fetchLeadSummaries,
 } from '../api';
-import type { LeadInfoSummary, ManualRequestWithDeathclock, ResolveRequestQuoteResult } from '../api';
+import type { JobberQueueStatus, LeadInfoSummary, ManualRequestWithDeathclock, ResolveRequestQuoteResult } from '../api';
 
 // ---------------------------------------------------------------------------
 // Deathclock color → hex map (mirrors DeathclockBadge component)
@@ -73,6 +73,7 @@ export default function RequestQueuePage() {
   const [requests, setRequests] = useState<ManualRequestWithDeathclock[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [jobberStatus, setJobberStatus] = useState<JobberQueueStatus | null>(null);
   const [generatingForId, setGeneratingForId] = useState<string | null>(null);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [leadSummaries, setLeadSummaries] = useState<Record<string, LeadInfoSummary>>({});
@@ -117,8 +118,10 @@ export default function RequestQueuePage() {
     try {
       if (!silent) setLoading(true);
       setError(null);
-      const result = await fetchManualRequests(currentSort);
+      const queue = await fetchRequestQueue(currentSort);
+      const result = queue.requests;
       setRequests(result);
+      setJobberStatus(queue.jobber ?? null);
       lastFetchedAtRef.current = Date.now();
 
       const sparseJobberIds = result
@@ -432,6 +435,12 @@ export default function RequestQueuePage() {
 
       {generateError && (
         <div role="alert" style={alertStyle}>{generateError}</div>
+      )}
+
+      {jobberStatus?.status === 'unavailable' && (
+        <div role="alert" style={alertStyle}>
+          Jobber could not be reached, so Jobber leads are not shown. Only manual requests are listed. This is not an empty queue.
+        </div>
       )}
 
       {requests.length === 0 ? (

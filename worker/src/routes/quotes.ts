@@ -6,6 +6,7 @@ import { sessionMiddleware } from '../middleware/session.js';
 import { PlatformError } from '../errors/index.js';
 import { JobberWebSession } from '../services/jobber-web-session.js';
 import { sanitizeLogText } from '../services/jobber-log-sanitize.mjs';
+import { loadOpenLeads, mergeQueueWithOpenLeads, OPEN_LEAD_DAYS } from '../services/open-leads.js';
 import {
   QuoteEngine,
   JobberIntegration,
@@ -337,7 +338,22 @@ app.get('/manual-requests', async (c) => {
   }
 
   const manualRequestService = new ManualRequestService(db);
-  let rows = await manualRequestService.list({ userId, sortBy, includeDeathclock });
+  const stored = await manualRequestService.list({ userId, sortBy, includeDeathclock });
+
+  // Jobber cards come from Jobber's own open leads (last 60 days, not converted or archived).
+  // Cotiza's stored rows alone cannot tell a lead quoted directly in Jobber from an open one.
+  let jobber: { status: 'live'; days: number; complete: boolean } | { status: 'unavailable'; days: number };
+  let rows: typeof stored;
+  try {
+    const { jobberIntegration } = await createJobberIntegration(db, c.env);
+    const loaded = await loadOpenLeads(jobberIntegration, OPEN_LEAD_DAYS, Date.now());
+    rows = mergeQueueWithOpenLeads(stored, loaded.open, sortBy ?? 'age_desc', userId, Date.now());
+    jobber = { status: 'live', days: OPEN_LEAD_DAYS, complete: loaded.complete };
+  } catch (err) {
+    console.error(`[quotes] open leads unavailable: ${sanitizeQueueError(err)}`);
+    rows = stored.filter((row) => row.requestSource !== 'jobber');
+    jobber = { status: 'unavailable', days: OPEN_LEAD_DAYS };
+  }
 
   if (c.executionCtx?.waitUntil) {
     c.executionCtx.waitUntil((async () => {
@@ -358,11 +374,15 @@ app.get('/manual-requests', async (c) => {
       // value (SQL NOW() vs JS Date() — different moments of evaluation).
       deathclock: computeDeathclock(row.createdAt, row.quoteSentAt, row.ageSeconds),
     }));
-    return c.json({ requests: items });
+    return c.json({ requests: items, jobber });
   }
 
-  return c.json({ requests: rows });
+  return c.json({ requests: rows, jobber });
 });
+
+function sanitizeQueueError(err: unknown): string {
+  return sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 180);
+}
 
 /**
  * POST /manual-requests/enrich
