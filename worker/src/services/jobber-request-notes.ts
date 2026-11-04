@@ -230,6 +230,24 @@ export const RECENT_NOTES_QUERY = `query CotizaRecentNotes($id: EncodedId!) {
 
 export class JobberNoteRejected extends Error {}
 
+/** "Z2lk…" → "35714897" (Jobber's web number for the request), or the raw id when it isn't a gid. */
+export function requestNumber(requestId: string): string {
+  try {
+    const decoded = atob(requestId.replace(/-/g, '+').replace(/_/g, '/'));
+    const m = /\/Request\/(\d+)$/.exec(decoded);
+    if (m) return m[1];
+  } catch { /* not base64 */ }
+  return requestId;
+}
+
+/**
+ * The text that actually goes to Jobber. A client note is not tied to a request, so it names the
+ * request; that also keeps a lost write from matching the same words on another request.
+ */
+export function noteTextFor(target: 'request' | 'client', requestId: string, message: string): string {
+  return target === 'client' ? `${message} · request ${requestNumber(requestId)}` : message;
+}
+
 /** Sends one note. Throws on any failure; JobberNoteRejected when Jobber answered with errors (nothing was written). */
 export async function postJobberNote(jobber: JobberReadClient, requestId: string, message: string): Promise<{ noteId: string | null; mutation: string; target: 'request' | 'client' }> {
   const shape = await loadNoteShape(jobber);
@@ -241,7 +259,7 @@ export async function postJobberNote(jobber: JobberReadClient, requestId: string
     targetId = clientId;
   }
   const data = await jobber.graphqlRequest<Record<string, Record<string, unknown> | null>>(
-    noteMutationText(shape), { id: targetId, input: { [shape.messageField]: message } },
+    noteMutationText(shape), { id: targetId, input: { [shape.messageField]: noteTextFor(shape.target, requestId, message) } },
   );
   const payload = data[shape.mutation];
   const errors = (payload?.userErrors as Array<{ message?: string }> | undefined) ?? [];
@@ -270,7 +288,7 @@ export async function noteAlreadyPosted(jobber: JobberReadClient, requestId: str
   const shape = await loadNoteShape(jobber);
   if (shape.target === 'client') {
     const data = await jobber.graphqlRequest<{ request?: { client?: { notes?: NoteEdges } | null } | null }>(RECENT_CLIENT_NOTES_QUERY, { id: requestId });
-    return findNote(data.request?.client?.notes, message);
+    return findNote(data.request?.client?.notes, noteTextFor('client', requestId, message));
   }
   const data = await jobber.graphqlRequest<{ request?: { notes?: NoteEdges } | null }>(RECENT_NOTES_QUERY, { id: requestId });
   return findNote(data.request?.notes, message);

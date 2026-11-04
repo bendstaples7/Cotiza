@@ -233,7 +233,7 @@ describe('JobberNoteWriter', () => {
     const note = await new JobberNoteWriter({ db, jobber: jobber.client }).write(noteKey('contact', 'lct_5'), REQ, 'm', 'u');
     expect(note).toMatchObject({ status: 'posted', jobberNoteId: 'CNOTE1' });
     expect(jobber.mutationCalls()[0].query).toContain('clientCreateNote(clientId: $id, input: $input) { clientNote { id } userErrors { message } }');
-    expect(jobber.mutationCalls()[0].variables).toEqual({ id: 'C1', input: { message: 'm' } });
+    expect(jobber.mutationCalls()[0].variables).toEqual({ id: 'C1', input: { message: 'm · request 35754222' } });
   });
 
   it('falls back to a client note when the request note needs fields Cotiza cannot fill', async () => {
@@ -248,8 +248,14 @@ describe('JobberNoteWriter', () => {
     const { db } = fakeDb();
     const id = noteKey('contact', 'lct_8');
     await new JobberNoteWriter({ db, jobber: fakeJobber({ mutations: [clientCreateNote], fail: 'network' }).client }).write(id, REQ, 'm', 'u');
-    const landed = fakeJobber({ mutations: [clientCreateNote], existingNotes: ['m'] });
-    const retried = await new JobberNoteWriter({ db, jobber: landed.client }).retry(id, 'u');
+    // The same words on another request's client note don't count; only this request's does.
+    const elsewhere = fakeJobber({ mutations: [clientCreateNote], existingNotes: ['m · request 999'] });
+    expect((await new JobberNoteWriter({ db, jobber: elsewhere.client }).retry(id, 'u'))?.status).toBe('posted');
+    expect(elsewhere.mutationCalls()).toHaveLength(1);
+    const id2 = noteKey('contact', 'lct_9');
+    await new JobberNoteWriter({ db, jobber: fakeJobber({ mutations: [clientCreateNote], fail: 'network' }).client }).write(id2, REQ, 'm', 'u');
+    const landed = fakeJobber({ mutations: [clientCreateNote], existingNotes: ['m · request 35754222'] });
+    const retried = await new JobberNoteWriter({ db, jobber: landed.client }).retry(id2, 'u');
     expect(retried).toMatchObject({ status: 'posted', jobberNoteId: 'CN0' });
     expect(landed.mutationCalls()).toHaveLength(0);
   });
