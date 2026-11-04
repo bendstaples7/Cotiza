@@ -306,6 +306,7 @@ describe('RequestQueuePage', () => {
     renderQueue();
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Server is down');
+    expect(screen.queryByText('No pending requests in the queue.')).not.toBeInTheDocument();
   });
 
   it('renders cards with DeathclockBadge when data loaded', async () => {

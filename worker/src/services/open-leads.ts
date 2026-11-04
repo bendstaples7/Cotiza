@@ -40,7 +40,9 @@ export async function loadOpenLeads(jobber: JobberReadClient, days: number, now:
   for (let page = 0; page < LEAD_MAX_PAGES; page++) {
     const data: LeadPage = await jobber.graphqlRequest<LeadPage>(OPEN_LEADS_QUERY, { first: LEAD_PAGE_SIZE, after });
     // A missing or malformed page is a failed read, never an empty list of leads.
-    if (!data?.requests || !Array.isArray(data.requests.edges)) throw new Error('Jobber returned no requests page.');
+    if (!data?.requests || !Array.isArray(data.requests.edges) || typeof data.requests.pageInfo?.hasNextPage !== 'boolean') {
+      throw new Error('Jobber returned no requests page.');
+    }
     const edges = data.requests.edges;
     for (const { node } of edges) {
       const created = Date.parse(node.createdAt ?? '');

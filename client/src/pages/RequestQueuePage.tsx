@@ -195,6 +195,7 @@ export default function RequestQueuePage() {
         setJobberQuoteBadges({});
       }
     } catch (err) {
+      setJobberStatus(null);
       setError((err as ErrorResponse).message ?? 'Failed to load request queue.');
     } finally {
       if (!silent) setLoading(false);
@@ -450,7 +451,7 @@ export default function RequestQueuePage() {
       )}
 
       {requests.length === 0 ? (
-        jobberStatus?.status === 'unavailable' ? null : (
+        error || jobberStatus?.status === 'unavailable' ? null : (
           <div style={emptyStyle}>
             <p style={{ margin: 0, color: '#888' }}>No pending requests in the queue.</p>
           </div>

@@ -38,6 +38,8 @@ describe('mergeQueueWithOpenLeads', () => {
   it('treats a missing Jobber requests page as a failed read', async () => {
     const jobber = { graphqlRequest: async () => ({}) } as never;
     await expect(loadOpenLeads(jobber, 60, NOW)).rejects.toThrow('no requests page');
+    const noPageInfo = { graphqlRequest: async () => ({ requests: { edges: [] } }) } as never;
+    await expect(loadOpenLeads(noPageInfo, 60, NOW)).rejects.toThrow('no requests page');
   });
 
   it('sorts oldest first when asked', () => {
