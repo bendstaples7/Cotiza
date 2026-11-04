@@ -50,7 +50,6 @@ export type { SpaceAllocationResult } from './space-allocation-service.js';
 export { SpaceExtractionService } from './space-extraction-service.js';
 export { CompletedWorkService, extractCompletedWorkPatterns, filterCompletedWork } from './completed-work-service.js';
 export type { CompletedWorkContext } from './completed-work-service.js';
-export { scoreLead } from './lead-scoring-service.js';
 export type { LeadScoringInput, LeadScoringResult, DimensionScore } from 'shared';
 export { ReviewSnapshotService } from './review-snapshot-service.js';
 export type { SnapshotPayload } from './review-snapshot-service.js';

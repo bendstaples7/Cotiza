@@ -6,6 +6,7 @@ import { failedJobberRead, liveJobberRead } from './jobber-read.js';
 import { sanitizeLogText } from './jobber-log-sanitize.mjs';
 import { downloadRequestPhoto, loadRequestPhotos, photoFailureReason, type PhotoResizer } from './jobber-request-photos.js';
 import { loadQuoteTerms } from './jobber-quote-terms.js';
+import { normalizeLines, quoteVersion } from './jobber-quote-edits.js';
 import { DETAIL_VISITS_PER_PAGE, JOB_QUERIES, JOB_STATUSES, mapVisit, summarizeVisits, type VisitNode } from './ops-assistant-jobs.js';
 
 /** One Jobber page per call. Text filters apply only to that page. */
@@ -119,8 +120,9 @@ const QUOTE_DETAIL_QUERY = `
       quoteStatus
       jobberWebUri
       createdAt
-      lineItems {
+      lineItems(first: 100) {
         nodes { id name description quantity unitPrice }
+        pageInfo { hasNextPage }
       }
       client { id firstName lastName companyName }
       request { id }
@@ -524,6 +526,9 @@ export class OpsAssistantRead {
       unitPrice: item.unitPrice ?? null,
     }));
     const paymentTerms = await loadQuoteTerms(this.jobber, quoteId, (quote.message as string | null) ?? null);
+    const rawLines = quote.lineItems as { nodes?: Array<Record<string, unknown>>; pageInfo?: { hasNextPage?: boolean } } | undefined;
+    // version: pass to apply_quote_edits so it can refuse if the quote changes after this read.
+    const version = rawLines?.pageInfo?.hasNextPage ? null : await quoteVersion(quote.quoteStatus as string | null, normalizeLines(rawLines?.nodes));
     return {
       outcome: 'ok' as const,
       read: liveJobberRead([quote]),
@@ -539,6 +544,7 @@ export class OpsAssistantRead {
         jobberWebUri: present(quote.jobberWebUri as string | null),
         createdAt: present(quote.createdAt as string | null),
         lineItems,
+        version,
         paymentTerms,
       },
     };
