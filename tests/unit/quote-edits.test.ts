@@ -239,8 +239,9 @@ describe('quote:write scope', () => {
     const args = { quoteId: 'Z2lkOi8vSm9iYmVyL1F1b3RlLzE=', quoteVersion: await quoteVersion('awaiting_response', [A, B]), lines: [A] };
     const call = readMcpJsonBody(await (await handleMcpPost(mcp('tools/call', { name: 'apply_quote_edits', arguments: args }), d)).text()) as { result: { isError: boolean } };
     expect(call.result.isError).toBe(true);
-    const logged = JSON.stringify((d.db as unknown as { prepare: { mock: { calls: unknown[] } } }).prepare.mock.calls);
-    expect(logged).toContain('quote=715');
+    const stmts = (d.db as unknown as { _stmts: Array<{ bind: { mock: { calls: unknown[][] } } }> })._stmts;
+    const bound = JSON.stringify(stmts.flatMap((stmt) => stmt.bind.mock.calls));
+    expect(bound).toContain('quote=715');
   });
 
   it('grants quote:write only when the office account ticks it', async () => {
