@@ -44,7 +44,8 @@ describe('POST /api/leads/:requestId/send-text', () => {
   it('sends to the Jobber number and logs the text', async () => {
     mocks.sendText.mockResolvedValue({ status: 'sent', id: 'AC1' });
     mocks.log.mockResolvedValue({ id: 'lct_1' });
-    const res = await send({ text: 'Hi Emma', step: 'intro_text' });
+    // A recipient from the browser is ignored: the number always comes from Jobber.
+    const res = await send({ text: 'Hi Emma', step: 'intro_text', to: '+15559999999' });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ sent: true, logged: true });
     expect(mocks.sendText).toHaveBeenCalledWith('(773) 555-0100', 'Hi Emma');
