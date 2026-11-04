@@ -115,6 +115,8 @@ app.get('/:requestId', async (c) => {
       email: timeline.email,
       now: Date.now(),
       items,
+      quotes: ((quotes as { jobberQuotes?: { items?: Array<{ status?: { availability?: string; value?: string } }> } }).jobberQuotes?.items ?? [])
+        .map((q) => ({ status: q.status?.availability === 'present' ? q.status.value ?? null : null })),
     }),
   ]);
 

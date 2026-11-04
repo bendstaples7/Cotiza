@@ -133,17 +133,21 @@ export class LeadInfoService {
   }
 
   /** Summaries for many leads at once (queue cards, list_open_leads). Leads without items are omitted. */
-  async summaries(requestIds: string[]): Promise<Record<string, LeadInfoSummary>> {
+  /** Checklist items for many leads in one read, each lead's in insertion order. */
+  async listMany(requestIds: string[]): Promise<Record<string, LeadInfoItem[]>> {
     const ids = [...new Set(requestIds.filter((id) => REQUEST_ID_RE.test(id)))].slice(0, 200);
     if (!ids.length) return {};
     const { results } = await this.db.prepare(
-      `SELECT * FROM lead_info_items WHERE jobber_request_id IN (${ids.map(() => '?').join(',')})`,
+      `SELECT * FROM lead_info_items WHERE jobber_request_id IN (${ids.map(() => '?').join(',')}) ORDER BY rowid ASC`,
     ).bind(...ids).all<Record<string, unknown>>();
-    const grouped = new Map<string, LeadInfoItem[]>();
-    for (const item of (results ?? []).map(rowToItem)) {
-      grouped.set(item.requestId, [...(grouped.get(item.requestId) ?? []), item]);
-    }
-    return Object.fromEntries([...grouped].map(([id, items]) => [id, summarize(items)]));
+    const grouped: Record<string, LeadInfoItem[]> = {};
+    for (const item of (results ?? []).map(rowToItem)) (grouped[item.requestId] ??= []).push(item);
+    return grouped;
+  }
+
+  async summaries(requestIds: string[]): Promise<Record<string, LeadInfoSummary>> {
+    const grouped = await this.listMany(requestIds);
+    return Object.fromEntries(Object.entries(grouped).map(([id, items]) => [id, summarize(items)]));
   }
 
   async add(requestId: string, input: { question?: unknown; required?: unknown } | null | undefined, by: { userId: string; via: LeadInfoVia }): Promise<LeadInfoItem> {

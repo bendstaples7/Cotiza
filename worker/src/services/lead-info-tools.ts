@@ -13,7 +13,7 @@ import type { PhoneContextService } from './phone-context-service.js';
 import type { LeadWorkflow } from './lead-workflow.js';
 import { LEAD_MAX_PAGES, LEAD_PAGE_SIZE, leadClientName, loadOpenLeads, OPEN_LEAD_DAYS, type LeadNode } from './open-leads.js';
 import { sanitizeLogText } from './jobber-log-sanitize.mjs';
-import { applyChange, LeadInfoError, LeadInfoService, MAX_ITEMS_PER_LEAD, questionKey, requireRequestId, summarize, validateQuestion } from './lead-info-service.js';
+import { applyChange, LeadInfoError, LeadInfoService, type LeadInfoItem, MAX_ITEMS_PER_LEAD, questionKey, requireRequestId, summarize, validateQuestion } from './lead-info-service.js';
 
 export class LeadToolArgsError extends Error {}
 
@@ -94,23 +94,21 @@ function publicNextStep(w: LeadWorkflow) {
 }
 
 /** Next step per lead from Jobber notes, logged contacts and the checklist. Contact details never leave this function. */
-async function leadNextSteps(db: D1Database, jobber: JobberReadClient, userId: string, ids: string[], now: number) {
+async function leadNextSteps(db: D1Database, jobber: JobberReadClient, userId: string, ids: string[], itemsById: Record<string, LeadInfoItem[]>, now: number) {
   const read = new OpsAssistantRead(jobber, db);
   const contacts = new LeadContactService(db);
-  const info = new LeadInfoService(db);
   const out: Record<string, ReturnType<typeof publicNextStep> | null> = {};
   let next = 0;
   const worker = async () => {
     while (next < ids.length) {
       const requestId = ids[next++];
       try {
-        const [request, items] = await Promise.all([
-          read.readRequest(userId, { requestId }) as unknown as Promise<{ outcome?: string; request?: RequestDetail }>,
-          info.list(requestId),
-        ]);
+        const request = await read.readRequest(userId, { requestId }) as unknown as { outcome?: string; request?: RequestDetail };
+        // Without the request's notes the cadence would be a guess: say "unknown" (null) instead.
+        if (request.outcome !== 'ok') { out[requestId] = null; continue; }
         const { workflow } = await gatherLeadWorkflow({
-          requestId, detail: request.request, requestFailed: request.outcome !== 'ok', contacts,
-          phone: NO_CONTEXT, email: NO_CONTEXT, now, items,
+          requestId, detail: request.request, requestFailed: false, contacts,
+          phone: NO_CONTEXT, email: NO_CONTEXT, now, items: itemsById[requestId] ?? [],
         });
         out[requestId] = publicNextStep(workflow);
       } catch (err) {
@@ -143,8 +141,8 @@ export async function callLeadTool(db: D1Database, principal: AssistantPrincipal
       // Jobber is read newest first; the team works the lead waiting longest first.
       const oldestFirst = [...loaded.open].reverse();
       const page = oldestFirst.slice(0, limit);
-      const summaries = await info.summaries(page.map((node) => node.id));
-      const nextSteps = await leadNextSteps(db, jobber, principal.userId, page.map((node) => node.id), now);
+      const itemsById = await info.listMany(page.map((node) => node.id));
+      const nextSteps = await leadNextSteps(db, jobber, principal.userId, page.map((node) => node.id), itemsById, now);
       return {
         outcome: 'ok' as const,
         total: loaded.open.length,
@@ -160,7 +158,7 @@ export async function callLeadTool(db: D1Database, principal: AssistantPrincipal
             createdAt: node.createdAt ?? null,
             ageDays: Number.isFinite(created) ? Math.max(0, Math.floor((now - created) / 86400_000)) : null,
             jobberWebUri: node.jobberWebUri ?? null,
-            infoNeeded: summaries[node.id] ?? summarize([]),
+            infoNeeded: summarize(itemsById[node.id] ?? []),
             nextStep: nextSteps[node.id] ?? null,
           };
         }),

@@ -56,7 +56,7 @@ describe('handbookCadence', () => {
     expect(handbookCadence([lead, out('2026-11-02T15:00:00Z'), call], NOW)).toMatchObject({ step: 3, suggested: '2026-11-05' });
   });
 
-  it('form attachments and emails at intake are not a reply', () => {
+  it('a client note at intake (the form\'s attachments) is not a reply', () => {
     const attachments: ContactEvent = { at: '2026-11-02T14:00:20Z', channel: 'note', direction: 'incoming', source: 'jobber', label: 'Note from customer' };
     expect(handbookCadence([lead, attachments], NOW).step).toBe(1);
   });
@@ -72,6 +72,14 @@ describe('Jobber team notes', () => {
     expect(classifyTeamNote('CALL SUMMARY: \nHVAC: Working properly')).toBe('conversation');
     expect(classifyTeamNote('COPIED FROM THE REQUEST FORM\n\nLooking to replace carpeting')).toBe('note');
     expect(classifyTeamNote('RENE SENT VIA WHATSAPP: Hi team')).toBe('note');
+  });
+
+  it('treats customer-voiced notes as replies and voicemails as outreach', () => {
+    for (const note of ['Customer sent an email asking about timing', 'Client texted back photos', 'Customer reached out about the start date', 'Customer left a voicemail', 'Missed call from customer']) {
+      expect(classifyTeamNote(note)).toBe('reply');
+    }
+    expect(classifyTeamNote('Spoke to voicemail, will try again')).toBe('outreach');
+    expect(classifyTeamNote('Called the customer, no answer')).toBe('outreach');
   });
 
   it('counts outreach notes as touches and reply notes as the customer speaking', () => {
@@ -122,12 +130,28 @@ describe('computeLeadWorkflow', () => {
 
   it('ready to quote 3+ days after the lead came in: send the "quote in progress" update once', () => {
     const old = request('2026-10-29T02:11:00Z');
+    const events = [old, out('2026-10-29T15:00:00Z'), out('2026-10-30T15:00:00Z')];
+    const ready = { info: info({ readyToQuote: true, firstAsk: null }) };
+    const w = workflow(events, ready);
+    expect(w.action).toMatchObject({ kind: 'quote_update', label: 'Send “quote in progress” text', why: 'Lead is 7 days old with no quote. Let them know it’s coming.' });
+    const sent: ContactEvent = { ...out('2026-11-04T15:00:00Z'), source: 'cotiza', step: 'quote_update' };
+    expect(workflow([...events, sent], ready).action.kind).toBe('draft_quote');
+  });
+
+  it('a reply on an old ready lead is answered today, with the quote news', () => {
+    const old = request('2026-10-29T02:11:00Z');
     const events = [old, out('2026-10-29T15:00:00Z'), inc('2026-10-29T18:44:00Z')];
     const w = workflow(events, { info: info({ readyToQuote: true, firstAsk: null }) });
-    expect(w.action).toMatchObject({ kind: 'quote_update', label: 'Send “quote in progress” text', why: 'Lead is 7 days old with no quote. Let them know it’s coming.' });
+    expect(w.action).toMatchObject({ kind: 'quote_update', label: 'Reply: quote is coming' });
     expect(w.next).toMatchObject({ on: '2026-10-29', daysOverdue: 6 });
-    const sent: ContactEvent = { ...out('2026-11-04T15:00:00Z'), source: 'cotiza', step: 'quote_update' };
-    expect(workflow([...events, sent], { info: info({ readyToQuote: true, firstAsk: null }) }).action.kind).toBe('draft_quote');
+  });
+
+  it('a quote in Jobber moves the lead on: finish a draft, follow up on a sent one', () => {
+    const events = [lead, out('2026-11-02T15:00:00Z')];
+    const drafted = workflow(events, { quotes: [{ status: 'draft' }] });
+    expect(drafted).toMatchObject({ progress: 'quote_drafted', bucket: 'do_now', action: { kind: 'draft_quote', label: 'Finish the quote' } });
+    const sent = workflow(events, { quotes: [{ status: 'awaiting_response' }], info: info({ readyToQuote: true, firstAsk: null }) });
+    expect(sent).toMatchObject({ progress: 'quote_sent', action: { kind: 'quote_follow_up' } });
   });
 
   it('a ready lead stays in Do now even when the next touch is later', () => {
