@@ -16,6 +16,16 @@ const api = vi.hoisted(() => ({
   setLeadNotALead: vi.fn(),
   retryJobberNote: vi.fn(),
   warnIfJobberNoteFailed: vi.fn(),
+  requestQuoteReview: vi.fn(),
+  closeLead: vi.fn(),
+  reopenLead: vi.fn(),
+  LEAD_CLOSE_REASONS: [
+    { value: 'went_elsewhere', label: 'Went with someone else' },
+    { value: 'too_small', label: 'Too small or not our work' },
+    { value: 'no_response', label: 'No response' },
+    { value: 'postponed', label: 'Postponed' },
+    { value: 'other', label: 'Other' },
+  ],
 }));
 vi.mock('../../client/src/api', () => api);
 
@@ -117,5 +127,42 @@ describe('Lead page next step', () => {
     await userEvent.click(within(step).getByRole('button', { name: 'Mark done' }));
     expect(await within(step).findByRole('status')).toHaveTextContent('Do not log this again');
     expect(within(step).queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('closes a lead with a reason; Postponed defaults its check-back date on the server', async () => {
+    api.closeLead.mockResolvedValue({ closure: {}, jobberNote: null, jobberArchive: { status: 'skipped' }, trelloReminder: true });
+    renderLead();
+    await screen.findByRole('region', { name: 'Next step' });
+    await userEvent.click(screen.getByRole('button', { name: 'Close lead' }));
+    const form = screen.getByRole('region', { name: 'Close lead' });
+    await userEvent.click(within(form).getByLabelText('Postponed'));
+    expect(within(form).getByText(/Leave blank for 3 months/)).toBeInTheDocument();
+    await userEvent.click(within(form).getByRole('button', { name: 'Close lead' }));
+    expect(api.closeLead).toHaveBeenCalledWith(REQ, { reason: 'postponed' });
+  });
+
+  it('Other needs a note before it closes', async () => {
+    renderLead();
+    await screen.findByRole('region', { name: 'Next step' });
+    await userEvent.click(screen.getByRole('button', { name: 'Close lead' }));
+    const form = screen.getByRole('region', { name: 'Close lead' });
+    await userEvent.click(within(form).getByLabelText('Other'));
+    await userEvent.click(within(form).getByRole('button', { name: 'Close lead' }));
+    expect(within(form).getByRole('alert')).toHaveTextContent('Add a short note');
+    expect(api.closeLead).not.toHaveBeenCalled();
+  });
+
+  it('a closed lead says why, what to do in Jobber and Trello, and can be reopened', async () => {
+    const closed = { reason: 'went_elsewhere' as const, label: 'Went with someone else', note: 'chose a cheaper bid', checkBackOn: null, closedAt: '2026-11-04T16:00:00Z', jobberArchived: false };
+    api.fetchLead.mockResolvedValue({ ...bundle, workflow: { ...workflow, bucket: 'closed', closed, action: { kind: 'none', label: 'Lead closed', why: 'Closed.', step: 'none', channel: 'other' } } });
+    api.reopenLead.mockResolvedValue({ reopened: true, jobberNote: null, jobberArchive: null });
+    renderLead();
+    const panel = await screen.findByRole('region', { name: 'Closed lead' });
+    expect(within(panel).getByRole('heading', { name: 'Went with someone else' })).toBeInTheDocument();
+    expect(within(panel).getByRole('link', { name: 'Archive this request in Jobber' })).toBeInTheDocument();
+    expect(within(panel).getByText('Also move the Trello card.')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Next step' })).not.toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole('button', { name: 'Reopen lead' }));
+    expect(api.reopenLead).toHaveBeenCalledWith(REQ);
   });
 });

@@ -153,9 +153,10 @@ export async function gatherLeadWorkflow(input: Parameters<typeof gatherContactS
   /** Where the drafted quote is (with Ben, ready to send…), from lead-quote-stage.ts. */
   quoteStage?: QuoteStage | null;
 }): Promise<{ status: ContactStatus; logged: LoggedContact[]; workflow: LeadWorkflow | null }> {
-  const [gathered, notALead] = await Promise.all([
+  const [gathered, notALead, closed] = await Promise.all([
     gatherContactStatus(input),
     input.contacts.notALead(input.requestId),
+    input.contacts.closure(input.requestId),
   ]);
   if (input.quotes === 'unknown') return { status: gathered.status, logged: gathered.logged, workflow: null };
   const summary = summarize(input.items);
@@ -167,6 +168,7 @@ export async function gatherLeadWorkflow(input: Parameters<typeof gatherContactS
     notALead,
     quotes: input.quotes,
     quoteStage: input.quoteStage ?? null,
+    closed,
     now: input.now,
   });
   return { status: gathered.status, logged: gathered.logged, workflow };

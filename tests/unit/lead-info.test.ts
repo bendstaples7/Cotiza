@@ -32,12 +32,15 @@ function sqliteD1() {
           }
           // Contacts logged in Cotiza (none in these tests).
           if (sql.startsWith('SELECT * FROM lead_contacts WHERE jobber_request_id = ?')) return { results: [] };
+          // No closed leads in these tests.
+          if (sql.startsWith('SELECT jobber_request_id, closed_reason')) return { results: [] };
           throw new Error(`unexpected all(): ${sql}`);
         },
         async first() {
           if (sql === 'SELECT * FROM lead_info_items WHERE id = ?') return table.find((r) => r.id === args[0]) ?? null;
           if (sql === 'SELECT next_contact_on FROM lead_followups WHERE jobber_request_id = ?') return null;
           if (sql === 'SELECT not_a_lead FROM lead_marks WHERE jobber_request_id = ?') return null;
+          if (sql.startsWith('SELECT closed_reason, closed_note')) return null;
           throw new Error(`unexpected first(): ${sql}`);
         },
         async run() {

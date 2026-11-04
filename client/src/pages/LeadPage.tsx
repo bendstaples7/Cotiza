@@ -5,15 +5,19 @@ import {
   addLeadInfo,
   fetchLead,
   fetchLeadPhotoUrl,
+  closeLead,
+  LEAD_CLOSE_REASONS,
   logLeadContact,
+  reopenLead,
   requestQuoteReview,
+  warnIfJobberNoteFailed,
   retryJobberNote,
   sendLeadText,
   setLeadNextContact,
   setLeadNotALead,
   updateLeadInfo,
 } from '../api';
-import type { JobberNoteStatus, LeadBundle, LeadContactChannel, LeadContactStatus, LeadInfoItem, LeadInfoStatus, LeadWorkflow } from '../api';
+import type { JobberArchiveOutcome, JobberNoteStatus, LeadBundle, LeadCloseReason, LeadClosure, LeadContactChannel, LeadContactStatus, LeadInfoItem, LeadInfoStatus, LeadWorkflow } from '../api';
 import { formatDay, sourceList, timeAgo } from '../components/LeadContactLine';
 import { ASSUMED_PREFIX, buildActionMessage, itemKind, mailtoLink, MAX_TEXT_LENGTH, smsLink, type ItemKind } from '../leadOutreach';
 
@@ -123,9 +127,12 @@ export default function LeadPage() {
 
       <div style={twoCol}>
         <div style={mainCol}>
-          {workflow
-            ? <NextStepPanel lead={lead} workflow={withRequestedAction(workflow, fromAction)} onChanged={reload} panelRef={nextStepRef} />
-            : <section style={card}><p style={muted}>The next step could not be worked out right now: Jobber's quotes for this request could not be fully read, so a quote may already be out. Check the quotes in Jobber before reaching out.</p></section>}
+          {workflow?.bucket === 'closed' && workflow.closed
+            ? <ClosedLeadPanel lead={lead} closure={workflow.closed} onChanged={reload} />
+            : workflow
+              ? <NextStepPanel lead={lead} workflow={withRequestedAction(workflow, fromAction)} onChanged={reload} panelRef={nextStepRef} />
+              : <section style={card}><p style={muted}>The next step could not be worked out right now: Jobber's quotes for this request could not be fully read, so a quote may already be out. Check the quotes in Jobber before reaching out.</p></section>}
+          {workflow?.bucket !== 'closed' && <CloseLeadPanel lead={lead} startOpen={fromAction === 'close'} postponedDue={workflow?.action.kind === 'check_back'} onChanged={reload} />}
         </div>
         <aside style={sideCol}>
           {workflow && <FollowUpPlan workflow={workflow} />}
@@ -893,6 +900,157 @@ export function JobberNotesBanner({ notes, unavailable = false, onChanged }: { n
           </button>
         </div>
       ))}
+    </section>
+  );
+}
+
+/** What happened in Jobber and Trello after closing or reopening, in plain words. */
+function closeFollowUps(archive: JobberArchiveOutcome | null, jobberUrl: string | null, reopening: boolean) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 14, color: '#374151' }}>
+      {archive?.status === 'archived' && <span>Archived the request in Jobber.</span>}
+      {archive?.status === 'unarchived' && <span>Unarchived the request in Jobber.</span>}
+      {archive && (archive.status === 'not_offered' || archive.status === 'failed') && (
+        <span style={{ color: '#92400e', fontWeight: 600 }}>
+          {archive.status === 'failed' ? `Couldn\u2019t ${reopening ? 'unarchive' : 'archive'} the request in Jobber (${archive.message ?? 'no reason given'}). ` : `${archive.message ?? ''} `}
+          {jobberUrl && <a href={jobberUrl} target="_blank" rel="noreferrer">{reopening ? 'Unarchive this request in Jobber' : 'Archive this request in Jobber'}</a>}
+        </span>
+      )}
+      <span>Also move the Trello card.</span>
+    </div>
+  );
+}
+
+/** Close a lead with a reason. Postponed takes a check-back date (default 3 months, per the handbook). */
+function CloseLeadPanel({ lead, startOpen, postponedDue, onChanged }: { lead: LeadBundle; startOpen: boolean; postponedDue: boolean; onChanged: () => void }) {
+  const [open, setOpen] = useState(startOpen);
+  const [reason, setReason] = useState<LeadCloseReason | ''>('');
+  const [note, setNote] = useState('');
+  const [checkBackOn, setCheckBackOn] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const jobberUrl = lead.request.request?.jobberWebUri?.availability === 'present' ? lead.request.request.jobberWebUri.value ?? null : null;
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!reason) { setError('Pick a reason.'); return; }
+    if (reason === 'other' && !note.trim()) { setError('Add a short note saying why.'); return; }
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await closeLead(lead.requestId, { reason, ...(note.trim() ? { note: note.trim() } : {}), ...(reason === 'postponed' && checkBackOn ? { checkBackOn } : {}) });
+      warnIfJobberNoteFailed(result.jobberNote);
+      onChanged();
+    } catch (err) {
+      setError((err as ErrorResponse).message ?? 'Could not close the lead.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (postponedDue) {
+    // A postponed lead that came back: Mark done above sets the next check-back; Reopen if they're ready.
+    const reopen = async () => {
+      setBusy(true);
+      setError(null);
+      try {
+        const result = await reopenLead(lead.requestId);
+        warnIfJobberNoteFailed(result.jobberNote);
+        onChanged();
+      } catch (err) {
+        setError((err as ErrorResponse).message ?? 'Could not reopen the lead.');
+      } finally {
+        setBusy(false);
+      }
+    };
+    return (
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
+        <span style={muted}>Still not ready? Mark done above and it comes back in 3 months.</span>
+        <button type="button" style={btn} disabled={busy} onClick={() => { void reopen(); }}>Ready to go ahead: reopen lead</button>
+        {error && <p role="alert" style={inlineError}>{error}</p>}
+      </div>
+    );
+  }
+  if (!open) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <button type="button" style={btn} onClick={() => setOpen(true)}>Close lead</button>
+      </div>
+    );
+  }
+  return (
+    <section style={card} aria-label="Close lead">
+      <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Close lead</h2>
+      <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <fieldset style={{ border: 0, padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <legend style={{ ...fieldLabel, marginBottom: 4 }}>Why is it closing?</legend>
+          {LEAD_CLOSE_REASONS.map((r) => (
+            <label key={r.value} style={{ display: 'flex', gap: 8, alignItems: 'center', minHeight: 32, fontSize: 14 }}>
+              <input type="radio" name="close-reason" value={r.value} checked={reason === r.value} onChange={() => setReason(r.value)} />
+              {r.label}
+            </label>
+          ))}
+        </fieldset>
+        {reason === 'postponed' && (
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 14 }}>
+            <span style={fieldLabel}>Check back on</span>
+            <input type="date" value={checkBackOn} onChange={(e) => setCheckBackOn(e.target.value)} style={dateInput} aria-describedby="check-back-help" />
+            <span id="check-back-help" style={muted}>Leave blank for 3 months from today. It comes back to Do now on that day.</span>
+          </label>
+        )}
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 14 }}>
+          <span style={fieldLabel}>{reason === 'other' ? 'Note (required)' : 'Note (optional)'}</span>
+          <input type="text" value={note} maxLength={200} onChange={(e) => setNote(e.target.value)} style={input} placeholder="e.g. went with their cousin's company" />
+        </label>
+        <p style={{ ...muted, margin: 0 }}>
+          {reason === 'postponed' ? 'The request stays open in Jobber so it can come back.' : 'Cotiza adds a note to the Jobber request and archives it there when Jobber allows.'}{' '}
+          {jobberUrl && <a href={jobberUrl} target="_blank" rel="noreferrer">Open in Jobber</a>}
+        </p>
+        <div style={actions}>
+          <button type="submit" style={primaryBtn} disabled={busy || !reason}>{busy ? 'Closing…' : 'Close lead'}</button>
+          <button type="button" style={btn} disabled={busy} onClick={() => { setOpen(false); setError(null); }}>Cancel</button>
+        </div>
+        {error && <p role="alert" style={inlineError}>{error}</p>}
+      </form>
+    </section>
+  );
+}
+
+/** A closed lead: why, when a postponed one comes back, what to do in Jobber and Trello, and Reopen. */
+function ClosedLeadPanel({ lead, closure, onChanged }: { lead: LeadBundle; closure: LeadClosure; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reopened, setReopened] = useState<JobberArchiveOutcome | null | undefined>(undefined);
+  const jobberUrl = lead.request.request?.jobberWebUri?.availability === 'present' ? lead.request.request.jobberWebUri.value ?? null : null;
+  const reopen = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await reopenLead(lead.requestId);
+      warnIfJobberNoteFailed(result.jobberNote);
+      // Show what to do in Jobber and Trello first; the page refreshes when they continue.
+      setReopened(result.jobberArchive);
+    } catch (err) {
+      setError((err as ErrorResponse).message ?? 'Could not reopen the lead.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const archive: JobberArchiveOutcome | null = closure.reason === 'postponed' ? null
+    : closure.jobberArchived ? { status: 'archived' } : { status: 'not_offered', message: 'This request is still open in Jobber.' };
+  return (
+    <section style={card} aria-label="Closed lead">
+      <span style={eyebrow}>{closure.reason === 'postponed' ? 'Postponed' : 'Closed'}</span>
+      <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>{closure.label}</h2>
+      {closure.note && <p style={{ margin: 0, fontSize: 14, color: '#374151' }}>{closure.note}</p>}
+      {closure.reason === 'postponed' && closure.checkBackOn && (
+        <p style={{ margin: 0, fontSize: 14, color: '#374151' }}>Comes back to Do now on <strong>{formatDay(closure.checkBackOn)}</strong>.</p>
+      )}
+      {reopened === undefined ? closeFollowUps(archive, jobberUrl, false) : closeFollowUps(reopened, jobberUrl, true)}
+      <div style={actions}>
+        {reopened === undefined
+          ? <button type="button" style={btn} disabled={busy} onClick={() => { void reopen(); }}>{busy ? 'Reopening…' : 'Reopen lead'}</button>
+          : <button type="button" style={primaryBtn} onClick={onChanged}>Reopened · back to the lead</button>}
+      </div>
+      {error && <p role="alert" style={inlineError}>{error}</p>}
     </section>
   );
 }

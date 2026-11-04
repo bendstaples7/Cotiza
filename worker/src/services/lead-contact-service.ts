@@ -248,17 +248,171 @@ export class LeadContactService {
   /**
    * Marks a lead as not a real lead (true) or clears the mark (false). changed is true only for the
    * one call that actually flipped the mark, so concurrent identical calls don't each act on it.
+   * The row may also hold the lead's closure (closeLead), which clearing the mark keeps.
    */
   async setNotALead(requestId: string, value: unknown, userId: string, now: number = Date.now()): Promise<{ notALead: boolean; changed: boolean }> {
     if (typeof value !== 'boolean') throw new LeadContactError('notALead must be true or false.');
+    const at = new Date(now).toISOString();
     if (!value) {
-      const res = await this.db.prepare('DELETE FROM lead_marks WHERE jobber_request_id = ?').bind(requestId).run();
+      const res = await this.db.prepare('UPDATE lead_marks SET not_a_lead = 0, updated_at = ?, updated_by_user_id = ? WHERE jobber_request_id = ? AND not_a_lead = 1').bind(at, userId, requestId).run();
+      await this.dropEmptyMark(requestId);
       return { notALead: false, changed: Boolean(res.meta?.changes) };
     }
     const res = await this.db
-      .prepare('INSERT INTO lead_marks (jobber_request_id, not_a_lead, updated_at, updated_by_user_id) VALUES (?, 1, ?, ?) ON CONFLICT(jobber_request_id) DO NOTHING')
-      .bind(requestId, new Date(now).toISOString(), userId)
+      .prepare(`INSERT INTO lead_marks (jobber_request_id, not_a_lead, updated_at, updated_by_user_id) VALUES (?, 1, ?, ?)
+                ON CONFLICT(jobber_request_id) DO UPDATE SET not_a_lead = 1, updated_at = excluded.updated_at, updated_by_user_id = excluded.updated_by_user_id
+                WHERE lead_marks.not_a_lead = 0`)
+      .bind(requestId, at, userId)
       .run();
     return { notALead: true, changed: Boolean(res.meta?.changes) };
   }
+
+  private async dropEmptyMark(requestId: string) {
+    await this.db.prepare('DELETE FROM lead_marks WHERE jobber_request_id = ? AND not_a_lead = 0 AND closed_reason IS NULL').bind(requestId).run();
+  }
+
+  // ── Closing a lead ──────────────────────────────────────────
+
+  async closure(requestId: string): Promise<LeadClosure | null> {
+    const row = await this.db
+      .prepare('SELECT closed_reason, closed_note, check_back_on, closed_at, jobber_archived FROM lead_marks WHERE jobber_request_id = ? AND closed_reason IS NOT NULL')
+      .bind(requestId)
+      .first<ClosureRow>();
+    return row ? toClosure(row) : null;
+  }
+
+  /** Every closed lead, by request id (a short list: closed leads leave the queue). */
+  async closures(): Promise<Map<string, LeadClosure>> {
+    const { results } = await this.db
+      .prepare('SELECT jobber_request_id, closed_reason, closed_note, check_back_on, closed_at, jobber_archived FROM lead_marks WHERE closed_reason IS NOT NULL')
+      .all<ClosureRow & { jobber_request_id: string }>();
+    return new Map((results ?? []).map((r) => [r.jobber_request_id, toClosure(r)]));
+  }
+
+  /**
+   * Closes a lead with a reason. changed is false when it was already closed (the existing closure
+   * stands; reopen first to change it), so a double click never closes, notes or archives twice.
+   */
+  async closeLead(requestId: string, input: unknown, userId: string, now: number = Date.now()): Promise<{ closure: LeadClosure; changed: boolean }> {
+    const close = validateClose(input, now);
+    const at = new Date(now).toISOString();
+    const res = await this.db
+      .prepare(`INSERT INTO lead_marks (jobber_request_id, not_a_lead, closed_reason, closed_note, check_back_on, closed_at, closed_by_user_id, jobber_archived, updated_at, updated_by_user_id)
+                VALUES (?, 0, ?, ?, ?, ?, ?, 0, ?, ?)
+                ON CONFLICT(jobber_request_id) DO UPDATE SET closed_reason = excluded.closed_reason, closed_note = excluded.closed_note,
+                  check_back_on = excluded.check_back_on, closed_at = excluded.closed_at, closed_by_user_id = excluded.closed_by_user_id,
+                  jobber_archived = 0, updated_at = excluded.updated_at, updated_by_user_id = excluded.updated_by_user_id
+                WHERE lead_marks.closed_reason IS NULL`)
+      .bind(requestId, close.reason, close.note, close.checkBackOn, at, userId, at, userId)
+      .run();
+    const closure = await this.closure(requestId);
+    if (!closure) throw new LeadContactError('The lead could not be closed.');
+    return { closure, changed: Boolean(res.meta?.changes) };
+  }
+
+  /** Reopens a closed lead. Returns the closure it cleared (null when it wasn't closed). */
+  async reopenLead(requestId: string, userId: string, now: number = Date.now()): Promise<LeadClosure | null> {
+    const before = await this.closure(requestId);
+    if (!before) return null;
+    const res = await this.db
+      .prepare(`UPDATE lead_marks SET closed_reason = NULL, closed_note = NULL, check_back_on = NULL, closed_at = NULL, closed_by_user_id = NULL,
+                  jobber_archived = 0, updated_at = ?, updated_by_user_id = ?
+                WHERE jobber_request_id = ? AND closed_reason IS NOT NULL`)
+      .bind(new Date(now).toISOString(), userId, requestId)
+      .run();
+    await this.dropEmptyMark(requestId);
+    return res.meta?.changes ? before : null;
+  }
+
+  async setJobberArchived(requestId: string, archived: boolean): Promise<void> {
+    await this.db.prepare('UPDATE lead_marks SET jobber_archived = ? WHERE jobber_request_id = ?').bind(archived ? 1 : 0, requestId).run();
+  }
+
+  /** After a check-back on a postponed lead, the next one is due three months on (the handbook's postponed cadence). */
+  async pushCheckBack(requestId: string, now: number = Date.now()): Promise<string | null> {
+    const next = addMonths(chicagoDate(now), POSTPONE_MONTHS);
+    const res = await this.db
+      .prepare("UPDATE lead_marks SET check_back_on = ? WHERE jobber_request_id = ? AND closed_reason = 'postponed'")
+      .bind(next, requestId)
+      .run();
+    return res.meta?.changes ? next : null;
+  }
+}
+
+// ── Closure helpers ──────────────────────────────────────────
+
+export const CLOSE_REASONS = {
+  went_elsewhere: 'Went with someone else',
+  too_small: 'Too small or not our work',
+  no_response: 'No response',
+  postponed: 'Postponed',
+  other: 'Other',
+} as const;
+export type CloseReason = keyof typeof CLOSE_REASONS;
+/** The handbook: a postponed lead gets a follow-up every 3 months. */
+export const POSTPONE_MONTHS = 3;
+
+export interface LeadClosure {
+  reason: CloseReason;
+  label: string;
+  note: string | null;
+  /** Postponed only: the day the lead comes back to Do now. */
+  checkBackOn: string | null;
+  closedAt: string;
+  jobberArchived: boolean;
+}
+
+type ClosureRow = { closed_reason: CloseReason; closed_note: string | null; check_back_on: string | null; closed_at: string | null; jobber_archived: number | null };
+
+function toClosure(row: ClosureRow): LeadClosure {
+  return {
+    reason: row.closed_reason,
+    label: CLOSE_REASONS[row.closed_reason] ?? 'Closed',
+    note: row.closed_note,
+    checkBackOn: row.check_back_on,
+    closedAt: row.closed_at ?? '',
+    jobberArchived: row.jobber_archived === 1,
+  };
+}
+
+/** YYYY-MM-DD plus n calendar months, clamped to the month's last day (Nov 30 + 3 → Feb 28). */
+export function addMonths(date: string, n: number): string {
+  const [y, m, d] = date.split('-').map(Number);
+  const target = new Date(Date.UTC(y, m - 1 + n, 1));
+  const last = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+  target.setUTCDate(Math.min(d, last));
+  return target.toISOString().slice(0, 10);
+}
+
+/** Checks a close request: a known reason; Postponed gets a future check-back date (default 3 months); Other needs a note. */
+export function validateClose(input: unknown, now: number): { reason: CloseReason; note: string | null; checkBackOn: string | null } {
+  const raw = objectInput(input);
+  for (const key of Object.keys(raw)) {
+    if (!['reason', 'note', 'checkBackOn'].includes(key)) throw new LeadContactError(`Unknown field: ${key}`);
+  }
+  if (typeof raw.reason !== 'string' || !(raw.reason in CLOSE_REASONS)) {
+    throw new LeadContactError(`reason must be one of ${Object.keys(CLOSE_REASONS).join(', ')}.`);
+  }
+  const reason = raw.reason as CloseReason;
+  let note: string | null = null;
+  if (raw.note !== undefined && raw.note !== null && raw.note !== '') {
+    if (typeof raw.note !== 'string') throw new LeadContactError('note must be text.');
+    note = raw.note.replace(/\s+/g, ' ').trim() || null;
+    if (note && note.length > 200) throw new LeadContactError('note must be at most 200 characters.');
+    if (note && CONTACT_RE.test(note)) throw new LeadContactError('note looks like it contains a phone number or email. Keep contact details in Jobber.');
+  }
+  if (reason === 'other' && !note) throw new LeadContactError('Add a short note saying why the lead is closed.');
+  const today = chicagoDate(now);
+  let checkBackOn: string | null = null;
+  if (reason === 'postponed') {
+    if (raw.checkBackOn === undefined || raw.checkBackOn === null || raw.checkBackOn === '') {
+      checkBackOn = addMonths(today, POSTPONE_MONTHS);
+    } else {
+      checkBackOn = validateNextContactDate(raw.checkBackOn);
+      if (!checkBackOn || checkBackOn <= today) throw new LeadContactError('The check-back date must be after today.');
+    }
+  } else if (raw.checkBackOn !== undefined && raw.checkBackOn !== null && raw.checkBackOn !== '') {
+    throw new LeadContactError('Only a postponed lead has a check-back date.');
+  }
+  return { reason, note, checkBackOn };
 }
