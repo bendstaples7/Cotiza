@@ -195,6 +195,7 @@ export default function RequestQueuePage() {
         setJobberQuoteBadges({});
       }
     } catch (err) {
+      setJobberStatus(null);
       setError((err as ErrorResponse).message ?? 'Failed to load request queue.');
     } finally {
       if (!silent) setLoading(false);
@@ -443,10 +444,18 @@ export default function RequestQueuePage() {
         </div>
       )}
 
-      {requests.length === 0 ? (
-        <div style={emptyStyle}>
-          <p style={{ margin: 0, color: '#888' }}>No pending requests in the queue.</p>
+      {jobberStatus?.status === 'live' && !jobberStatus.complete && (
+        <div role="status" style={alertStyle}>
+          Only the newest Jobber requests were checked, so some older open leads from the last {jobberStatus.days} days may be missing.
         </div>
+      )}
+
+      {requests.length === 0 ? (
+        error || jobberStatus?.status === 'unavailable' ? null : (
+          <div style={emptyStyle}>
+            <p style={{ margin: 0, color: '#888' }}>No pending requests in the queue.</p>
+          </div>
+        )
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
           {requests.map((req) => {
