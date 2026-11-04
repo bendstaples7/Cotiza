@@ -43,10 +43,10 @@ function contextServices(env: Bindings) {
 
 type QuoteList = { jobberQuotes?: { outcome?: string; items?: Array<{ status?: { availability?: string; value?: string } }>; page?: { hasNextPage?: boolean } } };
 
-/** The request's quote statuses, or undefined when they are not fully known (failed read, more pages). */
-function knownQuotes(quotes: unknown): Array<{ status: string | null }> | undefined {
-  const list = (quotes as QuoteList).jobberQuotes;
-  if (!list || list.outcome !== 'ok' || list.page?.hasNextPage) return undefined;
+/** The request's quote statuses, or 'unknown' when they are not fully known (failed read, more pages). */
+function knownQuotes(quotes: unknown): Array<{ status: string | null }> | 'unknown' {
+  const list = (quotes as QuoteList | null)?.jobberQuotes;
+  if (!list || list.outcome !== 'ok' || list.page?.hasNextPage) return 'unknown';
   return (list.items ?? []).map((q) => ({ status: q.status?.availability === 'present' ? q.status.value ?? null : null }));
 }
 
@@ -69,11 +69,15 @@ app.get('/contact-status', async (c) => {
     while (next < valid.length) {
       const requestId = valid[next++];
       try {
-        const request = await read.readRequest(userId, { requestId }) as unknown as { outcome?: string; request?: RequestDetail };
+        const [request, quotes, items] = await Promise.all([
+          read.readRequest(userId, { requestId }) as unknown as Promise<{ outcome?: string; request?: RequestDetail }>,
+          // Quote states move a lead on (finish a draft, follow up on a sent one); unknown when the read fails.
+          read.listRequestQuotes(userId, { requestId }).catch(() => null),
+          info.list(requestId),
+        ]);
         // One set of services per lead: each tracks its own failed-read flag.
         const { email, phone } = contextServices(c.env);
-        const items = await info.list(requestId);
-        const { status, workflow } = await gatherLeadWorkflow({ requestId, detail: request.request, requestFailed: request.outcome !== 'ok', contacts, phone, email, now, items });
+        const { status, workflow } = await gatherLeadWorkflow({ requestId, detail: request.request, requestFailed: request.outcome !== 'ok', contacts, phone, email, now, items, quotes: knownQuotes(quotes) });
         statuses[requestId] = { ...status, workflow };
       } catch (err) {
         console.warn('[leads] contact status failed', sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 180));

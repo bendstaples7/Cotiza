@@ -1365,6 +1365,7 @@ export interface LeadBundle {
   phone: ContextBlock;
   infoNeeded: { items: LeadInfoItem[]; summary: LeadInfoSummary };
   contactStatus: LeadContactStatus;
+  workflow?: LeadWorkflow | null;
   loggedContacts: LoggedLeadContact[];
   outreachSteps: Array<{ step: string; contactedAt: string }>;
 }
@@ -1387,6 +1388,26 @@ export interface LeadContactStatus {
   unavailable: LeadContactSource[];
   notConnected: LeadContactSource[];
   recent: LeadContactEvent[];
+  /** What to do next (handbook cadence). null when it can't be worked out (e.g. quotes unreadable). */
+  workflow?: LeadWorkflow | null;
+}
+
+export type LeadBucket = 'do_now' | 'waiting' | 'review';
+export type LeadActionKind = 'intro_text' | 'reply' | 'ask_info' | 'quote_update' | 'draft_quote' | 'quote_follow_up' | 'follow_up' | 'review' | 'none';
+export type LeadProgress = 'lead_in' | 'getting_info' | 'ready_to_quote' | 'quote_drafted' | 'quote_sent';
+
+/** A lead's place in the handbook follow-up cadence and the one next action (worker: lead-workflow.ts). */
+export interface LeadWorkflow {
+  bucket: LeadBucket;
+  step: 1 | 2 | 3 | 4 | 5 | 'replied';
+  stage: string;
+  next: { on: string; source: 'set' | 'suggested'; overdue: boolean; dueToday: boolean; daysOverdue: number };
+  action: { kind: LeadActionKind; label: string; why: string; step: string; channel: 'text' | 'call' | 'email' | 'other' };
+  progress: LeadProgress;
+  ageDays: number | null;
+  likelySpam: boolean;
+  notALead: boolean;
+  plan: Array<{ label: string; detail: string; state: 'done' | 'missed' | 'due' | 'upcoming' }>;
 }
 
 export interface LoggedLeadContact {
@@ -1424,6 +1445,16 @@ export async function setLeadNextContact(requestId: string, nextContactOn: strin
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ nextContactOn }),
+  });
+  return handleResponseWithToast(res);
+}
+
+/** Marks a lead as not a real lead (true), or clears the mark (false). */
+export async function setLeadNotALead(requestId: string, notALead: boolean): Promise<{ notALead: boolean }> {
+  const res = await fetch(API_BASE + '/api/leads/' + encodeURIComponent(requestId) + '/not-a-lead', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ notALead }),
   });
   return handleResponseWithToast(res);
 }

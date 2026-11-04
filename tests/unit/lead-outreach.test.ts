@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildOutreach, itemKind, mailtoLink, smsLink } from '../../client/src/leadOutreach';
+import { buildActionMessage, buildOutreach, itemKind, mailtoLink, smsLink } from '../../client/src/leadOutreach';
 import type { LeadInfoItem } from '../../client/src/api';
 
 let n = 0;
@@ -69,5 +69,38 @@ describe('links', () => {
     expect(mailtoLink('a@b.co', 'S', 'B')).toBe('mailto:a@b.co?subject=S&body=B');
     expect(mailtoLink('a@b.co?cc=evil@x.com', 'S', 'B')).toBeNull();
     expect(mailtoLink('a#1@b.co', 'S', 'B')).toBe('mailto:a%231@b.co?subject=S&body=B');
+  });
+});
+
+describe('buildActionMessage', () => {
+  const input = { clientName: 'Chris Trengove', title: 'Vinyl Flooring', items: [item('Can you send the room measurements?')] };
+
+  it('sends the handbook "quote in progress" update', () => {
+    const m = buildActionMessage('quote_update', input)!;
+    expect(m.text).toContain('Hi Chris, this is Chicago Reno following up on your Vinyl Flooring request.');
+    expect(m.text).toContain('finishing touches on your quote');
+    expect(m.text).not.toMatch(/AI|Claude/);
+    expect(m.emailBody).toContain('Thank you for your patience!');
+  });
+
+  it('thanks them when replying, and asks what is still open', () => {
+    const m = buildActionMessage('reply', input)!;
+    expect(m.text).toMatch(/^Hi Chris, thanks for getting back to us about your Vinyl Flooring request\./);
+    expect(m.text).toContain('room measurements');
+    expect(m.emailBody).toContain('Thanks for getting back to us about your Vinyl Flooring request.');
+  });
+
+  it('checks in, rather than introducing us again, when following up with no checklist', () => {
+    const m = buildActionMessage('follow_up', { clientName: 'Anne Brady', title: 'Basement', items: [] })!;
+    expect(m.text).toContain('following up on your Basement request');
+    expect(m.text).not.toContain("We're putting your quote together now");
+  });
+
+  it('uses the asks for intro and follow-up texts, and has no message for drafting or review', () => {
+    expect(buildActionMessage('intro_text', input)!.text).toBe(buildOutreach(input).text);
+    expect(buildActionMessage('draft_quote', input)).toBeNull();
+    expect(buildActionMessage('review', input)).toBeNull();
+    expect(buildActionMessage('none', input)).toBeNull();
+    expect(buildActionMessage('quote_follow_up', input)!.text).toContain('make sure you received our quote for your Vinyl Flooring');
   });
 });

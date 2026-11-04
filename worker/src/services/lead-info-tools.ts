@@ -110,7 +110,7 @@ async function leadNextSteps(db: D1Database, jobber: JobberReadClient, userId: s
           requestId, detail: request.request, requestFailed: false, contacts,
           phone: NO_CONTEXT, email: NO_CONTEXT, now, items: itemsById[requestId] ?? [],
         });
-        out[requestId] = publicNextStep(workflow);
+        out[requestId] = workflow ? publicNextStep(workflow) : null;
       } catch (err) {
         console.warn(`[lead-info] next step failed: ${sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 180)}`);
         out[requestId] = null;
