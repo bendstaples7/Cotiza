@@ -51,7 +51,7 @@ export const SENT_QUOTE_STATUSES = new Set(['sent', 'awaiting_response', 'change
 const SENT = SENT_QUOTE_STATUSES;
 const APPROVED_TEXT = /\b(approved|good to go|looks good|route to customer|ready to send|send (?:it )?to (?:the )?customer|recheck passed|passed)\b/i;
 // "not approved", "hasn't passed", "not ready to send": never read as an approval.
-const NEGATED_TEXT = /\b(?:not|n['\u2019]t|never|no longer)\s+(?:yet\s+)?(?:been\s+)?(?:approved|passed|good to go|ready)\b/i;
+const NEGATED_TEXT = /(?:\bnot|n['\u2019]t|\bnever|\bno longer)\s+(?:yet\s+)?(?:been\s+)?(?:approved|passed|good to go|ready)\b/i;
 const CHANGES_TEXT = /\b(changes? requested|request(?:ed)? changes|edits? (?:needed|listed|sent|to make)|needs? (?:edits|changes|fixes)|team to (?:apply|fix|update)|send back|revise)\b/i;
 
 /** Ben's decision in one ledger record. */

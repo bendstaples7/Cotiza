@@ -321,7 +321,7 @@ function NextStepPanel({ lead, workflow, onChanged, panelRef }: { lead: LeadBund
   const canSendToBen = workflow.quoteStage?.kind === 'drafting' || workflow.quoteStage?.kind === 'changes';
   // Stays true after a send until the refreshed workflow replaces this panel's action, so it can't be sent twice.
   const [sentToBen, setSentToBen] = useState(false);
-  useEffect(() => { setSentToBen(false); }, [action.kind, workflow.quoteStage?.kind]);
+  useEffect(() => { setSentToBen(false); }, [action.kind, workflow.quoteStage?.kind, workflow.quoteStage?.quote?.id]);
   const sendToBen = async () => {
     if (!stageQuote || !canSendToBen || sentToBen) return;
     setBusy(true);
