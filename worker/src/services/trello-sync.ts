@@ -245,8 +245,8 @@ export interface CloseInTrelloInput {
 }
 
 /**
- * Moves the request's cards to Bid Lost (or comments, when postponed). Safe to repeat: a card Cotiza
- * already moved, or one already in Bid Lost, is left alone and gets no second comment.
+ * Moves the request's cards to Bid Lost (or comments, when postponed). Safe to repeat: a card
+ * already in Bid Lost is left alone and gets no second comment.
  */
 export async function closeInTrello(input: CloseInTrelloInput): Promise<TrelloResult> {
   const { client, board, store, requestId, who, comment, postponed } = input;
@@ -278,9 +278,10 @@ export async function closeInTrello(input: CloseInTrelloInput): Promise<TrelloRe
     return summarize(done, 'commented');
   }
 
-  const alreadyMoved = new Set((await store.active(requestId).catch(() => [])).map((m) => m.cardId));
+  // Trello's own state decides what to move: a card outside Bid Lost is moved even if an older
+  // record says Cotiza moved it once (it was moved back by hand, or its restore wasn't recorded).
   const bidLost = snapshot.bidLost!;
-  const toMove = match.cards.filter((c) => c.idList !== bidLost.id && !alreadyMoved.has(c.id));
+  const toMove = match.cards.filter((c) => c.idList !== bidLost.id);
   if (toMove.length === 0) {
     return result('already', match.cards.map((c) => ({ name: c.name, url: c.url, done: true })));
   }
@@ -288,10 +289,12 @@ export async function closeInTrello(input: CloseInTrelloInput): Promise<TrelloRe
     try {
       await client.moveCard(card.id, bidLost.id);
       // Recorded right after the move so a reopen can move it back, even if the comment fails.
-      await store.record(requestId, { cardId: card.id, cardUrl: card.url, cardName: card.name, fromListId: card.idList, toListId: bidLost.id }, now)
-        .catch((err) => logFailure('record move', err));
+      const recorded = await store.record(requestId, { cardId: card.id, cardUrl: card.url, cardName: card.name, fromListId: card.idList, toListId: bidLost.id }, now)
+        .then(() => true, (err) => { logFailure('record move', err); return false; });
       await client.comment(card.id, comment).catch((err) => logFailure('comment', err));
-      done.push({ name: card.name, url: card.url, done: true });
+      done.push(recorded
+        ? { name: card.name, url: card.url, done: true }
+        : { name: card.name, url: card.url, done: true, error: 'moved, but Cotiza couldn\u2019t record it, so reopening won\u2019t move it back' });
     } catch (err) {
       logFailure('move', err);
       done.push({ name: card.name, url: card.url, done: false, error: reason(err) });
@@ -332,9 +335,12 @@ export async function reopenInTrello(input: ReopenInTrelloInput): Promise<Trello
   for (const move of moves) {
     try {
       await client.moveCard(move.cardId, move.fromListId);
-      await store.restored(requestId, move.cardId, now).catch((err) => logFailure('record restore', err));
+      const recorded = await store.restored(requestId, move.cardId, now)
+        .then(() => true, (err) => { logFailure('record restore', err); return false; });
       await client.comment(move.cardId, comment).catch((err) => logFailure('comment', err));
-      done.push({ name: move.cardName, url: move.cardUrl, done: true });
+      done.push(recorded
+        ? { name: move.cardName, url: move.cardUrl, done: true }
+        : { name: move.cardName, url: move.cardUrl, done: true, error: 'moved back, but Cotiza couldn\u2019t record it' });
     } catch (err) {
       logFailure('restore', err);
       done.push({ name: move.cardName, url: move.cardUrl, done: false, error: reason(err) });
@@ -350,6 +356,9 @@ function summarize(cards: TrelloCardResult[], ok: 'moved' | 'commented'): Trello
   if (good === cards.length) {
     const r = result(ok, cards);
     if (ok === 'moved' && cards.length > 1) r.message = `Moved ${cards.length} Trello cards to Bid Lost.`;
+    // Done in Trello but not recorded in Cotiza: say so rather than reporting a clean success.
+    const unrecorded = cards.filter((c) => c.error);
+    if (unrecorded.length > 0) r.message += ` Note: ${unrecorded.map((c) => c.error).join('; ')}.`;
     return r;
   }
   return good === 0 ? result('failed', cards, cards.find((c) => c.error)?.error) : result('partial', cards);

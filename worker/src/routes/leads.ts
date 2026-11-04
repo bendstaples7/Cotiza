@@ -148,7 +148,9 @@ async function trelloIdentity(read: OpsAssistantRead, userId: string, requestId:
 async function otherOpenNames(jobber: Parameters<typeof loadOpenLeads>[0] | null, requestId: string): Promise<Set<string> | null> {
   if (!jobber) return null;
   try {
-    const { open } = await loadOpenLeads(jobber, OPEN_LEAD_DAYS, Date.now());
+    const { open, complete } = await loadOpenLeads(jobber, OPEN_LEAD_DAYS, Date.now());
+    // A partial scan could miss a lead with the same name: treat it as unknown, so name-only matches aren't moved.
+    if (!complete) return null;
     return new Set(open.filter((n) => n.id !== requestId).map((n) => normalizeName(leadClientName(n))).filter(Boolean));
   } catch {
     return null;
@@ -161,7 +163,11 @@ async function syncTrelloClose(env: Bindings, userId: string, requestId: string,
   if (!client) return { status: 'not_configured', message: 'Trello is not connected to Cotiza. Also move the Trello card.', cards: [] };
   const { jobberIntegration } = await openJobberIntegration(env.DB, env).catch(() => ({ jobberIntegration: null }));
   const read = new OpsAssistantRead(jobberIntegration, env.DB, env.IMAGES);
-  const [who, others, user] = await Promise.all([trelloIdentity(read, userId, requestId), otherOpenNames(jobberIntegration, requestId), userName(env.DB, userId)]);
+  const [who, others, user] = await Promise.all([
+    trelloIdentity(read, userId, requestId),
+    otherOpenNames(jobberIntegration as unknown as Parameters<typeof loadOpenLeads>[0] | null, requestId),
+    userName(env.DB, userId),
+  ]);
   const postponed = closure.reason === 'postponed';
   const result = await closeInTrello({
     client, board: trelloBoardId(env), store: new D1TrelloMoveStore(env.DB), requestId, who, otherOpenNames: others,
@@ -532,14 +538,24 @@ app.post('/:requestId/reopen', async (c) => {
   return c.json({ reopened: Boolean(cleared), jobberNote, jobberArchive, trello, trelloReminder: Boolean(cleared) && trelloNeedsHand(trello) });
 });
 
-/** Retry the Trello side of a close (safe to repeat: cards already moved are left alone). */
+/**
+ * Retry the Trello side: on a closed lead, move its cards to Bid Lost (safe to repeat); on a reopened
+ * lead whose cards Cotiza moved are not back yet, move them back.
+ */
 app.post('/:requestId/trello-sync', async (c) => {
   let requestId: string;
   try { requestId = requireRequestId(c.req.param('requestId')); } catch (err) { return c.json(badRequest(err), 400); }
   const userId = c.get('user').id;
   const closure = await new LeadContactService(c.env.DB).closure(requestId);
-  if (!closure) return c.json({ error: 'This lead is open, so there is nothing to move in Trello.' }, 400);
-  const trello = await syncTrelloClose(c.env, userId, requestId, closure);
+  if (closure) {
+    const trello = await syncTrelloClose(c.env, userId, requestId, closure);
+    return c.json({ trello, trelloReminder: trelloNeedsHand(trello) });
+  }
+  const store = new D1TrelloMoveStore(c.env.DB);
+  const pending = await store.active(requestId).catch(() => null);
+  if (!pending || pending.length === 0) return c.json({ error: 'This lead is open and has no Trello card to move back.' }, 400);
+  const trello = await reopenInTrello({ client: trelloClient(c.env), store, requestId, comment: reopenComment(await userName(c.env.DB, userId)) });
+  await logTrello(c.env, userId, 'trello_reopen', trello);
   return c.json({ trello, trelloReminder: trelloNeedsHand(trello) });
 });
 

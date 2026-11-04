@@ -110,6 +110,24 @@ describe('closing a lead in Trello', () => {
     expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(2);
   });
 
+  it('says so when a move could not be recorded (reopen would not move it back)', async () => {
+    const { client } = fakeTrello([auto('a', 'Bryan Waters', '35754222')]);
+    const store = { ...memoryStore(), record: async () => { throw new Error('D1 down'); } };
+    const r = await closeInTrello({ client, board: 'B', store, requestId: 'R', who: BRYAN, otherOpenNames: new Set(), comment: 'x', postponed: false });
+    expect(r.status).toBe('moved');
+    expect(r.message).toContain('couldn’t record it');
+  });
+
+  it('moves a card back to Bid Lost even if an old record says Cotiza moved it once', async () => {
+    const cards = [auto('a', 'Bryan Waters', '35754222')];
+    const { client } = fakeTrello(cards);
+    const store = memoryStore();
+    await store.record('R', { cardId: 'a', cardUrl: 'u', cardName: 'n', fromListId: 'L_CALL', toListId: 'L_LOST' }, 0);
+    const r = await closeInTrello({ client, board: 'B', store, requestId: 'R', who: BRYAN, otherOpenNames: new Set(), comment: 'x', postponed: false });
+    expect(r.status).toBe('moved');
+    expect(cards[0].idList).toBe('L_LOST');
+  });
+
   it('leaves a card already in Bid Lost alone', async () => {
     const { client, calls } = fakeTrello([auto('a', 'Andrew Chris', '34977047', 'L_LOST')]);
     const r = await closeInTrello({ client, board: 'B', store: memoryStore(), requestId: 'R', who: ANDREW, otherOpenNames: new Set(), comment: 'x', postponed: false });

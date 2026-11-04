@@ -980,7 +980,8 @@ function TrelloLine({ lead, result, reopening, postponed }: { lead: LeadBundle; 
     );
   }
   const warn = shown.status === 'failed' || shown.status === 'partial' || shown.status === 'ambiguous' || shown.status === 'not_configured';
-  const canRetry = configured && !reopening && (shown.status === 'failed' || shown.status === 'partial');
+  // A failed close or reopen can be retried: the server moves the cards to Bid Lost, or back.
+  const canRetry = configured && (shown.status === 'failed' || shown.status === 'partial');
   return (
     <span style={warn ? { color: '#92400e', fontWeight: 600 } : undefined} role={warn ? 'alert' : undefined}>
       {shown.message}
