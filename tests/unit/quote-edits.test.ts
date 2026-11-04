@@ -108,7 +108,7 @@ describe('parseApplyArgs', () => {
     expect(() => parseApplyArgs({ ...base, lines: [{ ...A, quantity: 0 }] })).toThrow('quantity');
     expect(() => parseApplyArgs({ ...base, lines: [{ ...A, unitPrice: -1 }] })).toThrow('unitPrice');
     expect(() => parseApplyArgs({ ...base, lines: [A, A] })).toThrow('twice');
-    expect(parseApplyArgs({ ...base, lines: [{ name: ' New ', quantity: 2, unitPrice: 0 }] }).lines[0]).toEqual({ name: 'New', description: '', quantity: 2, unitPrice: 0 });
+    expect(parseApplyArgs({ ...base, lines: [{ name: ' New ', quantity: 2, unitPrice: 0 }] }).lines[0]).toEqual({ name: 'New', quantity: 2, unitPrice: 0 });
   });
 });
 
@@ -155,6 +155,26 @@ describe('applyQuoteEdits', () => {
     const result = await applyQuoteEdits(jobber, { quoteId: 'Z2lkOi8vSm9iYmVyL1F1b3RlLzE=', quoteVersion: await quoteVersion('draft', [A, B]), lines: [B, A] });
     expect(result).toMatchObject({ outcome: 'failed', verified: false });
     expect(jobber.lines().map((l) => l.id)).toEqual(['lineA', 'lineB']);
+  });
+
+  it('keeps an existing description when the line omits it', async () => {
+    const described = { ...A, description: 'Remove ceiling' };
+    const jobber = fakeJobber([described, B]);
+    const { description: _omit, ...noDescription } = described;
+    const result = await applyQuoteEdits(jobber, { quoteId: 'Z2lkOi8vSm9iYmVyL1F1b3RlLzE=', quoteVersion: await quoteVersion('draft', [described, B]), lines: [{ ...noDescription, quantity: 9 }, B] });
+    expect(result).toMatchObject({ outcome: 'ok', verified: true, changed: true });
+    expect(jobber.lines()[0]).toMatchObject({ description: 'Remove ceiling', quantity: 9 });
+  });
+
+  it('reports changed from the reread when a mutation errors after taking effect', async () => {
+    const jobber = fakeJobber([A, B]);
+    const base = jobber.graphqlRequest.getMockImplementation()!;
+    jobber.graphqlRequest.mockImplementation(async (query: string, vars?: Record<string, unknown>) => {
+      const out = await base(query, vars);
+      return query.includes('quoteEditLineItems(') ? { quoteEditLineItems: { userErrors: [{ message: 'timeout' }] } } : out;
+    });
+    const result = await applyQuoteEdits(jobber, { quoteId: 'Z2lkOi8vSm9iYmVyL1F1b3RlLzE=', quoteVersion: await quoteVersion('draft', [A, B]), lines: [{ ...A, quantity: 9 }, B] });
+    expect(result).toMatchObject({ outcome: 'failed', changed: true });
   });
 
   it('changes nothing when the quote already matches', async () => {
@@ -211,6 +231,16 @@ describe('quote:write scope', () => {
     const call = readMcpJsonBody(await (await handleMcpPost(mcp('tools/call', { name: 'apply_quote_edits', arguments: args }), d)).text()) as { result: { content: Array<{ text: string }>; isError: boolean } };
     expect(call.result.isError).toBe(false);
     expect(JSON.parse(call.result.content[0].text)).toMatchObject({ outcome: 'ok', verified: true });
+  });
+
+  it('marks refusals as errors and logs which quote a write touched', async () => {
+    const jobber = fakeJobber([A, B], { status: 'awaiting_response' });
+    const d = deps(principal('ops:read quote:write'), jobber);
+    const args = { quoteId: 'Z2lkOi8vSm9iYmVyL1F1b3RlLzE=', quoteVersion: await quoteVersion('awaiting_response', [A, B]), lines: [A] };
+    const call = readMcpJsonBody(await (await handleMcpPost(mcp('tools/call', { name: 'apply_quote_edits', arguments: args }), d)).text()) as { result: { isError: boolean } };
+    expect(call.result.isError).toBe(true);
+    const logged = JSON.stringify((d.db as unknown as { prepare: { mock: { calls: unknown[] } } }).prepare.mock.calls);
+    expect(logged).toContain('quote=715');
   });
 
   it('grants quote:write only when the office account ticks it', async () => {

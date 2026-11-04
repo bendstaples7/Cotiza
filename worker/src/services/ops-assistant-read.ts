@@ -544,6 +544,7 @@ export class OpsAssistantRead {
         jobberWebUri: present(quote.jobberWebUri as string | null),
         createdAt: present(quote.createdAt as string | null),
         lineItems,
+        lineItemsTruncated: rawLines?.pageInfo?.hasNextPage === true,
         version,
         paymentTerms,
       },

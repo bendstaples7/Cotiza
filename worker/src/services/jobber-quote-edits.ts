@@ -40,7 +40,8 @@ export interface QuoteLine {
 export interface DesiredLine {
   id?: string;
   name: string;
-  description: string;
+  /** Omitted on an existing line = keep its current description; omitted on a new line = none. */
+  description?: string;
   quantity: number;
   unitPrice: number;
 }
@@ -104,20 +105,20 @@ export function parseApplyArgs(raw: unknown): { quoteId: string; quoteVersion: s
     const name = text(line.name);
     if (!name || name.length > 255) throw new QuoteEditArgsError(`lines[${index}].name must be 1 to 255 characters.`);
     if (line.description !== undefined && typeof line.description !== 'string') throw new QuoteEditArgsError(`lines[${index}].description must be text.`);
-    const description = text(line.description);
-    if (description.length > 10000) throw new QuoteEditArgsError(`lines[${index}].description is too long.`);
+    const description = line.description === undefined ? undefined : text(line.description);
+    if (description && description.length > 10000) throw new QuoteEditArgsError(`lines[${index}].description is too long.`);
     const quantity = num(line.quantity);
     const unitPrice = num(line.unitPrice);
     if (!(quantity > 0) || quantity > 100000) throw new QuoteEditArgsError(`lines[${index}].quantity must be a positive number.`);
     if (!(unitPrice >= 0) || unitPrice > 1000000) throw new QuoteEditArgsError(`lines[${index}].unitPrice must be zero or more.`);
-    return { ...(line.id ? { id: line.id as string } : {}), name, description, quantity, unitPrice };
+    return { ...(line.id ? { id: line.id as string } : {}), name, ...(description === undefined ? {} : { description }), quantity, unitPrice };
   });
   return { quoteId: args.quoteId.trim(), quoteVersion: args.quoteVersion, lines };
 }
 
 export interface EditPlan {
   updates: QuoteLine[];
-  creates: DesiredLine[];
+  creates: Array<DesiredLine & { description: string }>;
   deletes: string[];
   /** Index in the desired list from which lines are recreated to get the order right. */
   recreateFrom: number;
@@ -128,11 +129,21 @@ export interface EditPlan {
  * current order; from the first new or out-of-order line on, lines are recreated (Jobber can only
  * append) and the originals deleted.
  */
-export function planEdits(current: QuoteLine[], desired: DesiredLine[]): EditPlan {
+/** Fill omitted descriptions: an existing line keeps its current one, a new line gets none. */
+export function resolveDescriptions(current: QuoteLine[], desired: DesiredLine[]): Array<DesiredLine & { description: string }> {
+  const byId = new Map(current.map((l) => [l.id, l]));
+  return desired.map((line) => ({
+    ...line,
+    description: line.description ?? (line.id ? byId.get(line.id)?.description ?? '' : ''),
+  }));
+}
+
+export function planEdits(current: QuoteLine[], requested: DesiredLine[]): EditPlan {
   const currentIds = new Set(current.map((l) => l.id));
-  for (const line of desired) {
+  for (const line of requested) {
     if (line.id && !currentIds.has(line.id)) throw new QuoteEditArgsError(`Line ${line.id} is not on this quote. Reread the quote.`);
   }
+  const desired = resolveDescriptions(current, requested);
   const desiredIds = new Set(desired.filter((l) => l.id).map((l) => l.id as string));
   const keptInCurrentOrder = current.filter((l) => desiredIds.has(l.id)).map((l) => l.id);
   let recreateFrom = desired.length;
@@ -257,7 +268,7 @@ async function loadQuoteLines(jobber: JobberReadClient, quoteId: string) {
   return data.quote ?? null;
 }
 
-function mismatches(after: QuoteLine[], desired: DesiredLine[]) {
+function mismatches(after: QuoteLine[], desired: Array<DesiredLine & { description: string }>) {
   const out: string[] = [];
   if (after.length !== desired.length) out.push(`Quote has ${after.length} lines; expected ${desired.length}.`);
   desired.forEach((want, i) => {
@@ -329,8 +340,12 @@ export async function applyQuoteEdits(jobber: JobberReadClient, rawArgs: unknown
 
   const after = await loadQuoteLines(jobber, args.quoteId).catch(() => null);
   const afterLines = normalizeLines(after?.lineItems?.nodes);
-  const problems = after ? mismatches(afterLines, args.lines) : ['The quote could not be reread after saving.'];
-  const changed = applied.updated + applied.created + applied.deleted > 0;
+  const wanted = resolveDescriptions(current, args.lines);
+  const problems = after ? mismatches(afterLines, wanted) : ['The quote could not be reread after saving.'];
+  const afterVersion = after ? await quoteVersion(after.quoteStatus, afterLines) : null;
+  // Judge "changed" from the reread, not from which calls returned cleanly: a mutation can
+  // take effect and still report an error. Unknown when the reread failed.
+  const changed: boolean | 'unknown' = afterVersion === null ? 'unknown' : afterVersion !== version;
   return {
     outcome: failure || problems.length ? 'failed' as const : 'ok' as const,
     changed,
@@ -341,8 +356,12 @@ export async function applyQuoteEdits(jobber: JobberReadClient, rawArgs: unknown
     ...(failure ? { failure } : {}),
     ...(problems.length ? { mismatches: problems } : {}),
     subtotal: after ? subtotal(afterLines) : null,
-    version: after ? await quoteVersion(after.quoteStatus, afterLines) : null,
-    ...(failure || problems.length ? { warning: changed ? 'Some changes were saved before the failure. Reread the quote before trying again.' : 'Nothing was changed.' } : {}),
+    version: afterVersion,
+    ...(failure || problems.length ? { warning: changed === false
+      ? 'Nothing was changed.'
+      : changed === 'unknown'
+        ? 'The quote could not be reread, so some changes may have been saved. Reread it before trying again.'
+        : 'Some changes were saved before the failure. Reread the quote before trying again.' } : {}),
   };
 }
 
@@ -368,7 +387,7 @@ export const QUOTE_WRITE_TOOLS = [
             properties: {
               id: { type: 'string', description: 'Existing line id; omit for a new line.' },
               name: { type: 'string' },
-              description: { type: 'string' },
+              description: { type: 'string', description: 'Omit on an existing line to keep its current description.' },
               quantity: { type: 'number' },
               unitPrice: { type: 'number' },
             },

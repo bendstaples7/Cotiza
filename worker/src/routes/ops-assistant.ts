@@ -123,6 +123,14 @@ function toolsFor(principal: AssistantPrincipal, canReadFinance: boolean) {
   return tools;
 }
 
+/** Which quote an apply_quote_edits call touched and how much, for the activity log. No line text. */
+function quoteWriteAudit(result: unknown): string {
+  const r = (result ?? {}) as { quoteNumber?: unknown; applied?: { updated?: number; created?: number; deleted?: number }; changed?: unknown; verified?: unknown };
+  const quote = typeof r.quoteNumber === 'string' ? r.quoteNumber.replace(/[^\w-]/g, '').slice(0, 20) : '?';
+  const a = r.applied ?? {};
+  return ` quote=${quote} updated=${a.updated ?? 0} created=${a.created ?? 0} deleted=${a.deleted ?? 0} changed=${String(r.changed ?? false)} verified=${String(r.verified ?? false)}`;
+}
+
 function forbidden(id: unknown, headers: HeadersInit, code: string, message: string): Response {
   return mcpEvent({
     jsonrpc: '2.0',
@@ -299,7 +307,7 @@ export async function handleMcpPost(request: Request, deps: {
         principal.userId,
         name,
         audited
-          ? `tool=${name} outcome=${outcome || 'ok'} token=${principal.tokenId}`
+          ? `tool=${name} outcome=${outcome || 'ok'} token=${principal.tokenId}${isQuoteWrite ? quoteWriteAudit(result) : ''}`
           : `tool=${name} outcome=${outcome || 'ok'}`,
         outcome === 'failed' ? 'error' : 'info',
       );
@@ -308,7 +316,8 @@ export async function handleMcpPost(request: Request, deps: {
         id,
         result: {
           content: photoToolContent(result),
-          isError: outcome === 'failed' || outcome === 'invalid_request',
+          isError: outcome === 'failed' || outcome === 'invalid_request'
+            || (isQuoteWrite && outcome !== 'ok'),
         },
       }, 200, headers);
     } catch (err) {
@@ -673,6 +682,10 @@ export function createOpsAssistantApp(directoryFor?: (db: D1Database) => Assista
     const label = (body.label || 'local exercise').slice(0, 80);
     const scope = normalizeScope(body.scope);
     if (!scope) return c.json({ error: 'invalid_scope' }, 400);
+    // Quote edits change Jobber: only the office account may hold them, as at the consent page.
+    if (hasScope(scope, QUOTE_WRITE_SCOPE) && !isPayoutReportUser(c.get('user').email)) {
+      return c.json({ error: 'forbidden_scope' }, 403);
+    }
     const issued = await directoryOf(c.env.DB).mintToken({
       userId: c.get('user').id,
       resource: mcpResource(c.req.url),
