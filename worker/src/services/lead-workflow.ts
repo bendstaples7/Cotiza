@@ -145,7 +145,7 @@ export function handbookCadence(events: ContactEvent[], now: number): Cadence {
 
 /** closed: the team closed the lead (a postponed one comes back to do_now on its check-back date). */
 export type LeadBucket = 'do_now' | 'waiting' | 'review' | 'closed';
-export type LeadActionKind = 'intro_text' | 'reply' | 'ask_info' | 'quote_update' | 'draft_quote' | 'ben_edits' | 'wait_review' | 'send_quote' | 'quote_follow_up' | 'follow_up' | 'check_back' | 'review' | 'none';
+export type LeadActionKind = 'intro_text' | 'reply' | 'ask_info' | 'quote_update' | 'draft_quote' | 'ben_edits' | 'wait_review' | 'send_quote' | 'quote_follow_up' | 'follow_up' | 'check_back' | 'review' | 'lost_in_trello' | 'none';
 /** quote_drafted is the Drafting step; ben_review and ready_to_send follow it before quote_sent. */
 export type LeadProgress = 'lead_in' | 'getting_info' | 'ready_to_quote' | 'quote_drafted' | 'ben_review' | 'ready_to_send' | 'quote_sent';
 export type PlanState = 'done' | 'missed' | 'due' | 'upcoming';
@@ -191,6 +191,8 @@ export interface LeadWorkflow {
   quoteStage: QuoteStage | null;
   /** The team closed this lead (reason, check-back date for a postponed one); null when open. */
   closed: LeadClosure | null;
+  /** The lead's Trello card is in Bid Lost while the lead is still open here: it sits in Review. */
+  lostInTrello: boolean;
 }
 
 export interface WorkflowInput {
@@ -205,6 +207,8 @@ export interface WorkflowInput {
   quoteStage?: QuoteStage | null;
   /** The team closed this lead; a postponed one returns as "Check back in" on its date. */
   closed?: LeadClosure | null;
+  /** Every Trello card that links this request is in Bid Lost (trello-sync.ts lostInTrello). */
+  lostInTrello?: boolean;
   now: number;
 }
 
@@ -265,7 +269,15 @@ function planRows(c: Cadence, next: LeadWorkflow['next'], today: string): PlanRo
 }
 
 export function computeLeadWorkflow(input: WorkflowInput): LeadWorkflow {
-  return applyClosure(computeOpenWorkflow(input), input.closed, input.now);
+  const w = applyClosure(computeOpenWorkflow(input), input.closed, input.now);
+  // Lost in Trello but still open here: never closed automatically, the team confirms it in Review.
+  if (input.lostInTrello && !w.closed && !w.notALead) {
+    return {
+      ...w, lostInTrello: true, bucket: 'review', secondary: null,
+      action: { kind: 'lost_in_trello', label: 'Close in Cotiza too', why: 'Lost in Trello: the card is in Bid Lost, but the lead is still open here and in Jobber.', step: 'none', channel: 'other' },
+    };
+  }
+  return w;
 }
 
 function computeOpenWorkflow(input: WorkflowInput): LeadWorkflow {
@@ -387,6 +399,7 @@ function computeOpenWorkflow(input: WorkflowInput): LeadWorkflow {
     plan: planRows(cadence, next, today),
     quoteStage: stage ?? (quoteSent ? input.quoteStage ?? null : null),
     closed: input.closed ?? null,
+    lostInTrello: false,
   };
 }
 

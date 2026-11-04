@@ -152,6 +152,8 @@ export async function gatherLeadWorkflow(input: Parameters<typeof gatherContactS
   quotes?: Array<{ status: string | null }> | 'unknown';
   /** Where the drafted quote is (with Ben, ready to send…), from lead-quote-stage.ts. */
   quoteStage?: QuoteStage | null;
+  /** Every Trello card linking this request is in Bid Lost. */
+  lostInTrello?: boolean;
 }): Promise<{ status: ContactStatus; logged: LoggedContact[]; workflow: LeadWorkflow | null }> {
   const [gathered, notALead, closed] = await Promise.all([
     gatherContactStatus(input),
@@ -169,6 +171,7 @@ export async function gatherLeadWorkflow(input: Parameters<typeof gatherContactS
     quotes: input.quotes,
     quoteStage: input.quoteStage ?? null,
     closed,
+    lostInTrello: input.lostInTrello ?? false,
     now: input.now,
   });
   return { status: gathered.status, logged: gathered.logged, workflow };

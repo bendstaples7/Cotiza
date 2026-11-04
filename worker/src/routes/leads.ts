@@ -38,6 +38,11 @@ import { formatJobberNote, JobberNoteWriter, NOTE_ID_RE, noteKey, requestKeyPart
 import { ActivityLogService } from '../services/activity-log-service.js';
 import { gatherQuoteStage, requestReview, type QuoteRef, type QuoteStage } from '../services/lead-quote-stage.js';
 import { setRequestArchived } from '../services/jobber-request-archive.js';
+import {
+  boardId as trelloBoardId, boardSnapshot, closeComment, closeInTrello, D1TrelloMoveStore, lostInTrello as cardsLostInTrello,
+  normalizeName, postponeComment, reopenComment, reopenInTrello, trelloClient, type BoardSnapshot, type TrelloResult,
+} from '../services/trello-sync.js';
+import { leadClientName, loadOpenLeads, OPEN_LEAD_DAYS } from '../services/open-leads.js';
 
 type Env = { Bindings: Bindings; Variables: { user: { id: string; email: string } } };
 const app = new Hono<Env>();
@@ -113,6 +118,74 @@ async function quoteStageFor(db: D1Database, requestId: string, quotes: QuoteRef
   return gatherQuoteStage(db, requestId, quotes);
 }
 
+// ── Trello ───────────────────────────────────────────────────────
+
+/** The board's cards and lists, or null when Trello isn't connected or can't be read (never fails the page). */
+async function trelloSnapshot(env: Bindings): Promise<BoardSnapshot | null> {
+  const client = trelloClient(env);
+  if (!client) return null;
+  try {
+    return await boardSnapshot(client, trelloBoardId(env));
+  } catch (err) {
+    console.warn('[leads] trello board read failed', sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 180));
+    return null;
+  }
+}
+
+type RequestFields = { jobberWebUri?: Avail; clientName?: Avail; contactName?: Avail } | null | undefined;
+
+/** Who the request is for, to find its Trello cards: the Jobber link first, then the client's name. */
+async function trelloIdentity(read: OpsAssistantRead, userId: string, requestId: string) {
+  const res = await read.readRequest(userId, { requestId }).catch(() => null) as { outcome?: string; request?: RequestFields } | null;
+  const r = res?.outcome === 'ok' ? res.request : null;
+  return {
+    jobberWebUri: avail(r?.jobberWebUri),
+    names: [avail(r?.clientName), avail(r?.contactName)].filter((n): n is string => Boolean(n)),
+  };
+}
+
+/** Client names of the other open leads, so a name-only Trello match that could be someone else is skipped. Null when unknown. */
+async function otherOpenNames(jobber: Parameters<typeof loadOpenLeads>[0] | null, requestId: string): Promise<Set<string> | null> {
+  if (!jobber) return null;
+  try {
+    const { open } = await loadOpenLeads(jobber, OPEN_LEAD_DAYS, Date.now());
+    return new Set(open.filter((n) => n.id !== requestId).map((n) => normalizeName(leadClientName(n))).filter(Boolean));
+  } catch {
+    return null;
+  }
+}
+
+/** Moves the lead's Trello cards for a close (or comments, for a postponed one). Never throws. */
+async function syncTrelloClose(env: Bindings, userId: string, requestId: string, closure: { reason: string; label: string; note: string | null; checkBackOn: string | null }): Promise<TrelloResult> {
+  const client = trelloClient(env);
+  if (!client) return { status: 'not_configured', message: 'Trello is not connected to Cotiza. Also move the Trello card.', cards: [] };
+  const { jobberIntegration } = await openJobberIntegration(env.DB, env).catch(() => ({ jobberIntegration: null }));
+  const read = new OpsAssistantRead(jobberIntegration, env.DB, env.IMAGES);
+  const [who, others, user] = await Promise.all([trelloIdentity(read, userId, requestId), otherOpenNames(jobberIntegration, requestId), userName(env.DB, userId)]);
+  const postponed = closure.reason === 'postponed';
+  const result = await closeInTrello({
+    client, board: trelloBoardId(env), store: new D1TrelloMoveStore(env.DB), requestId, who, otherOpenNames: others,
+    comment: postponed ? postponeComment(user, closure.checkBackOn) : closeComment(user, closure.label, closure.note),
+    postponed,
+  }).catch((err): TrelloResult => ({ status: 'failed', message: `Trello could not be updated. Move the card by hand. ${err instanceof Error ? sanitizeLogText(err.message).slice(0, 120) : ''}`.trim(), cards: [] }));
+  await logTrello(env, userId, postponed ? 'trello_postpone' : 'trello_close', result);
+  return result;
+}
+
+async function logTrello(env: Bindings, userId: string, operation: string, result: TrelloResult) {
+  await new ActivityLogService(env.DB).log({
+    userId, component: 'LeadHub', operation,
+    severity: result.status === 'failed' || result.status === 'partial' ? 'error' : 'info',
+    description: `trello outcome=${result.status} cards=${result.cards.length}`.slice(0, 240),
+    recommendedAction: result.status === 'failed' || result.status === 'partial' || result.status === 'ambiguous' ? 'Move the Trello card by hand or retry from the lead page.' : undefined,
+  }).catch(() => undefined);
+}
+
+/** Whether to keep reminding the team to move the card by hand. */
+function trelloNeedsHand(result: TrelloResult | null): boolean {
+  return !result || result.status === 'not_configured' || result.status === 'failed' || result.status === 'ambiguous' || result.status === 'partial';
+}
+
 const MAX_STATUS_IDS = 50;
 const STATUS_CONCURRENCY = 4;
 
@@ -127,6 +200,8 @@ app.get('/contact-status', async (c) => {
   const info = new LeadInfoService(c.env.DB);
   const now = Date.now();
   const statuses: Record<string, unknown> = {};
+  // One board read for the whole batch; leads lost in Trello (card in Bid Lost) go to Review.
+  const trello = await trelloSnapshot(c.env);
   let next = 0;
   const worker = async () => {
     while (next < valid.length) {
@@ -142,7 +217,8 @@ app.get('/contact-status', async (c) => {
         const { email, phone } = contextServices(c.env);
         const known = knownQuotes(quotes);
         const quoteStage = await quoteStageFor(c.env.DB, requestId, known);
-        const { status, workflow } = await gatherLeadWorkflow({ requestId, detail: request.request, requestFailed: request.outcome !== 'ok', contacts, phone, email, now, items, quotes: known, quoteStage });
+        const lost = Boolean(trello) && request.outcome === 'ok' && cardsLostInTrello(trello!, avail((request.request as RequestFields)?.jobberWebUri));
+        const { status, workflow } = await gatherLeadWorkflow({ requestId, detail: request.request, requestFailed: request.outcome !== 'ok', contacts, phone, email, now, items, quotes: known, quoteStage, lostInTrello: lost });
         statuses[requestId] = { ...status, workflow };
       } catch (err) {
         console.warn('[leads] contact status failed', sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 180));
@@ -185,6 +261,13 @@ app.get('/:requestId', async (c) => {
   const failed = { status: 'failed' as const };
   const known = knownQuotes(quotes);
   const quoteStage = await quoteStageFor(c.env.DB, requestId, known);
+  const trelloConfigured = Boolean(trelloClient(c.env));
+  const [trello, trelloMoves] = await Promise.all([
+    trelloSnapshot(c.env),
+    new D1TrelloMoveStore(c.env.DB).active(requestId).catch(() => null),
+  ]);
+  const lost = Boolean(trello) && (request as { outcome?: string }).outcome === 'ok'
+    && cardsLostInTrello(trello!, avail((detail as RequestFields)?.jobberWebUri));
   const [emailResult, phoneResult, contactTimeline] = await Promise.all([
     email.isAvailable() && contact.email ? email.fetchContextResult(contact.email).catch(() => failed) : Promise.resolve(null),
     phone.isAvailable() && contact.phone ? phone.fetchContextResult(contact.phone).catch(() => failed) : Promise.resolve(null),
@@ -199,6 +282,7 @@ app.get('/:requestId', async (c) => {
       items,
       quotes: known,
       quoteStage,
+      lostInTrello: lost,
     }),
   ]);
 
@@ -217,6 +301,8 @@ app.get('/:requestId', async (c) => {
     // Cotiza actions whose Jobber note did not go through; the page offers a retry.
     unsentJobberNotes: unsentJobberNotes ? unsentJobberNotes.map(noteView) : [],
     unsentJobberNotesUnavailable: unsentJobberNotes === null,
+    // Trello: whether Cotiza can move cards, and the cards it moved for this lead (for the closed-lead panel).
+    trello: { configured: trelloConfigured, moved: trelloMoves ? trelloMoves.map((m) => ({ name: m.cardName, url: m.cardUrl })) : null },
   });
 });
 
@@ -383,7 +469,8 @@ app.post('/:requestId/quotes/:quoteId/review-request', async (c) => {
 /**
  * Close a lead with a reason. Writes "Cotiza · Lead closed by …" to Jobber and, unless the lead is
  * postponed (it stays open in Jobber to come back), archives the Jobber request when Jobber lets
- * Cotiza do that. Trello is outside Cotiza: the response reminds the team to move the card.
+ * Cotiza do that. With Trello connected, the lead's cards move to Bid Lost (a postponed lead's card
+ * gets a comment and stays put); otherwise the response reminds the team to move the card.
  */
 app.post('/:requestId/close', async (c) => {
   let requestId: string;
@@ -401,7 +488,7 @@ app.post('/:requestId/close', async (c) => {
   }
   const { closure, changed } = result;
   // Already closed (a repeat or double click): nothing more is written anywhere.
-  if (!changed) return c.json({ closure, alreadyClosed: true, jobberNote: null, jobberArchive: { status: 'skipped', message: 'The lead was already closed.' }, trelloReminder: true });
+  if (!changed) return c.json({ closure, alreadyClosed: true, jobberNote: null, jobberArchive: { status: 'skipped', message: 'The lead was already closed.' }, trello: null, trelloReminder: true });
   const jobberNote = await addJobberNote(c.env, userId, noteKey('close', `${await requestKeyPart(requestId)}_${Date.parse(closure.closedAt) || Date.now()}`), requestId, {
     kind: 'lead_closed', reason: closure.label, note: closure.note, checkBackOn: closure.checkBackOn,
   });
@@ -414,7 +501,8 @@ app.post('/:requestId/close', async (c) => {
     if (jobberArchive.status === 'archived') await contacts.setJobberArchived(requestId, true).catch(() => undefined);
     await new ActivityLogService(c.env.DB).log({ userId, component: 'LeadHub', operation: 'jobber_archive', severity: jobberArchive.status === 'failed' ? 'error' : 'info', description: `request archive outcome=${jobberArchive.status}`.slice(0, 240) });
   }
-  return c.json({ closure: jobberArchive.status === 'archived' ? { ...closure, jobberArchived: true } : closure, jobberNote, jobberArchive, trelloReminder: true });
+  const trello = await syncTrelloClose(c.env, userId, requestId, closure);
+  return c.json({ closure: jobberArchive.status === 'archived' ? { ...closure, jobberArchived: true } : closure, jobberNote, jobberArchive, trello, trelloReminder: trelloNeedsHand(trello) });
 });
 
 app.post('/:requestId/reopen', async (c) => {
@@ -436,7 +524,23 @@ app.post('/:requestId/reopen', async (c) => {
     // The flag is cleared only once Jobber has unarchived it, so a failure can be retried.
     if (jobberArchive.status === 'unarchived') await contacts.setJobberArchived(requestId, false).catch(() => undefined);
   }
-  return c.json({ reopened: Boolean(cleared), jobberNote, jobberArchive, trelloReminder: Boolean(cleared) });
+  let trello: TrelloResult | null = null;
+  if (cleared) {
+    trello = await reopenInTrello({ client: trelloClient(c.env), store: new D1TrelloMoveStore(c.env.DB), requestId, comment: reopenComment(await userName(c.env.DB, userId)) });
+    await logTrello(c.env, userId, 'trello_reopen', trello);
+  }
+  return c.json({ reopened: Boolean(cleared), jobberNote, jobberArchive, trello, trelloReminder: Boolean(cleared) && trelloNeedsHand(trello) });
+});
+
+/** Retry the Trello side of a close (safe to repeat: cards already moved are left alone). */
+app.post('/:requestId/trello-sync', async (c) => {
+  let requestId: string;
+  try { requestId = requireRequestId(c.req.param('requestId')); } catch (err) { return c.json(badRequest(err), 400); }
+  const userId = c.get('user').id;
+  const closure = await new LeadContactService(c.env.DB).closure(requestId);
+  if (!closure) return c.json({ error: 'This lead is open, so there is nothing to move in Trello.' }, 400);
+  const trello = await syncTrelloClose(c.env, userId, requestId, closure);
+  return c.json({ trello, trelloReminder: trelloNeedsHand(trello) });
 });
 
 app.post('/jobber-notes/:noteId/retry', async (c) => {

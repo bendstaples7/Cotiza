@@ -50,4 +50,9 @@ export interface Bindings {
   QUO_API_KEY?: string;
   /** Quo phone number id (PN...) whose messages and calls to read. Optional. */
   QUO_PHONE_NUMBER_ID?: string;
+  /** Trello API key and token: closing a lead moves its card on the Chicago Reno Work Kanban board. Optional: without them the team is reminded to move it by hand. */
+  TRELLO_API_KEY?: string;
+  TRELLO_TOKEN?: string;
+  /** Trello board id, if not the Chicago Reno Work Kanban board. Optional. */
+  TRELLO_BOARD_ID?: string;
 }
