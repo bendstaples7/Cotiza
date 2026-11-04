@@ -383,7 +383,7 @@ function NextStepPanel({ lead, workflow, onChanged, panelRef }: { lead: LeadBund
         </>
       )}
 
-      {action.kind !== 'review' && (
+      {action.kind !== 'review' && action.kind !== 'none' && (
         <div style={doneRow}>
           <button type="button" style={doneBtn} disabled={busy} onClick={() => { void markDone(); }}>Mark done</button>
           <span style={{ fontSize: 14, color: '#4b5563' }}>

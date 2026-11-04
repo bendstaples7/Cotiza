@@ -93,5 +93,7 @@ describe('buildActionMessage', () => {
     expect(buildActionMessage('intro_text', input)!.text).toBe(buildOutreach(input).text);
     expect(buildActionMessage('draft_quote', input)).toBeNull();
     expect(buildActionMessage('review', input)).toBeNull();
+    expect(buildActionMessage('none', input)).toBeNull();
+    expect(buildActionMessage('quote_follow_up', input)!.text).toContain('make sure you received our quote for your Vinyl Flooring');
   });
 });

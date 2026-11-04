@@ -85,10 +85,11 @@ export function buildOutreach(input: { clientName: string | null; title: string 
  * - intro_text / ask_info / follow_up: the asks and assumptions (buildOutreach).
  * - reply: thanks them for getting back to us, then any asks.
  * - quote_update: the handbook's "quote still being created" update.
- * - draft_quote / review: no customer message.
+ * - quote_follow_up: the handbook's "quote sent, follow up" check-in.
+ * - draft_quote / review / none: no customer message.
  */
 export function buildActionMessage(kind: LeadActionKind, input: { clientName: string | null; title: string | null; items: LeadInfoItem[] }): OutreachMessages | null {
-  if (kind === 'draft_quote' || kind === 'review') return null;
+  if (kind === 'draft_quote' || kind === 'review' || kind === 'none') return null;
   const base = buildOutreach(input);
   const name = firstName(input.clientName);
   const project = (input.title ?? '').trim() || 'project';
@@ -106,6 +107,23 @@ export function buildActionMessage(kind: LeadActionKind, input: { clientName: st
         `Just a quick update on your ${project} request: we're putting the finishing touches on your quote and it should be over to you shortly.`,
         `If you have any questions in the meantime, or anything has changed on your side, just reply here.`,
         'Thank you for your patience!\nChicago Reno',
+      ].join('\n\n'),
+    };
+  }
+  if (kind === 'quote_follow_up') {
+    return {
+      ...base,
+      text: [
+        `Hi ${name}, this is Chicago Reno. Just checking in to make sure you received our quote for your ${project} okay (sometimes they go to spam).`,
+        `Please let us know if you have any questions, or if anything needs to be clarified!`,
+        '— Chicago Reno',
+      ].join('\n\n'),
+      emailSubject: `Checking in on your ${project} quote`,
+      emailBody: [
+        `Hi ${name},`,
+        `Just checking in to make sure you received our quote for your ${project} okay (sometimes they go to spam).`,
+        `Please let us know if you have any questions, or if anything needs to be clarified!`,
+        'Best,\nChicago Reno',
       ].join('\n\n'),
     };
   }

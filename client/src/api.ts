@@ -1393,7 +1393,7 @@ export interface LeadContactStatus {
 }
 
 export type LeadBucket = 'do_now' | 'waiting' | 'review';
-export type LeadActionKind = 'intro_text' | 'reply' | 'ask_info' | 'quote_update' | 'draft_quote' | 'follow_up' | 'review';
+export type LeadActionKind = 'intro_text' | 'reply' | 'ask_info' | 'quote_update' | 'draft_quote' | 'quote_follow_up' | 'follow_up' | 'review' | 'none';
 export type LeadProgress = 'lead_in' | 'getting_info' | 'ready_to_quote' | 'quote_drafted' | 'quote_sent';
 
 /** A lead's place in the handbook follow-up cadence and the one next action (worker: lead-workflow.ts). */
