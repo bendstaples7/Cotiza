@@ -124,11 +124,6 @@ export interface EditPlan {
   recreateFrom: number;
 }
 
-/**
- * Plan the smallest change set. Lines are edited in place while the desired order matches the
- * current order; from the first new or out-of-order line on, lines are recreated (Jobber can only
- * append) and the originals deleted.
- */
 /** Fill omitted descriptions: an existing line keeps its current one, a new line gets none. */
 export function resolveDescriptions(current: QuoteLine[], desired: DesiredLine[]): Array<DesiredLine & { description: string }> {
   const byId = new Map(current.map((l) => [l.id, l]));
@@ -138,6 +133,11 @@ export function resolveDescriptions(current: QuoteLine[], desired: DesiredLine[]
   }));
 }
 
+/**
+ * Plan the smallest change set. Lines are edited in place while the desired order matches the
+ * current order; from the first new or out-of-order line on, lines are recreated (Jobber can only
+ * append) and the originals deleted.
+ */
 export function planEdits(current: QuoteLine[], requested: DesiredLine[]): EditPlan {
   const currentIds = new Set(current.map((l) => l.id));
   for (const line of requested) {
