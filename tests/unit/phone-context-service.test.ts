@@ -211,9 +211,14 @@ describe('PhoneContextService', () => {
     });
 
     it('reports a failed number lookup as a failed read, not an empty history', async () => {
-      vi.stubGlobal('fetch', route({ '/phone-numbers': 'fail' }));
+      const fetchMock = route({ '/phone-numbers': 'fail' });
+      vi.stubGlobal('fetch', fetchMock);
       const service = new PhoneContextService('sk-test-key');
       expect(await service.fetchContextResult('+15551234567')).toEqual({ status: 'failed' });
+      // A failed lookup is not cached: the next read asks Quo again.
+      expect(await service.fetchContextResult('+15551234567')).toEqual({ status: 'failed' });
+      const lookups = fetchMock.mock.calls.filter(([u]) => new URL(u as string).pathname === '/v1/phone-numbers');
+      expect(lookups).toHaveLength(2);
     });
   });
 
@@ -222,6 +227,8 @@ describe('PhoneContextService', () => {
       expect(toE164('(773) 555-0100')).toBe('+17735550100');
       expect(toE164('1-773-555-0100')).toBe('+17735550100');
       expect(toE164('+44 20 7946 0958')).toBe('+442079460958');
+      expect(toE164('(773) 555-0100 x123')).toBe('+17735550100');
+      expect(toE164('773-555-0100 ext. 4')).toBe('+17735550100');
       expect(toE164('n/a')).toBeNull();
     });
   });

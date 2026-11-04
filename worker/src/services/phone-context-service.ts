@@ -346,7 +346,8 @@ function newestFirst<T extends { createdAt?: string | null }>(items: T[]): T[] {
  * numbers already in +E.164 form are kept. Returns null when no usable number is left.
  */
 export function toE164(raw: string): string | null {
-  const trimmed = raw.trim();
+  // Drop an extension ("x123", "ext. 123"): Quo matches the main number only.
+  const trimmed = raw.trim().replace(/\s*(?:x|ext\.?|extension)\s*\d+\s*$/i, '');
   const digits = trimmed.replace(/\D/g, '');
   if (trimmed.startsWith('+')) return digits.length >= 8 ? `+${digits}` : null;
   if (digits.length === 10) return `+1${digits}`;
