@@ -18,7 +18,7 @@ import { createMockD1 } from './helpers/mock-d1.js';
 const RESOURCE = 'http://127.0.0.1:8787/mcp';
 const OFFICE = 'office@chicago-reno.com';
 const line = (id: string, name: string, quantity = 1, unitPrice = 100, description = ''): QuoteLine => ({ id, name, description, quantity, unitPrice });
-const A = line('a', 'Demo', 8, 70), B = line('b', 'Materials: Demo Supplies', 1, 100), C = line('c', 'Drywall', 16, 65), D = line('d', 'Materials: Drywall', 1, 100);
+const A = line('lineA', 'Demo', 8, 70), B = line('lineB', 'Materials: Demo Supplies', 1, 100), C = line('lineC', 'Drywall', 16, 65), D = line('lineD', 'Materials: Drywall', 1, 100);
 
 const nonNull = (inner: object) => ({ kind: 'NON_NULL', name: null, ofType: inner });
 const scalar = (name: string) => ({ kind: 'SCALAR', name });
@@ -55,7 +55,7 @@ function fakeJobber(initial: QuoteLine[], opts: { status?: string; rejectCreate?
     }
     if (query.includes('quoteCreateLineItems(')) {
       if (opts.rejectCreate) return { quoteCreateLineItems: { userErrors: [{ message: 'Name is too long' }] } };
-      for (const i of items) lines.push(line(`n${next++}`, i.name as string, i.quantity as number, i.unitPrice as number, i.description as string));
+      for (const i of items) lines.push(line(`newLine${next++}`, i.name as string, i.quantity as number, i.unitPrice as number, i.description as string));
       return { quoteCreateLineItems: { userErrors: [] } };
     }
     if (query.includes('quoteDeleteLineItems(')) {
@@ -73,34 +73,35 @@ const strip = (l: QuoteLine) => ({ name: l.name, description: l.description, qua
 describe('planEdits', () => {
   it('edits in place when the order is unchanged', () => {
     const plan = planEdits([A, B, C, D], [A, B, { ...C, quantity: 12 }, D]);
-    expect(plan.updates.map((l) => l.id)).toEqual(['c']);
+    expect(plan.updates.map((l) => l.id)).toEqual(['lineC']);
     expect(plan.creates).toEqual([]);
     expect(plan.deletes).toEqual([]);
   });
 
   it('deletes removed lines without recreating the rest', () => {
     const plan = planEdits([A, B, C, D], [A, B, C]);
-    expect(plan).toMatchObject({ updates: [], creates: [], deletes: ['d'] });
+    expect(plan).toMatchObject({ updates: [], creates: [], deletes: ['lineD'] });
   });
 
   it('recreates from the first new or moved line so the order comes out right', () => {
     const plan = planEdits([A, B, C, D], [A, C, D, B]);
     expect(plan.recreateFrom).toBe(1);
     expect(plan.creates.map((l) => l.name)).toEqual(['Drywall', 'Materials: Drywall', 'Materials: Demo Supplies']);
-    expect(plan.deletes.sort()).toEqual(['b', 'c', 'd']);
+    expect(plan.deletes.sort()).toEqual(['lineB', 'lineC', 'lineD']);
     const added = planEdits([A, B], [A, { name: 'New', description: '', quantity: 1, unitPrice: 5 }, B]);
     expect(added.creates.map((l) => l.name)).toEqual(['New', 'Materials: Demo Supplies']);
-    expect(added.deletes).toEqual(['b']);
+    expect(added.deletes).toEqual(['lineB']);
   });
 
   it('refuses ids that are not on the quote', () => {
-    expect(() => planEdits([A], [{ ...A, id: 'zzz' }])).toThrow(QuoteEditArgsError);
+    expect(() => planEdits([A], [{ ...A, id: 'zzzz' }])).toThrow(QuoteEditArgsError);
+    expect(() => parseApplyArgs({ quoteId: 'bad id!', quoteVersion: '0123456789abcdef', lines: [A] })).toThrow('quoteId');
   });
 });
 
 describe('parseApplyArgs', () => {
   it('rejects unknown fields, missing versions, bad numbers and duplicate ids', () => {
-    const base = { quoteId: 'q', quoteVersion: '0123456789abcdef', lines: [A] };
+    const base = { quoteId: 'Z2lkOi8vSm9iYmVyL1F1b3RlLzE=', quoteVersion: '0123456789abcdef', lines: [A] };
     expect(() => parseApplyArgs({ ...base, send: true })).toThrow('Unknown field');
     expect(() => parseApplyArgs({ ...base, quoteVersion: 'x' })).toThrow('quoteVersion');
     expect(() => parseApplyArgs({ ...base, lines: [] })).toThrow('lines');
@@ -116,7 +117,7 @@ describe('applyQuoteEdits', () => {
     const jobber = fakeJobber([A, B, C, D]);
     const version = await quoteVersion('draft', [A, B, C, D]);
     const desired = [{ ...A, description: 'Remove ceiling' }, C, D, { name: 'Debris Removal', description: '', quantity: 1, unitPrice: 500 }];
-    const result = await applyQuoteEdits(jobber, { quoteId: 'q', quoteVersion: version, lines: desired });
+    const result = await applyQuoteEdits(jobber, { quoteId: 'Z2lkOi8vSm9iYmVyL1F1b3RlLzE=', quoteVersion: version, lines: desired });
     expect(result).toMatchObject({ outcome: 'ok', verified: true, changed: true, applied: { updated: 1, created: 1, deleted: 1 }, subtotal: 70 * 8 + 16 * 65 + 100 + 500 });
     expect(jobber.lines().map(strip)).toEqual(desired.map((l) => strip(l as QuoteLine)));
     const create = jobber.graphqlRequest.mock.calls.find(([q]) => String(q).includes('quoteCreateLineItems('))!;
@@ -125,14 +126,14 @@ describe('applyQuoteEdits', () => {
 
   it('refuses without writing when the quote changed since it was read', async () => {
     const jobber = fakeJobber([A, B]);
-    const result = await applyQuoteEdits(jobber, { quoteId: 'q', quoteVersion: '0000000000000000', lines: [A] });
+    const result = await applyQuoteEdits(jobber, { quoteId: 'Z2lkOi8vSm9iYmVyL1F1b3RlLzE=', quoteVersion: '0000000000000000', lines: [A] });
     expect(result).toMatchObject({ outcome: 'conflict', changed: false });
     expect(jobber.graphqlRequest).toHaveBeenCalledTimes(1);
   });
 
   it('refuses quotes that are not drafts', async () => {
     const jobber = fakeJobber([A, B], { status: 'awaiting_response' });
-    const result = await applyQuoteEdits(jobber, { quoteId: 'q', quoteVersion: await quoteVersion('awaiting_response', [A, B]), lines: [A] });
+    const result = await applyQuoteEdits(jobber, { quoteId: 'Z2lkOi8vSm9iYmVyL1F1b3RlLzE=', quoteVersion: await quoteVersion('awaiting_response', [A, B]), lines: [A] });
     expect(result).toMatchObject({ outcome: 'refused', changed: false });
     expect(jobber.lines()).toEqual([A, B]);
   });
@@ -144,21 +145,21 @@ describe('applyQuoteEdits', () => {
       if (query === QUOTE_EDIT_SCHEMA_QUERY) return { ...schema, edit: { inputFields: schema.edit.inputFields.filter((f) => f.name !== 'unitPrice') } };
       throw new Error('should not write');
     });
-    const result = await applyQuoteEdits(jobber, { quoteId: 'q', quoteVersion: await quoteVersion('draft', [A, B]), lines: [{ ...A, quantity: 9 }, B] });
+    const result = await applyQuoteEdits(jobber, { quoteId: 'Z2lkOi8vSm9iYmVyL1F1b3RlLzE=', quoteVersion: await quoteVersion('draft', [A, B]), lines: [{ ...A, quantity: 9 }, B] });
     expect(result).toMatchObject({ outcome: 'refused', changed: false });
     expect(String((result as { reason: string }).reason)).toContain('unitPrice');
   });
 
   it('never deletes when a create fails, and reports the failure', async () => {
     const jobber = fakeJobber([A, B], { rejectCreate: true });
-    const result = await applyQuoteEdits(jobber, { quoteId: 'q', quoteVersion: await quoteVersion('draft', [A, B]), lines: [B, A] });
+    const result = await applyQuoteEdits(jobber, { quoteId: 'Z2lkOi8vSm9iYmVyL1F1b3RlLzE=', quoteVersion: await quoteVersion('draft', [A, B]), lines: [B, A] });
     expect(result).toMatchObject({ outcome: 'failed', verified: false });
-    expect(jobber.lines().map((l) => l.id)).toEqual(['a', 'b']);
+    expect(jobber.lines().map((l) => l.id)).toEqual(['lineA', 'lineB']);
   });
 
   it('changes nothing when the quote already matches', async () => {
     const jobber = fakeJobber([A, B]);
-    const result = await applyQuoteEdits(jobber, { quoteId: 'q', quoteVersion: await quoteVersion('draft', [A, B]), lines: [A, B] });
+    const result = await applyQuoteEdits(jobber, { quoteId: 'Z2lkOi8vSm9iYmVyL1F1b3RlLzE=', quoteVersion: await quoteVersion('draft', [A, B]), lines: [A, B] });
     expect(result).toMatchObject({ outcome: 'ok', changed: false, verified: true });
   });
 });
@@ -169,7 +170,7 @@ describe('read_quote version', () => {
     const graphqlRequest = vi.fn(async (query: string) => (query.includes('AssistantQuoteDetail')
       ? { quote: { id: 'q', quoteNumber: '715', title: 't', message: '', quoteStatus: 'draft', lineItems: { nodes, pageInfo: { hasNextPage: false } }, client: null, request: null } }
       : { quote: { id: 'q', contractDisclaimer: null, amounts: { total: 0, depositAmount: 0 }, depositRecords: { nodes: [] } } }));
-    const result = await new OpsAssistantRead({ graphqlRequest }, createMockD1() as never).readQuote('u', { quoteId: 'q' });
+    const result = await new OpsAssistantRead({ graphqlRequest }, createMockD1() as never).readQuote('u', { quoteId: 'Z2lkOi8vSm9iYmVyL1F1b3RlLzE=' });
     expect((result as { quote: { version: string } }).quote.version).toBe(await quoteVersion('draft', normalizeLines(nodes as never)));
   });
 });
@@ -196,7 +197,7 @@ describe('quote:write scope', () => {
     const list = readMcpJsonBody(await (await handleMcpPost(mcp('tools/list'), deps(principal('ops:read review:write')))).text()) as { result: { tools: Array<{ name: string }> } };
     expect(list.result.tools.map((t) => t.name)).not.toContain('apply_quote_edits');
     const jobber = fakeJobber([A, B]);
-    const call = readMcpJsonBody(await (await handleMcpPost(mcp('tools/call', { name: 'apply_quote_edits', arguments: { quoteId: 'q', quoteVersion: '0123456789abcdef', lines: [A] } }), deps(principal('ops:read'), jobber))).text()) as { result: { content: Array<{ text: string }> } };
+    const call = readMcpJsonBody(await (await handleMcpPost(mcp('tools/call', { name: 'apply_quote_edits', arguments: { quoteId: 'Z2lkOi8vSm9iYmVyL1F1b3RlLzE=', quoteVersion: '0123456789abcdef', lines: [A] } }), deps(principal('ops:read'), jobber))).text()) as { result: { content: Array<{ text: string }> } };
     expect(JSON.parse(call.result.content[0].text)).toMatchObject({ outcome: 'forbidden', failure: { code: 'insufficient_scope' } });
     expect(jobber.graphqlRequest).not.toHaveBeenCalled();
   });
@@ -206,7 +207,7 @@ describe('quote:write scope', () => {
     const d = deps(principal('ops:read quote:write'), jobber);
     const list = readMcpJsonBody(await (await handleMcpPost(mcp('tools/list'), d)).text()) as { result: { tools: Array<{ name: string }> } };
     expect(list.result.tools.map((t) => t.name)).toContain('apply_quote_edits');
-    const args = { quoteId: 'q', quoteVersion: await quoteVersion('draft', [A, B]), lines: [{ ...A, quantity: 10 }, B] };
+    const args = { quoteId: 'Z2lkOi8vSm9iYmVyL1F1b3RlLzE=', quoteVersion: await quoteVersion('draft', [A, B]), lines: [{ ...A, quantity: 10 }, B] };
     const call = readMcpJsonBody(await (await handleMcpPost(mcp('tools/call', { name: 'apply_quote_edits', arguments: args }), d)).text()) as { result: { content: Array<{ text: string }>; isError: boolean } };
     expect(call.result.isError).toBe(false);
     expect(JSON.parse(call.result.content[0].text)).toMatchObject({ outcome: 'ok', verified: true });

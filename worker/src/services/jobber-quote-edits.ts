@@ -14,6 +14,8 @@ import type { JobberReadClient } from './ops-assistant-read.js';
 import { sanitizeLogText } from './jobber-log-sanitize.mjs';
 
 export const MAX_QUOTE_LINES = 100;
+/** Same shape read_quote accepts for Jobber encoded ids. */
+const ID_RE = /^[A-Za-z0-9+/=_-]{4,200}$/;
 
 export const QUOTE_LINES_QUERY = `query AssistantQuoteLines($id: EncodedId!) {
   quote(id: $id) {
@@ -80,7 +82,7 @@ export function parseApplyArgs(raw: unknown): { quoteId: string; quoteVersion: s
   for (const key of Object.keys(args)) {
     if (!['quoteId', 'quoteVersion', 'lines'].includes(key)) throw new QuoteEditArgsError(`Unknown field: ${key}`);
   }
-  if (typeof args.quoteId !== 'string' || !args.quoteId.trim()) throw new QuoteEditArgsError('quoteId is required.');
+  if (typeof args.quoteId !== 'string' || !ID_RE.test(args.quoteId)) throw new QuoteEditArgsError('quoteId is not a valid id.');
   if (typeof args.quoteVersion !== 'string' || !/^[0-9a-f]{16}$/.test(args.quoteVersion)) {
     throw new QuoteEditArgsError('quoteVersion is required: use the version from read_quote.');
   }
@@ -95,7 +97,7 @@ export function parseApplyArgs(raw: unknown): { quoteId: string; quoteVersion: s
       if (!['id', 'name', 'description', 'quantity', 'unitPrice'].includes(key)) throw new QuoteEditArgsError(`lines[${index}]: unknown field ${key}`);
     }
     if (line.id !== undefined) {
-      if (typeof line.id !== 'string' || !line.id) throw new QuoteEditArgsError(`lines[${index}].id must be a line id from read_quote.`);
+      if (typeof line.id !== 'string' || !ID_RE.test(line.id)) throw new QuoteEditArgsError(`lines[${index}].id must be a line id from read_quote.`);
       if (seen.has(line.id)) throw new QuoteEditArgsError(`lines[${index}].id appears twice.`);
       seen.add(line.id);
     }
