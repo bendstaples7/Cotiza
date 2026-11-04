@@ -15,7 +15,7 @@ export const LEAD_MAX_PAGES = 10;
 export const OPEN_LEADS_QUERY = `
   query AssistantOpenLeads($first: Int!, $after: String) {
     requests(first: $first, after: $after, sort: [{ key: REQUESTED_AT, direction: DESCENDING }]) {
-      edges { node { id title requestStatus createdAt jobberWebUri companyName client { firstName lastName companyName } } }
+      edges { node { id title requestStatus createdAt jobberWebUri companyName contactName client { firstName lastName companyName } } }
       pageInfo { hasNextPage endCursor }
     }
   }
@@ -23,13 +23,13 @@ export const OPEN_LEADS_QUERY = `
 
 export type LeadNode = {
   id: string; title?: string | null; requestStatus?: string | null; createdAt?: string | null; jobberWebUri?: string | null;
-  companyName?: string | null; client?: { firstName?: string | null; lastName?: string | null; companyName?: string | null } | null;
+  companyName?: string | null; contactName?: string | null; client?: { firstName?: string | null; lastName?: string | null; companyName?: string | null } | null;
 };
 type LeadPage = { requests?: { edges?: Array<{ node: LeadNode }>; pageInfo?: { hasNextPage?: boolean; endCursor?: string | null } } };
 
 export function leadClientName(node: LeadNode): string | null {
   const person = [node.client?.firstName, node.client?.lastName].map((part) => (part ?? '').trim()).filter(Boolean).join(' ');
-  return person || (node.client?.companyName ?? node.companyName ?? '').trim() || null;
+  return person || (node.contactName ?? '').trim() || (node.client?.companyName ?? node.companyName ?? '').trim() || null;
 }
 
 /** Reads requests newest first until one is older than the window, keeping the ones not yet converted or archived. */
@@ -39,7 +39,9 @@ export async function loadOpenLeads(jobber: JobberReadClient, days: number, now:
   let after: string | null = null;
   for (let page = 0; page < LEAD_MAX_PAGES; page++) {
     const data: LeadPage = await jobber.graphqlRequest<LeadPage>(OPEN_LEADS_QUERY, { first: LEAD_PAGE_SIZE, after });
-    const edges = data.requests?.edges ?? [];
+    // A missing or malformed page is a failed read, never an empty list of leads.
+    if (!data?.requests || !Array.isArray(data.requests.edges)) throw new Error('Jobber returned no requests page.');
+    const edges = data.requests.edges;
     for (const { node } of edges) {
       const created = Date.parse(node.createdAt ?? '');
       if (Number.isFinite(created) && created < cutoff) return { open, complete: true };
@@ -78,7 +80,15 @@ export function mergeQueueWithOpenLeads(
     const title = node.title?.trim() || null;
     const base = stored.get(node.id);
     if (base) {
-      return { ...base, customerName: name ?? base.customerName, requestTitle: title ?? base.requestTitle ?? null, quoteSentAt: null };
+      // Age and order follow Jobber's own createdAt, not the stored row's anchor.
+      return {
+        ...base,
+        customerName: name ?? base.customerName,
+        requestTitle: title ?? base.requestTitle ?? null,
+        createdAt: Number.isFinite(created) ? new Date(created) : base.createdAt,
+        ageSeconds: Number.isFinite(created) ? ageSeconds : base.ageSeconds,
+        quoteSentAt: null,
+      };
     }
     return {
       id: node.id,
