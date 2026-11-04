@@ -28,7 +28,7 @@ function memoryStore(): TrelloMoveStore & { moves: Map<string, TrelloMove & { re
 }
 
 /** A fake Trello API: GET lists/cards, PUT card (move), POST comment. Records every call. */
-function fakeTrello(cards: TrelloCard[], opts: { failMove?: boolean; failBoard?: number } = {}) {
+function fakeTrello(cards: TrelloCard[], opts: { failMove?: boolean; failBoard?: number; failComment?: boolean } = {}) {
   const calls: Array<{ method: string; path: string; params: Record<string, string> }> = [];
   const fetchImpl = vi.fn(async (input: string, init?: RequestInit) => {
     const url = new URL(input);
@@ -46,7 +46,7 @@ function fakeTrello(cards: TrelloCard[], opts: { failMove?: boolean; failBoard?:
       c.idList = params.idList;
       return json(c);
     }
-    if (method === 'POST') return json({ id: 'action' });
+    if (method === 'POST') return opts.failComment ? json({}, 500) : json({ id: 'action' });
     return json({}, 404);
   });
   return { client: new TrelloClient('KEY', 'TOKEN', fetchImpl as never), calls, fetchImpl };
@@ -115,7 +115,15 @@ describe('closing a lead in Trello', () => {
     const store = { ...memoryStore(), record: async () => { throw new Error('D1 down'); } };
     const r = await closeInTrello({ client, board: 'B', store, requestId: 'R', who: BRYAN, otherOpenNames: new Set(), comment: 'x', postponed: false });
     expect(r.status).toBe('moved');
-    expect(r.message).toContain('couldn’t record it');
+    expect(r.message).toContain('couldn’t record the move');
+  });
+
+  it('says so when the close comment could not be added', async () => {
+    const { client } = fakeTrello([auto('a', 'Bryan Waters', '35754222')], { failComment: true });
+    const r = await closeInTrello({ client, board: 'B', store: memoryStore(), requestId: 'R', who: BRYAN, otherOpenNames: new Set(), comment: 'x', postponed: false });
+    expect(r.status).toBe('moved');
+    expect(r.message).toContain('comment couldn’t be added');
+    expect(r.cards[0]).toMatchObject({ done: true, error: expect.stringContaining('comment') });
   });
 
   it('moves a card back to Bid Lost even if an old record says Cotiza moved it once', async () => {

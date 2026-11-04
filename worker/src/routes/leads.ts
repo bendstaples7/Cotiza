@@ -170,6 +170,11 @@ async function syncTrelloClose(env: Bindings, userId: string, requestId: string,
       : { status: 'not_configured', message: 'Trello is not connected to Cotiza. Also move the Trello card.', cards: [] };
   }
   const { jobberIntegration } = await openJobberIntegration(env.DB, env).catch(() => ({ jobberIntegration: null }));
+  if (!jobberIntegration) {
+    const failed: TrelloResult = { status: 'failed', message: 'Jobber could not be read to find this lead\u2019s Trello card. Move the card by hand or retry.', cards: [] };
+    await logTrello(env, userId, 'trello_close', failed);
+    return failed;
+  }
   const read = new OpsAssistantRead(jobberIntegration, env.DB, env.IMAGES);
   const [who, others, user] = await Promise.all([
     trelloIdentity(read, userId, requestId),

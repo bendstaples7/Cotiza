@@ -291,10 +291,14 @@ export async function closeInTrello(input: CloseInTrelloInput): Promise<TrelloRe
       // Recorded right after the move so a reopen can move it back, even if the comment fails.
       const recorded = await store.record(requestId, { cardId: card.id, cardUrl: card.url, cardName: card.name, fromListId: card.idList, toListId: bidLost.id }, now)
         .then(() => true, (err) => { logFailure('record move', err); return false; });
-      await client.comment(card.id, comment).catch((err) => logFailure('comment', err));
-      done.push(recorded
+      const commented = await client.comment(card.id, comment).then(() => true, (err) => { logFailure('comment', err); return false; });
+      const problems = [
+        recorded ? null : 'Cotiza couldn\u2019t record the move, so reopening won\u2019t move it back',
+        commented ? null : 'the \u201cClosed in Cotiza\u201d comment couldn\u2019t be added',
+      ].filter(Boolean);
+      done.push(problems.length === 0
         ? { name: card.name, url: card.url, done: true }
-        : { name: card.name, url: card.url, done: true, error: 'moved, but Cotiza couldn\u2019t record it, so reopening won\u2019t move it back' });
+        : { name: card.name, url: card.url, done: true, error: `moved, but ${problems.join(' and ')}` });
     } catch (err) {
       logFailure('move', err);
       done.push({ name: card.name, url: card.url, done: false, error: reason(err) });
