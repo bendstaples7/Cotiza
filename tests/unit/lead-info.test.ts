@@ -23,8 +23,9 @@ function sqliteD1() {
       const stmt = {
         bind(...a: unknown[]) { args = a; return stmt; },
         async all() {
-          if (sql.startsWith('SELECT * FROM lead_info_items WHERE jobber_request_id = ?')) {
-            return { results: table.filter((r) => r.jobber_request_id === args[0]).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)) || String(a.id).localeCompare(String(b.id))) };
+          if (sql === 'SELECT * FROM lead_info_items WHERE jobber_request_id = ? ORDER BY rowid ASC') {
+            // ORDER BY rowid: insertion order.
+            return { results: table.filter((r) => r.jobber_request_id === args[0]) };
           }
           if (sql.startsWith('SELECT * FROM lead_info_items WHERE jobber_request_id IN (')) {
             return { results: table.filter((r) => args.includes(r.jobber_request_id)) };

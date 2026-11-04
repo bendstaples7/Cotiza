@@ -93,7 +93,7 @@ export class LeadInfoService {
   async list(requestId: string): Promise<LeadInfoItem[]> {
     const id = requireRequestId(requestId);
     const { results } = await this.db.prepare(
-      `SELECT * FROM lead_info_items WHERE jobber_request_id = ? ORDER BY created_at ASC, id ASC`,
+      `SELECT * FROM lead_info_items WHERE jobber_request_id = ? ORDER BY rowid ASC`,
     ).bind(id).all<Record<string, unknown>>();
     return (results ?? []).map(rowToItem);
   }
