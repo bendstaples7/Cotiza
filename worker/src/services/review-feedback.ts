@@ -133,6 +133,10 @@ export function validateQuoteRecord(value: unknown): Record<string, unknown> {
     }
   };
   walk(value, 1, 'record');
+  const decision = (value as Record<string, unknown>).decision;
+  if (decision !== undefined && decision !== 'approved' && decision !== 'changes_requested') {
+    throw new InvalidAssistantArgs('record.decision must be "approved" or "changes_requested" (or left out while the review is open).');
+  }
   if (JSON.stringify(value).length > REVIEW_FEEDBACK_LIMITS.recordChars) {
     throw new InvalidAssistantArgs(`record must be ${REVIEW_FEEDBACK_LIMITS.recordChars} characters of JSON or fewer.`);
   }
@@ -423,7 +427,7 @@ export const REVIEW_WRITE_TOOLS = [
   },
   {
     name: 'record_quote_review',
-    description: 'Save a new version of one quote\'s review record (edit register, closed findings, verification notes) in the Cotiza ledger. The newest version is current; earlier versions are kept. Set record.decision to "approved" when Ben\'s review clears the quote to send, or "changes_requested" when the team must edit it first: the lead page uses it to show whose move it is. Do not include customer contact details. Never writes to Jobber.',
+    description: 'Save a new version of one quote\'s review record (edit register, closed findings, verification notes) in the Cotiza ledger. The newest version is current; earlier versions are kept. Once Ben has decided, set record.decision to "approved" (clear to send) or "changes_requested" (the team edits it first): the lead page uses it to show whose move it is. Leave it out while the review is still open. Do not include customer contact details. Never writes to Jobber.',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     inputSchema: {
       type: 'object',

@@ -117,6 +117,9 @@ describe('formatJobberNote', () => {
     expect(formatJobberNote({ kind: 'contact', channel: 'other', direction: 'outgoing', note: null, stepLabel: stepLabel('draft_quote') }, 'Denzel')).toBe('Cotiza · Quote drafting marked done by Denzel');
     expect(formatJobberNote({ kind: 'not_a_lead' }, 'Denzel')).toBe('Cotiza · Marked not a lead by Denzel');
     expect(formatJobberNote({ kind: 'not_a_lead' }, '')).toBe('Cotiza · Marked not a lead by the team');
+    // A long quote number is an identifier, not a phone number.
+    expect(formatJobberNote({ kind: 'review_requested', quoteNumber: '12345678' }, 'Denzel')).toBe('Cotiza · Quote #12345678 sent to Ben for review by Denzel');
+    expect(formatJobberNote({ kind: 'review_requested', quoteNumber: null }, 'Denzel')).toBe('Cotiza · Quote sent to Ben for review by Denzel');
   });
 
   it('redacts international and local numbers too, but keeps short numbers', () => {

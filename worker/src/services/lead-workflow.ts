@@ -270,7 +270,7 @@ export function computeLeadWorkflow(input: WorkflowInput): LeadWorkflow {
   // Jobber quote states: draft; sent and waiting on the customer; or settled (approved / converted to a job).
   const quoteStatuses = (input.quotes ?? []).map((q) => String(q.status ?? '').toLowerCase()).filter((st) => st && st !== 'archived');
   const quoteSettled = quoteStatuses.some((st) => st === 'approved' || st === 'converted');
-  const quoteSent = quoteSettled || quoteStatuses.some((st) => st === 'awaiting_response' || st === 'changes_requested');
+  const quoteSent = quoteSettled || quoteStatuses.some((st) => st === 'sent' || st === 'awaiting_response' || st === 'changes_requested');
   const quoteDrafted = quoteStatuses.length > 0;
   const oldNoQuote = (ageDays ?? 0) >= QUOTE_UPDATE_AFTER_DAYS && !quoteUpdateRecent;
 
@@ -303,7 +303,10 @@ export function computeLeadWorkflow(input: WorkflowInput): LeadWorkflow {
     action = !info.readyToQuote
       ? { kind: 'reply', label: 'Reply today', why: 'They got back to us. Answer the same day.', step: 'reply', channel: 'text' }
       : quoteDrafted
-        ? stageAction('They replied: answer them today. ') ?? { kind: 'draft_quote', label: 'Finish the quote', why: 'They replied and we have what we need to quote. Answer them, then get the quote out.', step: 'draft_quote', channel: 'other' }
+        // A reply always gets an answer: while the quote is with Ben (or its review is unknown) that answer is the action.
+        ? stage?.kind === 'ben_review' || stage?.kind === 'unknown'
+          ? { kind: 'reply', label: 'Reply today', why: `They got back to us. Answer the same day. ${stage.why}`, step: 'reply', channel: 'text' }
+          : stageAction('They replied: answer them today. ') ?? { kind: 'draft_quote', label: 'Finish the quote', why: 'They replied and we have what we need to quote. Answer them, then get the quote out.', step: 'draft_quote', channel: 'other' }
         : !oldNoQuote
           ? { kind: 'draft_quote', label: 'Draft quote', why: 'They replied and we have what we need to quote. Answer them, then get the quote out.', step: 'draft_quote', channel: 'other' }
           : { kind: 'quote_update', label: 'Reply: quote is coming', why: `They replied and the lead is ${ageDays} days old with no quote. Answer today and let them know it\u2019s coming.`, step: 'quote_update', channel: 'text' };

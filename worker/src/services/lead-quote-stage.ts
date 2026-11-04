@@ -34,8 +34,8 @@ export interface QuoteStageInput {
   reviews: Record<string, QuoteReview> | 'unknown';
   /** When the team sent each quote (by Jobber quote id) to Ben for review from Cotiza. */
   requested: Record<string, string>;
-  /** Quote ids with a pending review in Cotiza's older in-app review cycle. */
-  legacyPending: string[];
+  /** Quote ids with a pending review in Cotiza's older in-app review cycle; 'unknown' when unreadable. */
+  legacyPending: string[] | 'unknown';
 }
 
 export interface QuoteStage {
@@ -47,8 +47,11 @@ export interface QuoteStage {
   why: string;
 }
 
-const SENT = new Set(['awaiting_response', 'changes_requested', 'approved', 'converted']);
+export const SENT_QUOTE_STATUSES = new Set(['sent', 'awaiting_response', 'changes_requested', 'approved', 'converted']);
+const SENT = SENT_QUOTE_STATUSES;
 const APPROVED_TEXT = /\b(approved|good to go|looks good|route to customer|ready to send|send (?:it )?to (?:the )?customer|recheck passed|passed)\b/i;
+// "not approved", "hasn't passed", "not ready to send": never read as an approval.
+const NEGATED_TEXT = /\b(?:not|n['\u2019]t|never|no longer)\s+(?:yet\s+)?(?:been\s+)?(?:approved|passed|good to go|ready)\b/i;
 const CHANGES_TEXT = /\b(changes? requested|request(?:ed)? changes|edits? (?:needed|listed|sent|to make)|needs? (?:edits|changes|fixes)|team to (?:apply|fix|update)|send back|revise)\b/i;
 
 /** Ben's decision in one ledger record. */
@@ -60,6 +63,7 @@ export function reviewDecision(record: unknown): ReviewDecision {
   const text = typeof r.status === 'string' ? r.status : '';
   // Changes first: "approved once the team applies edits" is still a change request.
   if (CHANGES_TEXT.test(text)) return 'changes_requested';
+  if (NEGATED_TEXT.test(text)) return 'unclear';
   if (APPROVED_TEXT.test(text)) return 'approved';
   return 'unclear';
 }
@@ -83,10 +87,10 @@ export function computeQuoteStage(input: QuoteStageInput): QuoteStage {
   if (!drafts.length) return { kind: 'none', quote: null, label: 'No quote yet', why: 'No draft quote in Jobber yet.' };
   const q = drafts[0];
   const name = quoteName(q);
-  const requestedAt = Math.max(ms(input.requested[q.id]), input.legacyPending.includes(q.id) ? Infinity : -Infinity);
-  if (input.reviews === 'unknown') {
+  if (input.reviews === 'unknown' || input.legacyPending === 'unknown') {
     return { kind: 'unknown', quote: ref(q), label: `Quote ${name} · review status unknown`, why: `Ben's review of ${name} could not be read right now. Check with Ben before sending.` };
   }
+  const requestedAt = Math.max(ms(input.requested[q.id]), input.legacyPending.includes(q.id) ? Infinity : -Infinity);
   const review = q.number ? input.reviews[q.number] : undefined;
   const reviewedAfterRequest = review && ms(review.at) >= requestedAt;
   if (requestedAt > -Infinity && !reviewedAfterRequest) {
@@ -163,7 +167,7 @@ export async function gatherQuoteStage(db: D1Database, requestId: string, quotes
   const [reviews, requested, legacyPending] = await Promise.all([
     loadQuoteReviews(db, quotes.map((q) => q.number ?? '')).catch(() => 'unknown' as const),
     loadReviewRequests(db, requestId).catch(() => null),
-    loadLegacyPending(db, requestId).catch(() => [] as string[]),
+    loadLegacyPending(db, requestId).catch(() => 'unknown' as const),
   ]);
   // Without the team's review requests we can't tell "with Ben" from "drafting": say so.
   return computeQuoteStage({ quotes, reviews: requested === null ? 'unknown' : reviews, requested: requested ?? {}, legacyPending });

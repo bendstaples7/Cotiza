@@ -17,6 +17,8 @@ describe('reviewDecision', () => {
     expect(reviewDecision({ status: 'Good to go' })).toBe('approved');
     expect(reviewDecision({ status: 'edits listed; team to apply' })).toBe('changes_requested');
     expect(reviewDecision({ status: 'approved once the team applies edits; send back' })).toBe('changes_requested');
+    expect(reviewDecision({ status: 'not approved yet' })).toBe('unclear');
+    expect(reviewDecision({ status: "hasn't passed the recheck" })).toBe('unclear');
     expect(reviewDecision({ verification: [] })).toBe('unclear');
     expect(reviewDecision(null)).toBe('unclear');
   });
@@ -49,8 +51,13 @@ describe('computeQuoteStage', () => {
     expect(stage({ quotes: [{ ...draft('Q1', '716'), status: 'archived' }] }).kind).toBe('none');
   });
 
-  it('says so when the review ledger cannot be read', () => {
+  it('says so when the review ledger or the older review cycle cannot be read', () => {
     expect(stage({ reviews: 'unknown' })).toMatchObject({ kind: 'unknown', why: expect.stringContaining('could not be read') });
+    expect(stage({ legacyPending: 'unknown' }).kind).toBe('unknown');
+  });
+
+  it('treats Jobber\'s "sent" status as sent', () => {
+    expect(stage({ quotes: [{ ...draft('Q1', '716'), status: 'sent' }] }).kind).toBe('sent');
   });
 
   it('follows the newest draft', () => {
@@ -87,6 +94,12 @@ describe('the lead workflow uses the quote stage', () => {
       .toMatchObject({ progress: 'ready_to_send', bucket: 'do_now', action: { kind: 'send_quote', label: 'Send quote #716 in Jobber' } });
     expect(run(stage({ reviews: { 716: { at: '2026-11-04T17:00:00Z', decision: 'changes_requested' } } })).action)
       .toMatchObject({ kind: 'ben_edits', label: 'Make Ben’s edits' });
+  });
+
+  it('a customer reply while the quote is with Ben still gets answered today', () => {
+    const reply: ContactEvent = { at: '2026-11-04T15:30:00Z', channel: 'text', direction: 'incoming', source: 'quo', label: 'Text from customer' };
+    const w = run(stage({ requested: { Q1: '2026-11-04T15:00:00Z' } }), [lead, touch, reply]);
+    expect(w).toMatchObject({ bucket: 'do_now', action: { kind: 'reply', label: 'Reply today', why: expect.stringContaining('Waiting on Ben') } });
   });
 
   it('unknown review state says so instead of guessing', () => {

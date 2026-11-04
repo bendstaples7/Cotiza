@@ -317,12 +317,18 @@ function NextStepPanel({ lead, workflow, onChanged, panelRef }: { lead: LeadBund
   };
 
   const stageQuote = workflow.quoteStage?.quote ?? null;
+  // Only a quote the team is still working on can go to Ben; an unknown review state never offers it.
+  const canSendToBen = workflow.quoteStage?.kind === 'drafting' || workflow.quoteStage?.kind === 'changes';
+  // Stays true after a send until the refreshed workflow replaces this panel's action, so it can't be sent twice.
+  const [sentToBen, setSentToBen] = useState(false);
+  useEffect(() => { setSentToBen(false); }, [action.kind, workflow.quoteStage?.kind]);
   const sendToBen = async () => {
-    if (!stageQuote) return;
+    if (!stageQuote || !canSendToBen || sentToBen) return;
     setBusy(true);
     setError(null);
     try {
       const result = await requestQuoteReview(lead.requestId, stageQuote.id);
+      setSentToBen(true);
       setNotice(result.jobberNote?.status === 'failed'
         ? { text: 'Marked as with Ben. Couldn\u2019t add the Jobber note; retry it above.', warn: true }
         : { text: 'Marked as with Ben for review.', warn: false });
@@ -397,10 +403,12 @@ function NextStepPanel({ lead, workflow, onChanged, panelRef }: { lead: LeadBund
 
       {stageQuote && (action.kind === 'draft_quote' || action.kind === 'ben_edits') && (
         <>
-          <p style={{ ...muted, margin: 0 }}>{action.kind === 'ben_edits' ? 'Make the changes in Jobber, then send it back to Ben.' : 'When the quote is finished in Jobber, send it to Ben for review.'}</p>
+          <p style={{ ...muted, margin: 0 }}>{!canSendToBen ? 'Check with Ben before sending this quote.' : action.kind === 'ben_edits' ? 'Make the changes in Jobber, then send it back to Ben.' : 'When the quote is finished in Jobber, send it to Ben for review.'}</p>
           <div style={actions}>
             {stageQuote.webUri && <a style={btnLink} href={stageQuote.webUri} target="_blank" rel="noreferrer">Open quote{stageQuote.number ? ` #${stageQuote.number}` : ''} in Jobber</a>}
-            <button type="button" style={primaryBtn} disabled={busy} onClick={() => { void sendToBen(); }}>{busy ? 'Saving…' : 'Sent to Ben for review'}</button>
+            {canSendToBen && (
+              <button type="button" style={primaryBtn} disabled={busy || sentToBen} onClick={() => { void sendToBen(); }}>{busy ? 'Saving…' : sentToBen ? 'With Ben for review' : 'Sent to Ben for review'}</button>
+            )}
           </div>
         </>
       )}
