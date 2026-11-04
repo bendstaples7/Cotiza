@@ -175,7 +175,7 @@ function OutreachPanel({ lead, onChanged }: { lead: LeadBundle; onChanged: () =>
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ text: string; warn: boolean } | null>(null);
   // Rebuild the proposed text when the checklist changes (until the team edits it).
   const [edited, setEdited] = useState(false);
   useEffect(() => { if (!edited) setText(messages.text); }, [messages.text, edited]);
@@ -215,7 +215,7 @@ function OutreachPanel({ lead, onChanged }: { lead: LeadBundle; onChanged: () =>
     try {
       const result = await sendLeadText(lead.requestId, text.trim(), done.has('intro_text') ? undefined : 'intro_text');
       setConfirming(false);
-      setNotice(result.logged ? 'Text sent through Quo and logged.' : result.warning);
+      setNotice(result.logged ? { text: 'Text sent through Quo and logged.', warn: false } : { text: result.warning, warn: true });
       onChanged();
     } catch (err) {
       setError((err as ErrorResponse).message ?? 'The text was not sent.');
@@ -274,7 +274,7 @@ function OutreachPanel({ lead, onChanged }: { lead: LeadBundle; onChanged: () =>
       {!email && <p style={muted}>No email address in Jobber for this lead.</p>}
       {email && !mailto && <p style={muted}>The email address in Jobber doesn't look usable, so it can't be opened here. Copy the email instead.</p>}
       <p style={{ ...muted, marginTop: '0.5rem' }}>After sending from your own phone or email, tick the step above so it's logged.</p>
-      {notice && <p role="status" style={{ ...muted, color: '#166534' }}>{notice}</p>}
+      {notice && <p role="status" style={{ ...muted, color: notice.warn ? '#92400e' : '#166534', fontWeight: notice.warn ? 600 : 400 }}>{notice.text}</p>}
       {error && <p role="alert" style={inlineError}>{error}</p>}
     </section>
   );
