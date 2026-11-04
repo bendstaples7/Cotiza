@@ -110,7 +110,8 @@ export function parseApplyArgs(raw: unknown): { quoteId: string; quoteVersion: s
     const quantity = num(line.quantity);
     const unitPrice = num(line.unitPrice);
     if (!(quantity > 0) || quantity > 100000) throw new QuoteEditArgsError(`lines[${index}].quantity must be a positive number.`);
-    if (!(unitPrice >= 0) || unitPrice > 1000000) throw new QuoteEditArgsError(`lines[${index}].unitPrice must be zero or more.`);
+    // Negative prices are allowed for credit lines (Jobber's UI accepts them).
+    if (!Number.isFinite(unitPrice) || unitPrice < -1000000 || unitPrice > 1000000) throw new QuoteEditArgsError(`lines[${index}].unitPrice must be a number between -1,000,000 and 1,000,000.`);
     return { ...(line.id ? { id: line.id as string } : {}), name, ...(description === undefined ? {} : { description }), quantity, unitPrice };
   });
   return { quoteId: args.quoteId.trim(), quoteVersion: args.quoteVersion, lines };

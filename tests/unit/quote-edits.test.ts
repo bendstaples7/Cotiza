@@ -106,7 +106,9 @@ describe('parseApplyArgs', () => {
     expect(() => parseApplyArgs({ ...base, quoteVersion: 'x' })).toThrow('quoteVersion');
     expect(() => parseApplyArgs({ ...base, lines: [] })).toThrow('lines');
     expect(() => parseApplyArgs({ ...base, lines: [{ ...A, quantity: 0 }] })).toThrow('quantity');
-    expect(() => parseApplyArgs({ ...base, lines: [{ ...A, unitPrice: -1 }] })).toThrow('unitPrice');
+    expect(parseApplyArgs({ ...base, lines: [{ ...A, unitPrice: -250 }] }).lines[0].unitPrice).toBe(-250);
+    expect(() => parseApplyArgs({ ...base, lines: [{ ...A, unitPrice: -2000000 }] })).toThrow('unitPrice');
+    expect(() => parseApplyArgs({ ...base, lines: [{ ...A, unitPrice: 'x' }] })).toThrow('unitPrice');
     expect(() => parseApplyArgs({ ...base, lines: [A, A] })).toThrow('twice');
     expect(parseApplyArgs({ ...base, lines: [{ name: ' New ', quantity: 2, unitPrice: 0 }] }).lines[0]).toEqual({ name: 'New', quantity: 2, unitPrice: 0 });
   });
