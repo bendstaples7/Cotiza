@@ -144,6 +144,7 @@ describe('Requests work queue', () => {
     const doNow = await screen.findByRole('region', { name: 'Do now' });
     const row = await within(doNow).findByRole('article', { name: 'Lead: John Oconnell' });
     expect(within(row).getByTestId('lead-received-badge')).toHaveTextContent('Lead received ·7 days ago');
+    expect(within(within(row).getByTestId('lead-received-badge')).getByText('Nov 2')).toBeInTheDocument();
     expect(within(row).queryByText(/^Lead in /)).toBeNull();
     expect(within(row).getByRole('button', { name: /Also: Send “quote in progress” text/ })).toBeInTheDocument();
     await userEvent.click(within(row).getByRole('button', { name: 'Draft quote' }));

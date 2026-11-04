@@ -422,7 +422,7 @@ export default function RequestQueuePage() {
     const linkedQuotes = jobberQuoteBadges[id];
     return (
       <article key={id} style={{ ...rowStyle, position: 'relative', paddingTop: 44 }} aria-label={`Lead: ${req.customerName}`}>
-        <div style={receivedBadgeSlot}><LeadReceivedBadge createdAt={req.createdAt} ageDays={w?.ageDays} now={now} /></div>
+        <div style={receivedBadgeSlot}><LeadReceivedBadge createdAt={new Date(req.createdAt).toISOString()} ageDays={w?.ageDays} now={now} /></div>
         <div style={{ ...cellStyle, flex: '1.4 1 220px' }}>
           <a
             href={'/quotes/leads/' + encodeURIComponent(id)}
