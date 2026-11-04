@@ -26,6 +26,7 @@ import reviewRoutes from './routes/reviews.js';
 import mediaServeRoutes from './routes/media-serve.js';
 import reportRoutes from './routes/reports.js';
 import opsAssistantRoutes from './routes/ops-assistant.js';
+import leadRoutes from './routes/leads.js';
 
 const app = new Hono<{ Bindings: Bindings }>();
 
@@ -179,6 +180,7 @@ app.route('/api', settingsRoutes);
 app.route('/api/activity-log', activityLogRoutes);
 app.route('/api/content-ideas', contentIdeasRoutes);
 app.route('/api/quotes', quoteRoutes);
+app.route('/api/leads', leadRoutes);
 app.route('/api/jobber-auth', jobberAuthRoutes);
 app.route('/api/systems', systemsRoutes);
 app.route('/api', reviewRoutes);

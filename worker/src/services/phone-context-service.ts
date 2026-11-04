@@ -64,6 +64,8 @@ export class PhoneContextService {
   private apiKey: string;
   private phoneNumberId: string | null;
   private activityLog?: ActivityLogService;
+  /** Set when a Quo call fails, so callers can tell a failed read from an empty history. */
+  private lastReadFailed = false;
 
   constructor(
     apiKey: string,
@@ -100,10 +102,12 @@ export class PhoneContextService {
       });
       if (!res.ok) {
         // Non-200 means the API key is missing, expired, or the phone number lookup failed
+        this.lastReadFailed = true;
         return null;
       }
       return (await res.json()) as T;
     } catch {
+      this.lastReadFailed = true;
       return null;  // network failure or timeout — graceful degradation
     } finally {
       clearTimeout(timeout);
@@ -168,14 +172,19 @@ export class PhoneContextService {
 
   // ── Fetch transcripts and summaries for completed calls ────────
 
+  // Transcripts and summaries are often absent (short calls, plan limits): a missing one is not a failed read.
   private async fetchTranscript(callId: string): Promise<OpenPhoneTranscript | null> {
-    return this.apiFetch<{ data: OpenPhoneTranscript }>(`/call-transcripts/${callId}`)
-      .then(r => r?.data ?? null);
+    const failedBefore = this.lastReadFailed;
+    const result = await this.apiFetch<{ data: OpenPhoneTranscript }>(`/call-transcripts/${callId}`);
+    this.lastReadFailed = failedBefore;
+    return result?.data ?? null;
   }
 
   private async fetchCallSummary(callId: string): Promise<OpenPhoneCallSummary | null> {
-    return this.apiFetch<{ data: OpenPhoneCallSummary }>(`/call-summaries/${callId}`)
-      .then(r => r?.data ?? null);
+    const failedBefore = this.lastReadFailed;
+    const result = await this.apiFetch<{ data: OpenPhoneCallSummary }>(`/call-summaries/${callId}`);
+    this.lastReadFailed = failedBefore;
+    return result?.data ?? null;
   }
 
   // ── Format messages into readable text ─────────────────────────
@@ -289,5 +298,12 @@ export class PhoneContextService {
 
     parts.push('\n--- End Phone Context ---');
     return parts.join('\n');
+  }
+
+  /** Like fetchContext, but reports a failed read instead of returning an empty string for it. */
+  async fetchContextResult(customerPhone: string): Promise<{ status: 'ok'; text: string } | { status: 'failed' }> {
+    this.lastReadFailed = false;
+    const text = await this.fetchContext(customerPhone);
+    return this.lastReadFailed ? { status: 'failed' } : { status: 'ok', text };
   }
 }

@@ -56,6 +56,8 @@ GITHUB_REPO = "bendstaples7/chicago-reno-social-generator"
 # GITHUB_PAT               — GitHub personal access token with 'workflow' scope (triggers cookie refresh workflow from the app)
 # GMAIL_CLIENT_ID          — Google OAuth client ID for Gmail API (email context enrichment)
 # GMAIL_CLIENT_SECRET      — Google OAuth client secret for Gmail API (email context enrichment)
+# QUO_API_KEY              — Quo (OpenPhone) API key: call and text history on the lead page (optional)
+# QUO_PHONE_NUMBER_ID      — Quo phone number id (PN...) to read (optional)
 # GMAIL_REFRESH_TOKEN      — OAuth refresh token with https://www.googleapis.com/auth/gmail.readonly scope (email context enrichment)
 
 [triggers]

@@ -46,4 +46,8 @@ export interface Bindings {
   GMAIL_CLIENT_SECRET: string;
   /** Gmail API OAuth refresh token (with https://www.googleapis.com/auth/gmail.readonly scope) for email context enrichment. */
   GMAIL_REFRESH_TOKEN: string;
+  /** Quo (OpenPhone) API key for call and text history on the lead page. Optional: the page says Quo isn't connected without it. */
+  QUO_API_KEY?: string;
+  /** Quo phone number id (PN...) whose messages and calls to read. Optional. */
+  QUO_PHONE_NUMBER_ID?: string;
 }

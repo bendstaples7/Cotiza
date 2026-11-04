@@ -17,6 +17,7 @@ import QuoteDraftsListPage from './pages/QuoteDraftsListPage';
 import ManualFallbackPage from './pages/ManualFallbackPage';
 import RulesPage from './pages/RulesPage';
 import RequestQueuePage from './pages/RequestQueuePage';
+import LeadPage from './pages/LeadPage';
 import DeathclockDashboardPage from './pages/DeathclockDashboardPage';
 import PlaceholderPage from './pages/PlaceholderPage';
 import ReviewQueuePage from './pages/ReviewQueuePage';
@@ -54,6 +55,7 @@ export default function App() {
 
                 {/* Quotes section */}
                 <Route path="/quotes/requests" element={<RequestQueuePage />} />
+                <Route path="/quotes/leads/:requestId" element={<LeadPage />} />
                 <Route path="/quotes/queue" element={<QuotesQueueRedirect />} />
                 <Route path="/quotes/reviews" element={<ReviewQueuePage />} />
                 <Route path="/quotes" element={<QuotesHubPage />} />

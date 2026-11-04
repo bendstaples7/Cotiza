@@ -107,7 +107,7 @@ describe('finance:read scope', () => {
     expect(hasScope('ops:read', 'finance:read')).toBe(false);
     expect(hasScope('ops:read review:write', 'finance:read')).toBe(false);
     expect(hasScope('ops:read finance:read', 'finance:read')).toBe(true);
-    expect(oauthProtectedResourceMetadata('http://127.0.0.1:8787').scopes_supported).toEqual(['ops:read', 'review:write', 'finance:read', 'quote:write']);
+    expect(oauthProtectedResourceMetadata('http://127.0.0.1:8787').scopes_supported).toEqual(['ops:read', 'review:write', 'finance:read', 'quote:write', 'lead:write']);
   });
 
   it('hides the report tool from ops:read and review:write tokens without looking up the user', async () => {

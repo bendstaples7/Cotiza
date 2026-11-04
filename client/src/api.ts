@@ -1310,3 +1310,91 @@ export async function fetchRequestJobberQuotes(
   const data = await handleResponse<{ quotesByRequest: Record<string, Array<{ quoteNumber: string; quoteStatus: string }>> }>(res);
   return data.quotesByRequest;
 }
+
+// ── Lead hub ──
+
+export type LeadInfoStatus = 'open' | 'asked' | 'answered' | 'dropped';
+
+export interface LeadInfoItem {
+  id: string;
+  requestId: string;
+  question: string;
+  status: LeadInfoStatus;
+  answer: string | null;
+  required: boolean;
+  createdAt: string;
+  updatedAt: string;
+  createdVia: 'app' | 'assistant';
+  updatedVia: 'app' | 'assistant';
+}
+
+export interface LeadInfoSummary {
+  total: number;
+  open: number;
+  asked: number;
+  answered: number;
+  readyToQuote: boolean;
+}
+
+type Avail<T> = { availability: 'present'; value: T } | { availability: 'unavailable' | 'withheld'; reason?: string };
+type ContextBlock = { status: 'ok'; text: string } | { status: 'not_connected' | 'no_address' | 'no_number' | 'failed' };
+
+export interface LeadBundle {
+  requestId: string;
+  request: {
+    outcome: string;
+    request?: {
+      title: Avail<string>;
+      status: Avail<string>;
+      clientName: Avail<string>;
+      jobberWebUri: Avail<string>;
+      createdAt: Avail<string>;
+      requestBody: Avail<string> & { truncated?: boolean };
+      notes: Array<{ message: string; createdAt?: string; createdBy?: string; truncated?: boolean }>;
+      attachments: Array<{ fileName: Avail<string>; contentType: Avail<string> }>;
+    } | null;
+  };
+  quotes: {
+    jobberQuotes?: { outcome: string; items?: Array<{ id: string; quoteNumber: Avail<string>; title: Avail<string>; status: Avail<string>; jobberWebUri: Avail<string> }> };
+  };
+  contact: { email: string | null; phone: string | null };
+  email: ContextBlock;
+  phone: ContextBlock;
+  infoNeeded: { items: LeadInfoItem[]; summary: LeadInfoSummary };
+}
+
+export async function fetchLead(requestId: string): Promise<LeadBundle> {
+  const res = await fetch(API_BASE + '/api/leads/' + encodeURIComponent(requestId), { headers: { ...authHeaders() } });
+  return handleResponse(res);
+}
+
+/** A request photo as an object URL (photos need the session header, so <img src> can't fetch them directly). */
+export async function fetchLeadPhotoUrl(requestId: string, index: number): Promise<string> {
+  const res = await fetch(API_BASE + '/api/leads/' + encodeURIComponent(requestId) + '/photos/' + index, { headers: { ...authHeaders() } });
+  if (!res.ok) throw await parseErrorBody(res);
+  return URL.createObjectURL(await res.blob());
+}
+
+export async function fetchLeadSummaries(requestIds: string[]): Promise<{ summaries: Record<string, LeadInfoSummary> }> {
+  if (!requestIds.length) return { summaries: {} };
+  const res = await fetch(API_BASE + '/api/leads/summaries?ids=' + requestIds.map(encodeURIComponent).join(','), { headers: { ...authHeaders() } });
+  return handleResponse(res);
+}
+
+export async function addLeadInfo(requestId: string, question: string, required = true): Promise<{ item: LeadInfoItem }> {
+  const res = await fetch(API_BASE + '/api/leads/' + encodeURIComponent(requestId) + '/info', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ question, required }),
+  });
+  return handleResponseWithToast(res);
+}
+
+export async function updateLeadInfo(itemId: string, changes: { status?: LeadInfoStatus; answer?: string | null; question?: string }): Promise<{ item: LeadInfoItem }> {
+  const res = await fetch(API_BASE + '/api/leads/info/' + encodeURIComponent(itemId), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(changes),
+  });
+  return handleResponseWithToast(res);
+}
