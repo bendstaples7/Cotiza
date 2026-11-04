@@ -110,6 +110,26 @@ describe('Lead page next step', () => {
     expect(screen.getByText(/Getting info · here/)).toBeInTheDocument();
   });
 
+  it('shows the Lead received badge and switches to the secondary action', async () => {
+    api.fetchLead.mockResolvedValue({
+      ...bundle,
+      infoNeeded: { ...bundle.infoNeeded, summary: { ...bundle.infoNeeded.summary, readyToQuote: true } },
+      workflow: {
+        ...workflow, ageDays: 2, progress: 'ready_to_quote',
+        action: { kind: 'draft_quote', label: 'Draft quote', why: 'We have what we need to quote. No open questions.', step: 'draft_quote', channel: 'other' },
+        secondary: { kind: 'quote_update', label: 'Send “quote in progress” text', why: 'Let them know it’s coming.', step: 'quote_update', channel: 'text' },
+      },
+    });
+    renderLead();
+    const step = await screen.findByRole('region', { name: 'Next step' });
+    expect(screen.getByTestId('lead-received-badge')).toHaveTextContent('Lead received ·2 days ago');
+    expect(screen.queryByText(/^Lead in /)).toBeNull();
+    expect(within(step).getByRole('heading', { name: 'Draft quote' })).toBeInTheDocument();
+    await userEvent.click(within(step).getByRole('button', { name: 'Send “quote in progress” text' }));
+    expect(await within(step).findByRole('heading', { name: 'Send “quote in progress” text' })).toBeInTheDocument();
+    expect(within(step).getByRole('button', { name: 'Draft quote' })).toBeInTheDocument();
+  });
+
   it('Mark done logs the contact for this step and reloads', async () => {
     renderLead();
     const step = await screen.findByRole('region', { name: 'Next step' });

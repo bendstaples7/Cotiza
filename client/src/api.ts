@@ -1453,12 +1453,16 @@ export async function requestQuoteReview(requestId: string, quoteId: string): Pr
 }
 
 /** A lead's place in the handbook follow-up cadence and the one next action (worker: lead-workflow.ts). */
+export type LeadWorkflowAction = { kind: LeadActionKind; label: string; why: string; step: string; channel: 'text' | 'call' | 'email' | 'other' };
+
 export interface LeadWorkflow {
   bucket: LeadBucket;
   step: 1 | 2 | 3 | 4 | 5 | 'replied';
   stage: string;
   next: { on: string; source: 'set' | 'suggested'; overdue: boolean; dueToday: boolean; daysOverdue: number };
-  action: { kind: LeadActionKind; label: string; why: string; step: string; channel: 'text' | 'call' | 'email' | 'other' };
+  action: LeadWorkflowAction;
+  /** A smaller extra action under the main one (the handbook "quote in progress" update, or a reply). */
+  secondary?: LeadWorkflowAction | null;
   progress: LeadProgress;
   ageDays: number | null;
   likelySpam: boolean;

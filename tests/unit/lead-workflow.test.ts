@@ -127,24 +127,46 @@ describe('computeLeadWorkflow', () => {
     const ready = workflow(events, { info: info({ readyToQuote: true, firstAsk: null }) });
     expect(ready).toMatchObject({ bucket: 'do_now', progress: 'ready_to_quote' });
     expect(ready.action).toMatchObject({ kind: 'draft_quote', label: 'Draft quote' });
+    // They still get an answer today: as the secondary action under drafting.
+    expect(ready.secondary).toMatchObject({ kind: 'reply', label: 'Reply today' });
   });
 
-  it('ready to quote 3+ days after the lead came in: send the "quote in progress" update once', () => {
+  it('ready to quote: the main action is drafting; the "quote in progress" update is secondary, only when due and we have been quiet', () => {
     const old = request('2026-10-29T02:11:00Z');
     const events = [old, out('2026-10-29T15:00:00Z'), out('2026-10-30T15:00:00Z')];
     const ready = { info: info({ readyToQuote: true, firstAsk: null }) };
     const w = workflow(events, ready);
-    expect(w.action).toMatchObject({ kind: 'quote_update', label: 'Send “quote in progress” text', why: 'Lead is 7 days old with no quote. Let them know it’s coming.' });
-    const sent: ContactEvent = { ...out('2026-11-04T15:00:00Z'), source: 'cotiza', step: 'quote_update' };
-    expect(workflow([...events, sent], ready).action.kind).toBe('draft_quote');
+    expect(w).toMatchObject({ bucket: 'do_now', ageDays: 7 });
+    expect(w.action).toMatchObject({ kind: 'draft_quote', label: 'Draft quote' });
+    expect(w.secondary).toMatchObject({ kind: 'quote_update', label: 'Send “quote in progress” text' });
+    // We were in touch within 3 days (like an email this morning): no update offered.
+    const emailed: ContactEvent = { ...out('2026-11-04T11:00:00Z', 'email'), source: 'gmail', label: 'Email sent' };
+    const recent = workflow([...events, emailed], ready);
+    expect(recent.action.kind).toBe('draft_quote');
+    expect(recent.secondary).toBeNull();
+    expect(recent.bucket).toBe('do_now');
   });
 
-  it('a reply on an old ready lead is answered today, with the quote news', () => {
+  it('ready to quote with the next contact days away: still Do now, drafting, no update', () => {
+    const old = request('2026-10-28T20:00:00Z');
+    const events = [old, out('2026-10-29T15:00:00Z'), out('2026-10-30T15:00:00Z'), out('2026-11-03T15:00:00Z')];
+    const w = workflow(events, { info: info({ readyToQuote: true, firstAsk: null }) });
+    expect(w.next.overdue || w.next.dueToday).toBe(false);
+    expect(w).toMatchObject({ bucket: 'do_now', action: { kind: 'draft_quote' }, secondary: null });
+  });
+
+  it('a reply on an old ready lead: draft the quote, and answer them today as the secondary action', () => {
     const old = request('2026-10-29T02:11:00Z');
     const events = [old, out('2026-10-29T15:00:00Z'), inc('2026-10-29T18:44:00Z')];
     const w = workflow(events, { info: info({ readyToQuote: true, firstAsk: null }) });
-    expect(w.action).toMatchObject({ kind: 'quote_update', label: 'Reply: quote is coming' });
+    expect(w.action).toMatchObject({ kind: 'draft_quote', label: 'Draft quote' });
+    expect(w.secondary).toMatchObject({ kind: 'reply' });
     expect(w.next).toMatchObject({ on: '2026-10-29', daysOverdue: 6 });
+  });
+
+  it('counts the lead age in Chicago calendar days', () => {
+    // 9pm Oct 28 in Chicago is already Oct 29 in UTC; at 10am Nov 4 Chicago that is 7 days.
+    expect(workflow([request('2026-10-29T02:00:00Z')]).ageDays).toBe(7);
   });
 
   it('a quote in Jobber moves the lead on: finish a draft, follow up on a sent one', () => {

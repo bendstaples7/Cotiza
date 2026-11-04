@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
+import LeadReceivedBadge from '../components/LeadReceivedBadge';
 import type { ErrorResponse } from 'shared';
 import {
   addLeadInfo,
@@ -28,7 +29,7 @@ import { ASSUMED_PREFIX, buildActionMessage, itemKind, mailtoLink, MAX_TEXT_LENG
  */
 export default function LeadPage() {
   const { requestId = '' } = useParams();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const nextStepRef = useRef<HTMLElement | null>(null);
   const [lead, setLead] = useState<LeadBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -104,7 +105,6 @@ export default function LeadPage() {
 
   const workflow = lead.workflow ?? null;
   const createdAt = val(req?.createdAt);
-  const ageDays = workflow?.ageDays ?? (createdAt ? Math.max(0, Math.floor((Date.now() - Date.parse(createdAt)) / 86400_000)) : null);
 
   return (
     <div style={page}>
@@ -114,12 +114,12 @@ export default function LeadPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <h1 style={h1}>{val(req?.clientName) ?? (requestUnavailable ? 'Lead' : 'Unknown client')}</h1>
           <p style={subtitle}>{val(req?.title) ?? 'Untitled request'}</p>
-          <p style={{ ...muted, margin: 0 }}>
-            {createdAt ? `Lead in ${new Date(createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}${ageDays !== null ? ` (${ageDays === 0 ? 'today' : `${ageDays} day${ageDays === 1 ? '' : 's'} ago`})` : ''}` : ''}
-            {val(req?.jobberWebUri) && <> · <a href={val(req?.jobberWebUri)!} target="_blank" rel="noreferrer">Open in Jobber</a></>}
-          </p>
+          {val(req?.jobberWebUri) && (
+            <p style={{ ...muted, margin: 0 }}><a href={val(req?.jobberWebUri)!} target="_blank" rel="noreferrer">Open in Jobber</a></p>
+          )}
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end' }}>
+          <LeadReceivedBadge createdAt={createdAt} ageDays={workflow?.ageDays} />
           {workflow && workflow.bucket !== 'closed' && <NextContactChip workflow={workflow} />}
           <ReadyBadge ready={summary.readyToQuote} total={summary.total} open={summary.open + summary.asked} workflow={workflow} />
         </div>
@@ -134,7 +134,7 @@ export default function LeadPage() {
           {workflow?.bucket === 'closed' && workflow.closed
             ? <ClosedLeadPanel lead={lead} closure={workflow.closed} closeOutcome={closeOutcome} onChanged={() => { setCloseOutcome(null); reload(); }} />
             : workflow
-              ? <NextStepPanel lead={lead} workflow={withRequestedAction(workflow, fromAction)} onChanged={reload} panelRef={nextStepRef} />
+              ? <NextStepPanel lead={lead} workflow={withRequestedAction(workflow, fromAction)} onChanged={reload} panelRef={nextStepRef} onSwitch={(kind) => { const next = new URLSearchParams(searchParams); next.set('action', kind); setSearchParams(next, { replace: true }); }} />
               : <section style={card}><p style={muted}>The next step could not be worked out right now: Jobber's quotes for this request could not be fully read, so a quote may already be out. Check the quotes in Jobber before reaching out.</p></section>}
           {workflow?.bucket !== 'closed' && <CloseLeadPanel lead={lead} startOpen={fromAction === 'close'} postponedDue={workflow?.action.kind === 'check_back'} panelRef={closeRef} onClosed={setCloseOutcome} onChanged={reload} />}
         </div>
@@ -211,6 +211,10 @@ export default function LeadPage() {
  * lead sitting in Review. Only that case differs today; any other request keeps the workflow's action.
  */
 function withRequestedAction(workflow: LeadWorkflow, requested: string | null): LeadWorkflow {
+  // The queue's "Also:" button opens the lead on its secondary action; the main one becomes the "Also:" link here.
+  if (requested && workflow.secondary && requested === workflow.secondary.kind && requested !== workflow.action.kind) {
+    return { ...workflow, action: workflow.secondary, secondary: workflow.action };
+  }
   // A lead the team marked "not a lead" keeps its review action whatever the link asked for.
   if (workflow.notALead || requested !== 'intro_text' || workflow.action.kind === 'intro_text' || !workflow.likelySpam) return workflow;
   return { ...workflow, action: { kind: 'intro_text', label: 'Send intro text', why: 'No project described yet. One intro text to find out what they need.', step: 'intro_text', channel: 'text' } };
@@ -258,7 +262,7 @@ function NextContactChip({ workflow }: { workflow: LeadWorkflow }) {
  * The one thing to do next on this lead, with the message to send, ways to send it, and
  * "Mark done", which logs the contact so the handbook cadence picks the next date.
  */
-function NextStepPanel({ lead, workflow, onChanged, panelRef }: { lead: LeadBundle; workflow: LeadWorkflow; onChanged: () => void; panelRef: React.MutableRefObject<HTMLElement | null> }) {
+function NextStepPanel({ lead, workflow, onChanged, panelRef, onSwitch }: { lead: LeadBundle; workflow: LeadWorkflow; onChanged: () => void; panelRef: React.MutableRefObject<HTMLElement | null>; onSwitch?: (kind: string) => void }) {
   const req = lead.request.request;
   const clientName = req?.clientName?.availability === 'present' ? req.clientName.value ?? null : null;
   const title = req?.title?.availability === 'present' ? req.title.value ?? null : null;
@@ -394,6 +398,13 @@ function NextStepPanel({ lead, workflow, onChanged, panelRef }: { lead: LeadBund
         <span style={eyebrow}>Next step · {today ? 'do today' : `due ${formatDay(workflow.next.on)}`}</span>
         <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#111827' }}>{action.label}</h2>
         <p style={{ ...muted, margin: 0 }}>{action.why} {workflow.stage}.</p>
+        {workflow.secondary && onSwitch && (
+          <p style={{ ...muted, margin: 0 }}>
+            Also:{' '}
+            <button type="button" style={linkBtn} onClick={() => onSwitch(workflow.secondary!.kind)} title={workflow.secondary.why}>{workflow.secondary.label}</button>
+            {' '}<span>— {workflow.secondary.why}</span>
+          </p>
+        )}
       </div>
 
       {action.kind === 'review' && (

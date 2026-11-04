@@ -10,7 +10,7 @@ import { LeadContactService } from './lead-contact-service.js';
 import { gatherLeadWorkflow, type RequestDetail } from './lead-contact-status.js';
 import type { EmailContextService } from './email-context-service.js';
 import type { PhoneContextService } from './phone-context-service.js';
-import type { LeadWorkflow } from './lead-workflow.js';
+import { chicagoDate, daysBetween, type LeadWorkflow } from './lead-workflow.js';
 import { applyClosuresToOpenLeads } from './lead-closures.js';
 import { LEAD_MAX_PAGES, LEAD_PAGE_SIZE, leadClientName, loadOpenLeads, OPEN_LEAD_DAYS, type LeadNode } from './open-leads.js';
 import { sanitizeLogText } from './jobber-log-sanitize.mjs';
@@ -90,6 +90,7 @@ function publicNextStep(w: LeadWorkflow) {
     daysOverdue: w.next.daysOverdue,
     action: w.action.label,
     why: w.action.why,
+    alsoDo: w.secondary ? { action: w.secondary.label, why: w.secondary.why } : null,
     progress: w.progress,
   };
 }
@@ -160,7 +161,8 @@ export async function callLeadTool(db: D1Database, principal: AssistantPrincipal
             title: node.title?.trim() || null,
             jobberStatus: node.requestStatus ?? null,
             createdAt: node.createdAt ?? null,
-            ageDays: Number.isFinite(created) ? Math.max(0, Math.floor((now - created) / 86400_000)) : null,
+            // Chicago calendar days, the same count the request queue and the lead page show.
+            ageDays: Number.isFinite(created) ? Math.max(0, daysBetween(chicagoDate(created), chicagoDate(now))) : null,
             jobberWebUri: node.jobberWebUri ?? null,
             infoNeeded: summarize(itemsById[node.id] ?? []),
             nextStep: nextSteps[node.id] ?? null,

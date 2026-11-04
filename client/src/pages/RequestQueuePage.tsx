@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import DeathclockBadge from '../components/DeathclockBadge';
+import LeadReceivedBadge from '../components/LeadReceivedBadge';
 import RequestJobberQuoteModal from '../components/RequestJobberQuoteModal';
 import { formatDay, sourceList, timeAgo } from '../components/LeadContactLine';
 import type { ErrorResponse } from 'shared';
@@ -418,11 +419,10 @@ export default function RequestQueuePage() {
     const status = contactStatuses[id];
     const w = status?.workflow ?? null;
     const summary = leadSummaries[id];
-    const created = new Date(req.createdAt);
-    const ageDays = w?.ageDays ?? Math.max(0, Math.floor((now - created.getTime()) / 86400_000));
     const linkedQuotes = jobberQuoteBadges[id];
     return (
-      <article key={id} style={rowStyle} aria-label={`Lead: ${req.customerName}`}>
+      <article key={id} style={{ ...rowStyle, position: 'relative', paddingTop: 44 }} aria-label={`Lead: ${req.customerName}`}>
+        <div style={receivedBadgeSlot}><LeadReceivedBadge createdAt={req.createdAt} ageDays={w?.ageDays} now={now} /></div>
         <div style={{ ...cellStyle, flex: '1.4 1 220px' }}>
           <a
             href={'/quotes/leads/' + encodeURIComponent(id)}
@@ -432,7 +432,6 @@ export default function RequestQueuePage() {
             {req.customerName}
           </a>
           <span style={projectStyle}>{req.requestTitle?.trim() || req.serviceDescription?.trim() || 'Untitled request'}</span>
-          <span style={mutedSmall}>Lead in {created.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · {ageDays === 0 ? 'today' : `${ageDays} day${ageDays === 1 ? '' : 's'} ago`}</span>
           {linkedQuotes && linkedQuotes.length > 0 && (
             <span style={mutedSmall}>Jobber quote #{linkedQuotes[0].quoteNumber} · {linkedQuotes[0].quoteStatus.replace(/_/g, ' ')}</span>
           )}
@@ -479,6 +478,11 @@ export default function RequestQueuePage() {
             )}
             {w && w.bucket !== 'review' && (w.progress === 'ready_to_quote' || quoteChip(w) || (summary?.total ?? 0) > 0) && (
               <span style={readinessChipStyle(w, summary)}>{readinessText(w, summary)}</span>
+            )}
+            {w?.secondary && w.bucket !== 'review' && (
+              <button type="button" style={secondaryButtonStyle} onClick={() => openRequest(req, w.secondary!.kind)} title={w.secondary.why}>
+                Also: {w.secondary.label}
+              </button>
             )}
             <button type="button" style={linkButtonStyle} onClick={() => handleRequestClick(req)}>Quote builder</button>
             <button type="button" style={linkButtonStyle} onClick={() => openRequest(req, 'close')}>Close lead</button>
@@ -831,6 +835,7 @@ const emptyStyle: React.CSSProperties = {
 const tilesStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 };
 const tileStyle: React.CSSProperties = { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column', gap: 4 };
 
+const receivedBadgeSlot: React.CSSProperties = { position: 'absolute', top: 12, right: 16 };
 const rowStyle: React.CSSProperties = {
   background: '#fff',
   border: '1px solid #e5e7eb',
