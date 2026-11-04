@@ -17,6 +17,8 @@ vi.mock('../../client/src/api', () => ({
   fetchLeadSummaries: vi.fn().mockResolvedValue({ summaries: {} }),
   fetchLeadContactStatuses: vi.fn().mockResolvedValue({ statuses: {} }),
   setLeadNotALead: vi.fn().mockResolvedValue({ notALead: true }),
+  retryJobberNote: vi.fn(),
+  warnIfJobberNoteFailed: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------

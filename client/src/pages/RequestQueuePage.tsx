@@ -16,6 +16,7 @@ import {
   fetchLeadSummaries,
   fetchLeadContactStatuses,
   setLeadNotALead,
+  warnIfJobberNoteFailed,
 } from '../api';
 import type { JobberQueueStatus, LeadContactStatus, LeadInfoSummary, LeadWorkflow, ManualRequestWithDeathclock, ResolveRequestQuoteResult } from '../api';
 
@@ -330,7 +331,8 @@ export default function RequestQueuePage() {
   const markNotALead = async (requestId: string, notALead: boolean) => {
     setMarkingId(requestId);
     try {
-      await setLeadNotALead(requestId, notALead);
+      const result = await setLeadNotALead(requestId, notALead);
+      warnIfJobberNoteFailed(result?.jobberNote);
       // Move the row right away; the next poll recomputes the rest.
       setContactStatuses((prev) => {
         const status = prev[requestId];

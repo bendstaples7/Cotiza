@@ -245,17 +245,20 @@ export class LeadContactService {
     return row?.not_a_lead === 1;
   }
 
-  /** Marks a lead as not a real lead (true) or clears the mark (false). */
-  async setNotALead(requestId: string, value: unknown, userId: string, now: number = Date.now()): Promise<boolean> {
+  /**
+   * Marks a lead as not a real lead (true) or clears the mark (false). changed is true only for the
+   * one call that actually flipped the mark, so concurrent identical calls don't each act on it.
+   */
+  async setNotALead(requestId: string, value: unknown, userId: string, now: number = Date.now()): Promise<{ notALead: boolean; changed: boolean }> {
     if (typeof value !== 'boolean') throw new LeadContactError('notALead must be true or false.');
     if (!value) {
-      await this.db.prepare('DELETE FROM lead_marks WHERE jobber_request_id = ?').bind(requestId).run();
-      return false;
+      const res = await this.db.prepare('DELETE FROM lead_marks WHERE jobber_request_id = ?').bind(requestId).run();
+      return { notALead: false, changed: Boolean(res.meta?.changes) };
     }
-    await this.db
-      .prepare('INSERT INTO lead_marks (jobber_request_id, not_a_lead, updated_at, updated_by_user_id) VALUES (?, 1, ?, ?) ON CONFLICT(jobber_request_id) DO UPDATE SET not_a_lead = 1, updated_at = excluded.updated_at, updated_by_user_id = excluded.updated_by_user_id')
+    const res = await this.db
+      .prepare('INSERT INTO lead_marks (jobber_request_id, not_a_lead, updated_at, updated_by_user_id) VALUES (?, 1, ?, ?) ON CONFLICT(jobber_request_id) DO NOTHING')
       .bind(requestId, new Date(now).toISOString(), userId)
       .run();
-    return true;
+    return { notALead: true, changed: Boolean(res.meta?.changes) };
   }
 }

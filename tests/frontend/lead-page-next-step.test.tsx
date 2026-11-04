@@ -14,6 +14,8 @@ const api = vi.hoisted(() => ({
   sendLeadText: vi.fn(),
   setLeadNextContact: vi.fn(),
   setLeadNotALead: vi.fn(),
+  retryJobberNote: vi.fn(),
+  warnIfJobberNoteFailed: vi.fn(),
 }));
 vi.mock('../../client/src/api', () => api);
 
