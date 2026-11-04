@@ -47,6 +47,8 @@ export class EmailContextService {
   private refreshToken: string;
   private activityLog?: ActivityLogService;
   private cachedAccessToken: string | null = null;
+  /** Set when a Gmail call fails, so callers can tell a failed read from an empty history. */
+  private lastReadFailed = false;
   private tokenExpiresAt: number = 0;
 
   constructor(
@@ -120,10 +122,12 @@ export class EmailContextService {
         signal: controller.signal,
       });
       if (!res.ok) {
+        this.lastReadFailed = true;
         return null;
       }
       return (await res.json()) as T;
     } catch {
+      this.lastReadFailed = true;
       return null; // network failure or timeout — graceful degradation
     } finally {
       clearTimeout(timeout);
@@ -332,6 +336,14 @@ export class EmailContextService {
    * Gracefully degrades: returns empty string if credentials are missing,
    * network fails, or no emails are found.
    */
+  /** Like fetchContext, but reports a failed read instead of returning an empty string for it. */
+  async fetchContextResult(customerEmail: string): Promise<{ status: 'ok'; text: string } | { status: 'failed' }> {
+    this.lastReadFailed = false;
+    if (this.isAvailable() && !(await this.getAccessToken())) return { status: 'failed' };
+    const text = await this.fetchContext(customerEmail);
+    return this.lastReadFailed ? { status: 'failed' } : { status: 'ok', text };
+  }
+
   async fetchContext(customerEmail: string): Promise<string> {
     if (!this.isAvailable() || !customerEmail) {
       return '';

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { ErrorResponse } from 'shared';
 import {
@@ -20,18 +20,18 @@ export default function LeadPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async () => {
+  useEffect(() => {
+    // Ignore a slower response for a lead the user has already navigated away from.
+    let current = true;
+    setLoading(true);
     setError(null);
-    try {
-      setLead(await fetchLead(requestId));
-    } catch (err) {
-      setError((err as ErrorResponse).message ?? 'This lead could not be loaded.');
-    } finally {
-      setLoading(false);
-    }
+    setLead(null);
+    fetchLead(requestId)
+      .then((bundle) => { if (current) setLead(bundle); })
+      .catch((err) => { if (current) setError((err as ErrorResponse).message ?? 'This lead could not be loaded.'); })
+      .finally(() => { if (current) setLoading(false); });
+    return () => { current = false; };
   }, [requestId]);
-
-  useEffect(() => { load(); }, [load]);
 
   const replaceItem = (item: LeadInfoItem) => setLead((prev) => {
     if (!prev) return prev;
@@ -51,6 +51,7 @@ export default function LeadPage() {
   }
 
   const req = lead.request.request;
+  const requestUnavailable = lead.request.outcome !== 'ok' || !req;
   const val = <T,>(f: { availability: string; value?: T } | undefined): T | null => (f && f.availability === 'present' ? (f.value ?? null) : null);
   const summary = lead.infoNeeded.summary;
   const quotes = lead.quotes.jobberQuotes?.items ?? [];
@@ -63,7 +64,7 @@ export default function LeadPage() {
 
       <header style={headerRow}>
         <div>
-          <h1 style={h1}>{val(req?.clientName) ?? 'Unknown client'}</h1>
+          <h1 style={h1}>{val(req?.clientName) ?? (requestUnavailable ? 'Lead' : 'Unknown client')}</h1>
           <p style={subtitle}>{val(req?.title) ?? 'Untitled request'}</p>
           <p style={muted}>
             {val(req?.createdAt) ? `Requested ${new Date(val(req?.createdAt)!).toLocaleDateString()}` : ''}
@@ -85,7 +86,12 @@ export default function LeadPage() {
 
       <section style={card}>
         <h2 style={h2}>Request</h2>
-        {val(req?.requestBody) ? <p style={pre}>{val(req?.requestBody)}</p> : <p style={muted}>No request text.</p>}
+        {requestUnavailable && (
+          <p role="alert" style={alert}>
+            {lead.request.outcome === 'not_found' ? 'Jobber has no request with this id.' : 'The Jobber request could not be read right now. This is not an empty request.'}
+          </p>
+        )}
+        {!requestUnavailable && (val(req?.requestBody) ? <p style={pre}>{val(req?.requestBody)}</p> : <p style={muted}>No request text.</p>)}
         {(req?.notes ?? []).length > 0 && (
           <>
             <h3 style={h3}>Notes</h3>

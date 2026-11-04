@@ -16,3 +16,5 @@ CREATE TABLE IF NOT EXISTS lead_info_items (
   updated_via TEXT NOT NULL CHECK (updated_via IN ('app', 'assistant'))
 );
 CREATE INDEX IF NOT EXISTS idx_lead_info_items_request ON lead_info_items(jobber_request_id, created_at);
+-- One live copy of each question per lead (case-insensitive); a dropped question can be asked again.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_info_items_question ON lead_info_items(jobber_request_id, lower(question)) WHERE status <> 'dropped';

@@ -6,7 +6,7 @@
  */
 import type { AssistantPrincipal } from './assistant-access.js';
 import { ManualRequestService } from './manual-request-service.js';
-import { LeadInfoError, LeadInfoService, requireRequestId, summarize, validateQuestion } from './lead-info-service.js';
+import { applyChange, LeadInfoError, LeadInfoService, MAX_ITEMS_PER_LEAD, requireRequestId, summarize, validateQuestion } from './lead-info-service.js';
 
 export class LeadToolArgsError extends Error {}
 
@@ -103,26 +103,32 @@ export async function callLeadTool(db: D1Database, principal: AssistantPrincipal
       if (!Array.isArray(add) || !Array.isArray(update) || add.length > 15 || update.length > 30) throw new LeadToolArgsError('add (up to 15) and update (up to 30) must be lists.');
       if (!add.length && !update.length) throw new LeadToolArgsError('Send at least one question to add or update.');
       const by = { userId: principal.userId, via: 'assistant' as const };
-      const existing = new Set((await info.list(requestId)).map((i) => i.id));
-      for (const change of update) {
-        const itemId = (change as { itemId?: unknown })?.itemId;
-        if (typeof itemId !== 'string' || !existing.has(itemId)) throw new LeadToolArgsError('Every update needs an itemId from this lead\'s checklist.');
-      }
-      // Validate the whole batch before writing any of it.
+      // Check the whole batch before writing any of it.
+      const current = await info.list(requestId);
+      const byId = new Map(current.map((i) => [i.id, i]));
+      const updates = update.map((change) => {
+        const c = objectArgs(change, ['itemId', 'status', 'answer', 'question']);
+        const item = typeof c.itemId === 'string' ? byId.get(c.itemId) : undefined;
+        if (!item) throw new LeadToolArgsError('Every update needs an itemId from this lead\'s checklist.');
+        const fields = Object.fromEntries(Object.entries(c).filter(([key]) => key !== 'itemId'));
+        applyChange(item, fields);
+        return { itemId: item.id, fields };
+      });
       const adds = add.map((entry) => {
         const e = objectArgs(entry, ['question', 'required']);
         validateQuestion(e.question);
+        if (e.required !== undefined && typeof e.required !== 'boolean') throw new LeadToolArgsError('required must be true or false.');
         return e;
       });
-      const added = [];
-      for (const e of adds) added.push(await info.add(requestId, e, by));
-      const updated = [];
-      for (const change of update) {
-        const c = objectArgs(change, ['itemId', 'status', 'answer', 'question']);
-        updated.push(await info.update(c.itemId, c, by));
+      const newQuestions = new Set(adds.map((e) => String(e.question).trim().toLowerCase()));
+      const alreadyThere = current.filter((i) => newQuestions.has(i.question.toLowerCase())).length;
+      if (current.length + newQuestions.size - alreadyThere > MAX_ITEMS_PER_LEAD) {
+        throw new LeadToolArgsError(`A lead can have at most ${MAX_ITEMS_PER_LEAD} questions; this batch would go over.`);
       }
+      for (const u of updates) await info.update(u.itemId, u.fields, by);
+      for (const e of adds) await info.add(requestId, e, by);
       const items = await info.list(requestId);
-      return { outcome: 'ok' as const, requestId, added: added.length, updated: updated.length, items, summary: summarize(items) };
+      return { outcome: 'ok' as const, requestId, added: adds.length, updated: updates.length, items: items.map((i) => ({ ...i, untrusted: true })), summary: summarize(items) };
     }
     throw new LeadToolArgsError('Unknown tool');
   } catch (err) {

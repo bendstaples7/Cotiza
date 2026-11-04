@@ -39,6 +39,7 @@ const REQUEST_ID_RE = /^[A-Za-z0-9+/=_-]{4,200}$/;
 const MAX_QUESTION = 300;
 const MAX_ANSWER = 2000;
 const MAX_ITEMS_PER_LEAD = 30;
+export { MAX_ITEMS_PER_LEAD };
 // A phone number or email in an answer is contact data: it belongs in Jobber, not this list.
 const CONTACT_RE = /[^\s@]+@[^\s@]+\.[a-z]{2,}|(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/i;
 
@@ -58,6 +59,34 @@ function cleanText(value: unknown, field: string, max: number, min = 1): string 
 /** Check a question without saving it (lets callers reject a batch before writing any of it). */
 export function validateQuestion(value: unknown): string {
   return cleanText(value, 'question', MAX_QUESTION, 3);
+}
+
+export const ITEM_ID_RE = /^lii_[0-9a-f-]{36}$/;
+
+function objectInput(input: unknown): Record<string, unknown> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new LeadInfoError('Send the change as an object.');
+  return input as Record<string, unknown>;
+}
+
+/**
+ * The item after a change, or a LeadInfoError. Pure, so a batch can be checked in full before
+ * anything is written.
+ */
+export function applyChange(item: LeadInfoItem, input: unknown): LeadInfoItem {
+  const fields = objectInput(input);
+  let status = item.status;
+  if (fields.status !== undefined) {
+    if (!(LEAD_INFO_STATUSES as readonly unknown[]).includes(fields.status)) throw new LeadInfoError(`status must be one of ${LEAD_INFO_STATUSES.join(', ')}.`);
+    status = fields.status as LeadInfoStatus;
+  }
+  let answer = item.answer;
+  if (fields.answer !== undefined) {
+    answer = fields.answer === null || fields.answer === '' ? null : cleanText(fields.answer, 'answer', MAX_ANSWER);
+    if (answer && fields.status === undefined) status = 'answered';
+  }
+  if (status === 'answered' && !answer) throw new LeadInfoError('An answered question needs the answer.');
+  const question = fields.question === undefined ? item.question : cleanText(fields.question, 'question', MAX_QUESTION, 3);
+  return { ...item, question, status, answer };
 }
 
 function rowToItem(row: Record<string, unknown>): LeadInfoItem {
@@ -112,48 +141,48 @@ export class LeadInfoService {
     return Object.fromEntries([...grouped].map(([id, items]) => [id, summarize(items)]));
   }
 
-  async add(requestId: string, input: { question?: unknown; required?: unknown }, by: { userId: string; via: LeadInfoVia }): Promise<LeadInfoItem> {
+  async add(requestId: string, input: { question?: unknown; required?: unknown } | null | undefined, by: { userId: string; via: LeadInfoVia }): Promise<LeadInfoItem> {
     const id = requireRequestId(requestId);
-    const question = cleanText(input.question, 'question', MAX_QUESTION, 3);
-    if (input.required !== undefined && typeof input.required !== 'boolean') throw new LeadInfoError('required must be true or false.');
-    const existing = await this.list(id);
-    if (existing.length >= MAX_ITEMS_PER_LEAD) throw new LeadInfoError(`A lead can have at most ${MAX_ITEMS_PER_LEAD} questions.`);
-    const duplicate = existing.find((i) => i.status !== 'dropped' && i.question.toLowerCase() === question.toLowerCase());
-    if (duplicate) return duplicate;
+    const fields = objectInput(input);
+    const question = cleanText(fields.question, 'question', MAX_QUESTION, 3);
+    if (fields.required !== undefined && typeof fields.required !== 'boolean') throw new LeadInfoError('required must be true or false.');
     const now = this.now().toISOString();
     const itemId = `lii_${crypto.randomUUID()}`;
-    await this.db.prepare(
+    const required = fields.required === false ? 0 : 1;
+    // The cap and the duplicate check live in the statement (and a unique index) so two saves at
+    // the same moment can't both slip past them.
+    const result = await this.db.prepare(
       `INSERT INTO lead_info_items
          (id, jobber_request_id, question, status, answer, required, created_at, updated_at, created_via, created_by_user_id, updated_by_user_id, updated_via)
-       VALUES (?, ?, ?, 'open', NULL, ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(itemId, id, question, input.required === false ? 0 : 1, now, now, by.via, by.userId, by.userId, by.via).run();
-    return {
-      id: itemId, requestId: id, question, status: 'open', answer: null, required: input.required !== false,
-      createdAt: now, updatedAt: now, createdVia: by.via, updatedVia: by.via,
-    };
+       SELECT ?, ?, ?, 'open', NULL, ?, ?, ?, ?, ?, ?, ?
+       WHERE (SELECT COUNT(*) FROM lead_info_items WHERE jobber_request_id = ?) < ?
+       ON CONFLICT DO NOTHING`,
+    ).bind(itemId, id, question, required, now, now, by.via, by.userId, by.userId, by.via, id, MAX_ITEMS_PER_LEAD).run();
+    if ((result.meta?.changes ?? 0) > 0) {
+      return {
+        id: itemId, requestId: id, question, status: 'open', answer: null, required: required === 1,
+        createdAt: now, updatedAt: now, createdVia: by.via, updatedVia: by.via,
+      };
+    }
+    const duplicate = (await this.list(id)).find((i) => i.status !== 'dropped' && i.question.toLowerCase() === question.toLowerCase());
+    if (duplicate) return duplicate;
+    throw new LeadInfoError(`A lead can have at most ${MAX_ITEMS_PER_LEAD} questions.`);
   }
 
-  async update(itemId: unknown, input: { status?: unknown; answer?: unknown; question?: unknown }, by: { userId: string; via: LeadInfoVia }): Promise<LeadInfoItem> {
-    if (typeof itemId !== 'string' || !/^lii_[0-9a-f-]{36}$/.test(itemId)) throw new LeadInfoError('itemId is not valid.');
+  async update(itemId: unknown, input: { status?: unknown; answer?: unknown; question?: unknown } | null | undefined, by: { userId: string; via: LeadInfoVia }): Promise<LeadInfoItem> {
+    if (typeof itemId !== 'string' || !ITEM_ID_RE.test(itemId)) throw new LeadInfoError('itemId is not valid.');
     const row = await this.db.prepare(`SELECT * FROM lead_info_items WHERE id = ?`).bind(itemId).first<Record<string, unknown>>();
     if (!row) throw new LeadInfoError('That question no longer exists.');
-    const item = rowToItem(row);
-    let status = item.status;
-    if (input.status !== undefined) {
-      if (!(LEAD_INFO_STATUSES as readonly unknown[]).includes(input.status)) throw new LeadInfoError(`status must be one of ${LEAD_INFO_STATUSES.join(', ')}.`);
-      status = input.status as LeadInfoStatus;
-    }
-    let answer = item.answer;
-    if (input.answer !== undefined) {
-      answer = input.answer === null || input.answer === '' ? null : cleanText(input.answer, 'answer', MAX_ANSWER);
-      if (answer && input.status === undefined) status = 'answered';
-    }
-    if (status === 'answered' && !answer) throw new LeadInfoError('An answered question needs the answer.');
-    const question = input.question === undefined ? item.question : cleanText(input.question, 'question', MAX_QUESTION, 3);
+    const next = applyChange(rowToItem(row), input);
     const now = this.now().toISOString();
-    await this.db.prepare(
-      `UPDATE lead_info_items SET question = ?, status = ?, answer = ?, updated_at = ?, updated_by_user_id = ?, updated_via = ? WHERE id = ?`,
-    ).bind(question, status, answer, now, by.userId, by.via, itemId).run();
-    return { ...item, question, status, answer, updatedAt: now, updatedVia: by.via };
+    try {
+      await this.db.prepare(
+        `UPDATE lead_info_items SET question = ?, status = ?, answer = ?, updated_at = ?, updated_by_user_id = ?, updated_via = ? WHERE id = ?`,
+      ).bind(next.question, next.status, next.answer, now, by.userId, by.via, itemId).run();
+    } catch (err) {
+      if (/UNIQUE/i.test(err instanceof Error ? err.message : '')) throw new LeadInfoError('That question is already on the list.');
+      throw err;
+    }
+    return { ...next, updatedAt: now, updatedVia: by.via };
   }
 }

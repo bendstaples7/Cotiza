@@ -51,9 +51,10 @@ app.get('/:requestId', async (c) => {
   // Email and Quo context are best-effort: a missing connection is reported, never an empty history.
   const email = new EmailContextService(c.env.GMAIL_CLIENT_ID, c.env.GMAIL_CLIENT_SECRET, c.env.GMAIL_REFRESH_TOKEN);
   const phone = new PhoneContextService(c.env.QUO_API_KEY ?? '', c.env.QUO_PHONE_NUMBER_ID ?? null);
-  const [emailText, phoneText] = await Promise.all([
-    email.isAvailable() && contact?.email ? email.fetchContext(contact.email).catch(() => null) : Promise.resolve(null),
-    phone.isAvailable() && contact?.phone ? phone.fetchContext(contact.phone).catch(() => null) : Promise.resolve(null),
+  const failed = { status: 'failed' as const };
+  const [emailResult, phoneResult] = await Promise.all([
+    email.isAvailable() && contact.email ? email.fetchContextResult(contact.email).catch(() => failed) : Promise.resolve(null),
+    phone.isAvailable() && contact.phone ? phone.fetchContextResult(contact.phone).catch(() => failed) : Promise.resolve(null),
   ]);
 
   return c.json({
@@ -61,14 +62,8 @@ app.get('/:requestId', async (c) => {
     request,
     quotes,
     contact,
-    email: !email.isAvailable()
-      ? { status: 'not_connected' }
-      : !contact?.email ? { status: 'no_address' }
-        : emailText === null ? { status: 'failed' } : { status: 'ok', text: emailText },
-    phone: !phone.isAvailable()
-      ? { status: 'not_connected' }
-      : !contact?.phone ? { status: 'no_number' }
-        : phoneText === null ? { status: 'failed' } : { status: 'ok', text: phoneText },
+    email: !email.isAvailable() ? { status: 'not_connected' } : !contact.email ? { status: 'no_address' } : emailResult,
+    phone: !phone.isAvailable() ? { status: 'not_connected' } : !contact.phone ? { status: 'no_number' } : phoneResult,
     infoNeeded: { items, summary: summarize(items) },
   });
 });
