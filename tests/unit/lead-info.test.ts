@@ -30,10 +30,14 @@ function sqliteD1() {
           if (sql.startsWith('SELECT * FROM lead_info_items WHERE jobber_request_id IN (')) {
             return { results: table.filter((r) => args.includes(r.jobber_request_id)) };
           }
+          // Contacts logged in Cotiza (none in these tests).
+          if (sql.startsWith('SELECT * FROM lead_contacts WHERE jobber_request_id = ?')) return { results: [] };
           throw new Error(`unexpected all(): ${sql}`);
         },
         async first() {
           if (sql === 'SELECT * FROM lead_info_items WHERE id = ?') return table.find((r) => r.id === args[0]) ?? null;
+          if (sql === 'SELECT next_contact_on FROM lead_followups WHERE jobber_request_id = ?') return null;
+          if (sql === 'SELECT not_a_lead FROM lead_marks WHERE jobber_request_id = ?') return null;
           throw new Error(`unexpected first(): ${sql}`);
         },
         async run() {
@@ -152,16 +156,24 @@ describe('lead connector tools', () => {
       { requests: { edges: [node(REQ, 'new', '2026-11-02T12:00:00Z'), node('Z2lkOi8vSm9iYmVyL1JlcXVlc3QvMw==', 'converted', '2026-11-01T00:00:00Z')], pageInfo: { hasNextPage: true, endCursor: 'c1' } } },
       { requests: { edges: [node(OTHER, 'assessment_completed', '2026-10-20T00:00:00Z', '', ''), node('Z2lkOi8vSm9iYmVyL1JlcXVlc3QvNA==', 'new', '2026-08-01T00:00:00Z')], pageInfo: { hasNextPage: true, endCursor: 'c2' } } },
     ];
-    const graphqlRequest = vi.fn().mockImplementation(async (_q: string, vars: { after: string | null }) => (vars.after === null ? pages[0] : pages[1]));
+    // The request detail behind each lead's next step: REQ came in Nov 2 and nobody has reached out.
+    const detail = { id: REQ, title: 'Shower', requestStatus: 'new', createdAt: '2026-11-02T12:00:00Z', phone: '(773) 555-0100', email: 'sentinel@example.com', notes: { edges: [] }, noteAttachments: { edges: [] } };
+    const graphqlRequest = vi.fn().mockImplementation(async (_q: string, vars: { after?: string | null; id?: string }) => {
+      if (vars.id !== undefined) return { request: vars.id === REQ ? detail : null };
+      return vars.after === null ? pages[0] : pages[1];
+    });
     const result = await callLeadTool(d1, principal, 'list_open_leads', { limit: 10 }, { graphqlRequest } as never, now) as {
-      outcome: string; total: number; totalIsComplete: boolean; leads: Array<{ requestId: string; client: string | null; title: string; jobberStatus: string; ageDays: number; infoNeeded: { total: number } }>;
+      outcome: string; total: number; totalIsComplete: boolean;
+      leads: Array<{ requestId: string; client: string | null; title: string; jobberStatus: string; ageDays: number; infoNeeded: { total: number }; nextStep: Record<string, unknown> | null }>;
     };
-    expect(graphqlRequest).toHaveBeenCalledTimes(2);
+    expect(graphqlRequest.mock.calls.filter(([, vars]) => (vars as { id?: string }).id === undefined)).toHaveLength(2);
     expect(result).toMatchObject({ outcome: 'ok', total: 2, totalIsComplete: true });
     expect(result.leads.map((l) => [l.requestId, l.client, l.title, l.jobberStatus, l.ageDays, l.infoNeeded.total])).toEqual([
       [OTHER, null, 'Shower', 'assessment_completed', 15, 0],
       [REQ, 'Keeley Sorokti', 'Shower', 'new', 2, 1],
     ]);
+    expect(result.leads[1].nextStep).toMatchObject({ bucket: 'do_now', stage: 'Step 1 · reach out on intake', due: 'overdue', daysOverdue: 2, action: 'Send intro text' });
+    expect(JSON.stringify(result)).not.toMatch(/773|sentinel/);
     await expect(callLeadTool(d1, principal, 'list_open_leads', { limit: 0 }, { graphqlRequest } as never)).rejects.toThrow('limit');
     await expect(callLeadTool(d1, principal, 'list_open_leads', { days: 0 }, { graphqlRequest } as never)).rejects.toThrow('days');
   });

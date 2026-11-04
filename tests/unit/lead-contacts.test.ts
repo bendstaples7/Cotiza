@@ -5,7 +5,6 @@ import {
   computeContactStatus,
   LeadContactError,
   LeadContactService,
-  suggestNextContact,
   validateContact,
   type ContactEvent,
 } from '../../worker/src/services/lead-contact-service.js';
@@ -16,7 +15,6 @@ const REQ = 'Z2lkOi8vSm9iYmVyL1JlcXVlc3QvMzU3NTY4NzI=';
 const NOW = Date.parse('2026-11-04T16:00:00Z');
 
 const out = (at: string, channel: ContactEvent['channel'] = 'text'): ContactEvent => ({ at, channel, direction: 'outgoing', source: 'quo', label: 'Text sent' });
-const inc = (at: string, channel: ContactEvent['channel'] = 'text'): ContactEvent => ({ at, channel, direction: 'incoming', source: 'quo', label: 'Text from customer' });
 const request = (at: string): ContactEvent => ({ at, channel: 'request', direction: 'incoming', source: 'jobber', label: 'Request came in' });
 
 /** In-memory D1 for exactly the statements LeadContactService runs. */
@@ -69,38 +67,6 @@ describe('dates', () => {
     expect(addBusinessDays('2026-11-06', 1)).toBe('2026-11-09'); // Fri + 1 -> Mon
     expect(addBusinessDays('2026-11-04', 2)).toBe('2026-11-06');
     expect(addBusinessDays('2026-11-05', 4)).toBe('2026-11-11');
-  });
-});
-
-describe('suggestNextContact', () => {
-  it('is today when nobody has reached out yet', () => {
-    expect(suggestNextContact([request('2026-11-02T12:00:00Z')], NOW)).toEqual({ on: '2026-11-04', reason: 'No outreach yet' });
-    expect(suggestNextContact([], NOW).on).toBe('2026-11-04');
-  });
-
-  it('is today when the customer spoke last', () => {
-    const s = suggestNextContact([out('2026-11-02T15:00:00Z'), inc('2026-11-03T15:00:00Z')], NOW);
-    expect(s).toEqual({ on: '2026-11-04', reason: 'Customer replied; get back to them' });
-  });
-
-  it('steps 1, 2, then 4 business days after unanswered outreach, ignoring team notes', () => {
-    const base = [request('2026-11-02T12:00:00Z')];
-    expect(suggestNextContact([...base, out('2026-11-02T15:00:00Z')], NOW).on).toBe('2026-11-03');
-    expect(suggestNextContact([...base, out('2026-11-02T15:00:00Z'), out('2026-11-03T15:00:00Z', 'call')], NOW).on).toBe('2026-11-05');
-    const three = [...base, out('2026-11-02T15:00:00Z'), out('2026-11-03T15:00:00Z'), out('2026-11-05T15:00:00Z', 'email')];
-    expect(suggestNextContact(three, NOW)).toEqual({ on: '2026-11-11', reason: 'No reply after 3 attempts; follow up' });
-    const note: ContactEvent = { at: '2026-11-04T15:00:00Z', channel: 'note', direction: 'outgoing', source: 'jobber', label: 'Team note in Jobber' };
-    expect(suggestNextContact([...base, out('2026-11-02T15:00:00Z'), note], NOW).on).toBe('2026-11-03');
-  });
-});
-
-describe('answered calls', () => {
-  it('treat a connected call we made as a conversation: follow up the next business day', () => {
-    const call: ContactEvent = { at: '2026-11-03T15:00:00Z', channel: 'call', direction: 'outgoing', source: 'quo', label: 'Call made', conversation: true };
-    expect(suggestNextContact([request('2026-11-02T12:00:00Z'), out('2026-11-02T15:00:00Z'), call], NOW))
-      .toEqual({ on: '2026-11-04', reason: 'Spoke with the customer; follow up' });
-    // Unanswered outreach after the conversation starts the cadence again.
-    expect(suggestNextContact([call, out('2026-11-04T15:00:00Z')], NOW).on).toBe('2026-11-05');
   });
 });
 
@@ -167,8 +133,9 @@ describe('gatherContactStatus', () => {
     expect(phone.fetchActivityResult).toHaveBeenCalledWith('(773) 555-0100');
     expect(status.last).toMatchObject({ label: 'Text sent', source: 'quo' });
     expect(status.unavailable).toEqual(['gmail']);
-    expect(status.recent.map((e) => e.label)).toEqual(['Text sent', 'Visited', 'Team note in Jobber', 'Note from customer', 'Request came in']);
-    expect(status.next).toMatchObject({ on: '2026-11-06', source: 'suggested' }); // 2 attempts: +2 business days
+    expect(status.recent.map((e) => e.label)).toEqual(['Text sent', 'Visited', 'Spoke with customer (Jobber note)', 'Note from customer', 'Request came in']);
+    // Spoke on the call, then 2 touches: step 3, 2 business days after the latest.
+    expect(status.next).toMatchObject({ on: '2026-11-06', source: 'suggested', reason: 'Step 3 · every 2–3 business days' });
     expect(JSON.stringify(status)).not.toMatch(/773|example\.com/);
   });
 

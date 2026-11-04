@@ -5,10 +5,15 @@
  * and contact details are never returned or stored.
  */
 import type { AssistantPrincipal } from './assistant-access.js';
-import type { JobberReadClient } from './ops-assistant-read.js';
+import { OpsAssistantRead, type JobberReadClient } from './ops-assistant-read.js';
+import { LeadContactService } from './lead-contact-service.js';
+import { gatherLeadWorkflow, type RequestDetail } from './lead-contact-status.js';
+import type { EmailContextService } from './email-context-service.js';
+import type { PhoneContextService } from './phone-context-service.js';
+import type { LeadWorkflow } from './lead-workflow.js';
 import { LEAD_MAX_PAGES, LEAD_PAGE_SIZE, leadClientName, loadOpenLeads, OPEN_LEAD_DAYS, type LeadNode } from './open-leads.js';
 import { sanitizeLogText } from './jobber-log-sanitize.mjs';
-import { applyChange, LeadInfoError, LeadInfoService, MAX_ITEMS_PER_LEAD, questionKey, requireRequestId, summarize, validateQuestion } from './lead-info-service.js';
+import { applyChange, LeadInfoError, LeadInfoService, type LeadInfoItem, MAX_ITEMS_PER_LEAD, questionKey, requireRequestId, summarize, validateQuestion } from './lead-info-service.js';
 
 export class LeadToolArgsError extends Error {}
 
@@ -22,7 +27,7 @@ function objectArgs(raw: unknown, allowed: string[]): Record<string, unknown> {
 export const LEAD_READ_TOOLS = [
   {
     name: 'list_open_leads',
-    description: 'List open leads: Jobber requests from the last N days that are still new or in assessment (not converted to a quote or job, not archived), oldest first (the lead waiting longest comes first), with each one\'s Jobber status and info-needed counts. Read live from Jobber. No contact details. Read-only. A failed lookup is not an empty list.',
+    description: 'List open leads: Jobber requests from the last N days that are still new or in assessment (not converted to a quote or job, not archived), oldest first (the lead waiting longest comes first), with each one\'s Jobber status, info-needed counts and next step: where it sits in the handbook follow-up cadence, when the next contact is due, and the one action the team should take. Next steps here use Jobber notes and contacts logged in Cotiza only (not Quo or email). Read live from Jobber. No contact details. Read-only. A failed lookup is not an empty list.',
     inputSchema: {
       type: 'object', additionalProperties: false,
       properties: {
@@ -72,6 +77,50 @@ export const LEAD_WRITE_TOOLS = [
 export const LEAD_READ_TOOL_NAMES = new Set<string>(LEAD_READ_TOOLS.map((t) => t.name));
 export const LEAD_WRITE_TOOL_NAMES = new Set<string>(LEAD_WRITE_TOOLS.map((t) => t.name));
 
+const NO_CONTEXT = { isAvailable: () => false } as unknown as PhoneContextService & EmailContextService;
+const NEXT_STEP_CONCURRENCY = 4;
+
+function publicNextStep(w: LeadWorkflow) {
+  return {
+    bucket: w.bucket,
+    stage: w.stage,
+    nextContactOn: w.next.on,
+    due: w.next.overdue ? 'overdue' as const : w.next.dueToday ? 'today' as const : 'later' as const,
+    daysOverdue: w.next.daysOverdue,
+    action: w.action.label,
+    why: w.action.why,
+    progress: w.progress,
+  };
+}
+
+/** Next step per lead from Jobber notes, logged contacts and the checklist. Contact details never leave this function. */
+async function leadNextSteps(db: D1Database, jobber: JobberReadClient, userId: string, ids: string[], itemsById: Record<string, LeadInfoItem[]>, now: number) {
+  const read = new OpsAssistantRead(jobber, db);
+  const contacts = new LeadContactService(db);
+  const out: Record<string, ReturnType<typeof publicNextStep> | null> = {};
+  let next = 0;
+  const worker = async () => {
+    while (next < ids.length) {
+      const requestId = ids[next++];
+      try {
+        const request = await read.readRequest(userId, { requestId }) as unknown as { outcome?: string; request?: RequestDetail };
+        // Without the request's notes the cadence would be a guess: say "unknown" (null) instead.
+        if (request.outcome !== 'ok') { out[requestId] = null; continue; }
+        const { workflow } = await gatherLeadWorkflow({
+          requestId, detail: request.request, requestFailed: false, contacts,
+          phone: NO_CONTEXT, email: NO_CONTEXT, now, items: itemsById[requestId] ?? [],
+        });
+        out[requestId] = publicNextStep(workflow);
+      } catch (err) {
+        console.warn(`[lead-info] next step failed: ${sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 180)}`);
+        out[requestId] = null;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(NEXT_STEP_CONCURRENCY, ids.length) }, worker));
+  return out;
+}
+
 export async function callLeadTool(db: D1Database, principal: AssistantPrincipal, name: string, rawArgs: unknown, jobber?: JobberReadClient | null, now: number = Date.now()) {
   const info = new LeadInfoService(db);
   try {
@@ -92,7 +141,8 @@ export async function callLeadTool(db: D1Database, principal: AssistantPrincipal
       // Jobber is read newest first; the team works the lead waiting longest first.
       const oldestFirst = [...loaded.open].reverse();
       const page = oldestFirst.slice(0, limit);
-      const summaries = await info.summaries(page.map((node) => node.id));
+      const itemsById = await info.listMany(page.map((node) => node.id));
+      const nextSteps = await leadNextSteps(db, jobber, principal.userId, page.map((node) => node.id), itemsById, now);
       return {
         outcome: 'ok' as const,
         total: loaded.open.length,
@@ -108,12 +158,14 @@ export async function callLeadTool(db: D1Database, principal: AssistantPrincipal
             createdAt: node.createdAt ?? null,
             ageDays: Number.isFinite(created) ? Math.max(0, Math.floor((now - created) / 86400_000)) : null,
             jobberWebUri: node.jobberWebUri ?? null,
-            infoNeeded: summaries[node.id] ?? summarize([]),
+            infoNeeded: summarize(itemsById[node.id] ?? []),
+            nextStep: nextSteps[node.id] ?? null,
           };
         }),
         notes: [
           'Open means Jobber still shows the request as new or in assessment; converted (quote or job made) and archived requests are left out.',
           'A lead with no checklist has total 0 and is not ready to quote.',
+          'nextStep uses Jobber notes and contacts logged in Cotiza; texts, calls and emails that only live in Quo or Gmail are not counted here (the Cotiza request queue counts them). nextStep is null when it could not be worked out.',
           ...(loaded.complete ? [] : [`Only the newest ${LEAD_PAGE_SIZE * LEAD_MAX_PAGES} requests were checked; older ones in the window were not.`]),
         ],
       };

@@ -3,13 +3,14 @@
  * checklist the team works from. Session-authenticated (Cotiza users only).
  *
  * GET    /api/leads/summaries?ids=a,b     info-needed counts for queue cards
- * GET    /api/leads/contact-status?ids=a,b  last and next contact for queue cards
+ * GET    /api/leads/contact-status?ids=a,b  last and next contact, and the next action, for queue cards
  * GET    /api/leads/:requestId            request, quotes, email and Quo context, checklist
  * GET    /api/leads/:requestId/photos/:i  one request photo (scaled down when large)
  * POST   /api/leads/:requestId/info       add a question
  * PATCH  /api/leads/info/:itemId          change status / answer / wording
  * POST   /api/leads/:requestId/contacts   log a call, text, email or visit
  * PUT    /api/leads/:requestId/next-contact  set (date) or clear (null) the next contact date
+ * PUT    /api/leads/:requestId/not-a-lead    mark (true) or unmark (false) a lead as not a real lead
  * POST   /api/leads/:requestId/send-text  send one confirmed text through Quo and log it
  */
 import { Hono } from 'hono';
@@ -23,7 +24,7 @@ import { PhoneContextService } from '../services/phone-context-service.js';
 import { LeadInfoError, LeadInfoService, requireRequestId, summarize } from '../services/lead-info-service.js';
 import { sanitizeLogText } from '../services/jobber-log-sanitize.mjs';
 import { LeadContactError, LeadContactService, validateContact } from '../services/lead-contact-service.js';
-import { gatherContactStatus, type RequestDetail } from '../services/lead-contact-status.js';
+import { gatherLeadWorkflow, type RequestDetail } from '../services/lead-contact-status.js';
 
 type Env = { Bindings: Bindings; Variables: { user: { id: string; email: string } } };
 const app = new Hono<Env>();
@@ -40,6 +41,15 @@ function contextServices(env: Bindings) {
   };
 }
 
+type QuoteList = { jobberQuotes?: { outcome?: string; items?: Array<{ status?: { availability?: string; value?: string } }>; page?: { hasNextPage?: boolean } } };
+
+/** The request's quote statuses, or undefined when they are not fully known (failed read, more pages). */
+function knownQuotes(quotes: unknown): Array<{ status: string | null }> | undefined {
+  const list = (quotes as QuoteList).jobberQuotes;
+  if (!list || list.outcome !== 'ok' || list.page?.hasNextPage) return undefined;
+  return (list.items ?? []).map((q) => ({ status: q.status?.availability === 'present' ? q.status.value ?? null : null }));
+}
+
 const MAX_STATUS_IDS = 50;
 const STATUS_CONCURRENCY = 4;
 
@@ -51,6 +61,7 @@ app.get('/contact-status', async (c) => {
   const { jobberIntegration } = await openJobberIntegration(c.env.DB, c.env);
   const read = new OpsAssistantRead(jobberIntegration, c.env.DB, c.env.IMAGES);
   const contacts = new LeadContactService(c.env.DB);
+  const info = new LeadInfoService(c.env.DB);
   const now = Date.now();
   const statuses: Record<string, unknown> = {};
   let next = 0;
@@ -61,8 +72,9 @@ app.get('/contact-status', async (c) => {
         const request = await read.readRequest(userId, { requestId }) as unknown as { outcome?: string; request?: RequestDetail };
         // One set of services per lead: each tracks its own failed-read flag.
         const { email, phone } = contextServices(c.env);
-        const { status } = await gatherContactStatus({ requestId, detail: request.request, requestFailed: request.outcome !== 'ok', contacts, phone, email, now });
-        statuses[requestId] = status;
+        const items = await info.list(requestId);
+        const { status, workflow } = await gatherLeadWorkflow({ requestId, detail: request.request, requestFailed: request.outcome !== 'ok', contacts, phone, email, now, items });
+        statuses[requestId] = { ...status, workflow };
       } catch (err) {
         console.warn('[leads] contact status failed', sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 180));
         statuses[requestId] = null;
@@ -103,7 +115,7 @@ app.get('/:requestId', async (c) => {
   const [emailResult, phoneResult, contactTimeline] = await Promise.all([
     email.isAvailable() && contact.email ? email.fetchContextResult(contact.email).catch(() => failed) : Promise.resolve(null),
     phone.isAvailable() && contact.phone ? phone.fetchContextResult(contact.phone).catch(() => failed) : Promise.resolve(null),
-    gatherContactStatus({
+    gatherLeadWorkflow({
       requestId,
       detail: detail as unknown as RequestDetail,
       requestFailed: (request as { outcome?: string }).outcome !== 'ok',
@@ -111,6 +123,8 @@ app.get('/:requestId', async (c) => {
       phone: timeline.phone,
       email: timeline.email,
       now: Date.now(),
+      items,
+      quotes: knownQuotes(quotes),
     }),
   ]);
 
@@ -123,6 +137,7 @@ app.get('/:requestId', async (c) => {
     phone: !phone.isAvailable() ? { status: 'not_connected' } : !contact.phone ? { status: 'no_number' } : phoneResult,
     infoNeeded: { items, summary: summarize(items) },
     contactStatus: contactTimeline.status,
+    workflow: contactTimeline.workflow,
     loggedContacts: contactTimeline.logged,
     outreachSteps,
   });
@@ -196,6 +211,20 @@ app.put('/:requestId/next-contact', async (c) => {
   try {
     const nextContactOn = await new LeadContactService(c.env.DB).setNextContact(requestId, body.nextContactOn, c.get('user').id);
     return c.json({ nextContactOn });
+  } catch (err) {
+    const bad = badRequest(err);
+    if (bad) return c.json(bad, 400);
+    throw err;
+  }
+});
+
+app.put('/:requestId/not-a-lead', async (c) => {
+  let requestId: string;
+  try { requestId = requireRequestId(c.req.param('requestId')); } catch (err) { return c.json(badRequest(err), 400); }
+  const body = await c.req.json().catch(() => null) as { notALead?: unknown } | null;
+  try {
+    const notALead = await new LeadContactService(c.env.DB).setNotALead(requestId, body?.notALead, c.get('user').id);
+    return c.json({ notALead });
   } catch (err) {
     const bad = badRequest(err);
     if (bad) return c.json(bad, 400);

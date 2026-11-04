@@ -3,12 +3,14 @@
  *
  * Last contact is the newest of: Quo texts and calls with the customer's number, Gmail messages
  * with the customer's address, notes on the Jobber request, the request itself, and contacts the
- * team logs in Cotiza. Next contact is the date the team set, or a suggestion from a simple cadence:
- * when the customer spoke last, today; after our own outreach with no reply, 1, then 2, then 4
- * business days later. Dates are Chicago calendar days.
+ * team logs in Cotiza. Next contact is the date the team set, or the handbook cadence's suggestion
+ * (see lead-workflow.ts). Dates are Chicago calendar days.
  *
  * Contact details (numbers, addresses) are inputs only; nothing here stores or returns them.
  */
+import { chicagoDate, handbookCadence } from './lead-workflow.js';
+
+export { addBusinessDays, chicagoDate } from './lead-workflow.js';
 
 export const CONTACT_CHANNELS = ['call', 'text', 'email', 'in_person', 'other'] as const;
 export type ContactChannel = typeof CONTACT_CHANNELS[number];
@@ -26,6 +28,12 @@ export interface ContactEvent {
   note?: string | null;
   /** True for a call that connected: we spoke with the customer, whoever dialled. */
   conversation?: boolean;
+  /** For a Jobber team note: it records outreach the customer received (text, call, email, voicemail). */
+  outreach?: boolean;
+  /** For a Jobber team note: it records a reply from the customer. */
+  reply?: boolean;
+  /** For a contact logged in Cotiza: the outreach step it completed (e.g. "intro_text", "quote_update"). */
+  step?: string | null;
 }
 
 export interface LoggedContact {
@@ -44,6 +52,7 @@ export interface NextContact {
   source: 'set' | 'suggested';
   overdue: boolean;
   dueToday: boolean;
+  /** The cadence stage, e.g. "Step 2 · next day after intake". */
   reason: string;
 }
 
@@ -80,57 +89,6 @@ export function contactLabel(channel: ContactChannel, direction: ContactDirectio
   return CHANNEL_LABEL[channel][direction === 'outgoing' ? 0 : 1];
 }
 
-// ── Chicago calendar days ──────────────────────────────────────
-
-const chicagoDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' });
-
-/** YYYY-MM-DD in Chicago for an instant. */
-export function chicagoDate(ms: number): string {
-  return chicagoDay.format(new Date(ms));
-}
-
-/** Adds business days (Mon–Fri) to a YYYY-MM-DD date. */
-export function addBusinessDays(date: string, days: number): string {
-  const d = new Date(`${date}T12:00:00Z`);
-  let left = days;
-  while (left > 0) {
-    d.setUTCDate(d.getUTCDate() + 1);
-    const dow = d.getUTCDay();
-    if (dow !== 0 && dow !== 6) left--;
-  }
-  return d.toISOString().slice(0, 10);
-}
-
-const CADENCE = [1, 2, 4];
-
-/**
- * Suggested next contact from the events: today when the customer reached out last (or nobody
- * has reached out yet); the next business day after a call where we spoke with them; after our
- * outreach with no reply, 1, 2, then 4 business days after the latest attempt (4 thereafter).
- */
-export function suggestNextContact(events: ContactEvent[], now: number): { on: string; reason: string } {
-  const today = chicagoDate(now);
-  const sorted = sortNewestFirst(events);
-  const outreach: ContactEvent[] = [];
-  let stop: ContactEvent | undefined;
-  for (const event of sorted) {
-    if (event.direction === 'incoming' || event.conversation) { stop = event; break; }
-    // Team notes record work on the lead, not a message the customer received.
-    if (event.channel === 'note') continue;
-    outreach.push(event);
-  }
-  if (outreach.length === 0) {
-    if (stop?.conversation && stop.direction === 'outgoing') {
-      return { on: addBusinessDays(chicagoDate(Date.parse(stop.at)), 1), reason: 'Spoke with the customer; follow up' };
-    }
-    return { on: today, reason: stop && stop.channel !== 'request' ? 'Customer replied; get back to them' : 'No outreach yet' };
-  }
-  const step = CADENCE[Math.min(outreach.length, CADENCE.length) - 1];
-  const due = addBusinessDays(chicagoDate(Date.parse(outreach[0].at)), step);
-  const attempts = outreach.length === 1 ? '1 attempt' : `${outreach.length} attempts`;
-  return { on: due, reason: `No reply after ${attempts}; follow up` };
-}
-
 export function sortNewestFirst(events: ContactEvent[]): ContactEvent[] {
   const ms = (e: ContactEvent) => { const t = Date.parse(e.at); return Number.isFinite(t) ? t : -Infinity; };
   return [...events].sort((a, b) => ms(b) - ms(a));
@@ -145,8 +103,8 @@ export function computeContactStatus(
 ): ContactStatus {
   const recent = sortNewestFirst(events.filter((e) => Number.isFinite(Date.parse(e.at))));
   const today = chicagoDate(now);
-  const suggestion = suggestNextContact(recent, now);
-  const on = nextSet ?? suggestion.on;
+  const cadence = handbookCadence(recent, now);
+  const on = nextSet ?? cadence.suggested;
   return {
     last: recent[0] ?? null,
     next: {
@@ -154,7 +112,7 @@ export function computeContactStatus(
       source: nextSet ? 'set' : 'suggested',
       overdue: on < today,
       dueToday: on === today,
-      reason: nextSet ? 'Set by the team' : suggestion.reason,
+      reason: nextSet ? 'Set by the team' : cadence.stage,
     },
     unavailable,
     notConnected,
@@ -184,6 +142,7 @@ export function loggedToEvent(contact: LoggedContact): ContactEvent {
     source: 'cotiza',
     label: contactLabel(contact.channel, contact.direction),
     note: contact.note,
+    step: contact.step,
   };
 }
 
@@ -279,5 +238,24 @@ export class LeadContactService {
       .bind(requestId, on, new Date(now).toISOString(), userId)
       .run();
     return on;
+  }
+
+  async notALead(requestId: string): Promise<boolean> {
+    const row = await this.db.prepare('SELECT not_a_lead FROM lead_marks WHERE jobber_request_id = ?').bind(requestId).first<{ not_a_lead: number }>();
+    return row?.not_a_lead === 1;
+  }
+
+  /** Marks a lead as not a real lead (true) or clears the mark (false). */
+  async setNotALead(requestId: string, value: unknown, userId: string, now: number = Date.now()): Promise<boolean> {
+    if (typeof value !== 'boolean') throw new LeadContactError('notALead must be true or false.');
+    if (!value) {
+      await this.db.prepare('DELETE FROM lead_marks WHERE jobber_request_id = ?').bind(requestId).run();
+      return false;
+    }
+    await this.db
+      .prepare('INSERT INTO lead_marks (jobber_request_id, not_a_lead, updated_at, updated_by_user_id) VALUES (?, 1, ?, ?) ON CONFLICT(jobber_request_id) DO UPDATE SET not_a_lead = 1, updated_at = excluded.updated_at, updated_by_user_id = excluded.updated_by_user_id')
+      .bind(requestId, new Date(now).toISOString(), userId)
+      .run();
+    return true;
   }
 }
