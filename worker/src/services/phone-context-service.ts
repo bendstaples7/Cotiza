@@ -204,15 +204,19 @@ export class PhoneContextService {
   // Transcripts and summaries are often absent (short calls, plan limits): a missing one is not a failed read.
   private async fetchTranscript(callId: string): Promise<OpenPhoneTranscript | null> {
     const failedBefore = this.lastReadFailed;
+    const failureBefore = this.lastFailure;
     const result = await this.apiFetch<{ data: OpenPhoneTranscript }>(`/call-transcripts/${callId}`);
     this.lastReadFailed = failedBefore;
+    this.lastFailure = failureBefore;
     return result?.data ?? null;
   }
 
   private async fetchCallSummary(callId: string): Promise<OpenPhoneCallSummary | null> {
     const failedBefore = this.lastReadFailed;
+    const failureBefore = this.lastFailure;
     const result = await this.apiFetch<{ data: OpenPhoneCallSummary }>(`/call-summaries/${callId}`);
     this.lastReadFailed = failedBefore;
+    this.lastFailure = failureBefore;
     return result?.data ?? null;
   }
 
