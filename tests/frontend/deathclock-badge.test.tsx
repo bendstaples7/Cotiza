@@ -10,9 +10,10 @@ import type { ManualRequestWithDeathclock } from '../../client/src/api';
 // Mocks
 // ---------------------------------------------------------------------------
 
-const mockFetchManualRequests = vi.hoisted(() => vi.fn<() => Promise<ManualRequestWithDeathclock[]>>());
+const mockFetchRequestQueue = vi.hoisted(() => vi.fn<(sort?: string) => Promise<{ requests: ManualRequestWithDeathclock[]; jobber: { status: 'live'; days: number; complete: boolean } | { status: 'unavailable'; days: number } }>>());
+const queue = (requests: ManualRequestWithDeathclock[]) => ({ requests, jobber: { status: 'live' as const, days: 60, complete: true } });
 vi.mock('../../client/src/api', () => ({
-  fetchManualRequests: mockFetchManualRequests,
+  fetchRequestQueue: mockFetchRequestQueue,
   fetchLeadSummaries: vi.fn().mockResolvedValue({ summaries: {} }),
 }));
 
@@ -275,12 +276,12 @@ describe('DeathclockBadge', () => {
 
 describe('RequestQueuePage', () => {
   beforeEach(() => {
-    mockFetchManualRequests.mockReset();
+    mockFetchRequestQueue.mockReset();
   });
 
   it('renders loading state initially', async () => {
     // Never resolve the promise so loading persists
-    mockFetchManualRequests.mockReturnValue(new Promise(() => {}));
+    mockFetchRequestQueue.mockReturnValue(new Promise(() => {}));
     renderQueue();
 
     // Should show loading indicator
@@ -288,18 +289,18 @@ describe('RequestQueuePage', () => {
   });
 
   it('renders empty state when no requests returned', async () => {
-    mockFetchManualRequests.mockResolvedValue([]);
+    mockFetchRequestQueue.mockResolvedValue(queue([]));
     renderQueue();
 
     expect(await screen.findByText('No pending requests in the queue.')).toBeInTheDocument();
   });
 
   it('renders error state on API failure', async () => {
-    mockFetchManualRequests.mockRejectedValue({
+    mockFetchRequestQueue.mockRejectedValue({
       severity: 'error',
       message: 'Server is down',
       component: 'API',
-      operation: 'fetchManualRequests',
+      operation: 'fetchRequestQueue',
       actions: [],
     });
     renderQueue();
@@ -320,7 +321,7 @@ describe('RequestQueuePage', () => {
         deathclock: { ageSeconds: 72000, ageLabel: '20h', color: 'yellow', isComplete: false, frozen: false },
       }),
     ];
-    mockFetchManualRequests.mockResolvedValue(requests);
+    mockFetchRequestQueue.mockResolvedValue(queue(requests));
     renderQueue();
 
     expect(await screen.findByText('Alice')).toBeInTheDocument();
@@ -332,7 +333,7 @@ describe('RequestQueuePage', () => {
   });
 
   it('renders sort toggle buttons with correct labels', async () => {
-    mockFetchManualRequests.mockResolvedValue([]);
+    mockFetchRequestQueue.mockResolvedValue(queue([]));
     renderQueue();
 
     expect(await screen.findByText('Oldest First')).toBeInTheDocument();
@@ -340,7 +341,7 @@ describe('RequestQueuePage', () => {
   });
 
   it('clicking sort toggle navigates with correct sort param', async () => {
-    mockFetchManualRequests.mockResolvedValue([]);
+    mockFetchRequestQueue.mockResolvedValue(queue([]));
     renderQueue(['/requests?sort=age_asc']);
 
     expect(await screen.findByText('Oldest First')).toBeInTheDocument();
@@ -350,10 +351,17 @@ describe('RequestQueuePage', () => {
 
     // Wait for the mock to be called with 'age_desc'
     await waitFor(() => {
-      const calls = mockFetchManualRequests.mock.calls.filter(
+      const calls = mockFetchRequestQueue.mock.calls.filter(
         ([arg]) => arg === 'age_desc',
       );
       expect(calls.length).toBeGreaterThanOrEqual(1);
     });
+  });
+
+  it('says so when Jobber cannot be read instead of showing an empty queue', async () => {
+    mockFetchRequestQueue.mockResolvedValue({ requests: [], jobber: { status: 'unavailable', days: 60 } });
+    renderQueue();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Jobber could not be reached');
   });
 });
