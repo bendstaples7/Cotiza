@@ -121,7 +121,7 @@ export default function LeadPage() {
         <div style={mainCol}>
           {workflow
             ? <NextStepPanel lead={lead} workflow={withRequestedAction(workflow, fromAction)} onChanged={reload} panelRef={nextStepRef} />
-            : <section style={card}><p style={muted}>The next step could not be worked out right now (Jobber's quotes or request could not be read, so a quote may already be out). The contact history and quotes below are still current.</p></section>}
+            : <section style={card}><p style={muted}>The next step could not be worked out right now: Jobber's quotes for this request could not be fully read, so a quote may already be out. Check the quotes in Jobber before reaching out.</p></section>}
         </div>
         <aside style={sideCol}>
           {workflow && <FollowUpPlan workflow={workflow} />}
