@@ -593,8 +593,12 @@ export class OpsAssistantRead {
         sections[key] = { outcome: 'failed', items: [], failure: `${key} could not be read (${line || 'Jobber error'}). This is not an empty list.` };
         return;
       }
-      const conn = (result.value.client as Record<string, unknown> | null | undefined)?.[key] as { nodes?: Array<Record<string, unknown>>; pageInfo?: { hasNextPage?: boolean } } | undefined;
-      sections[key] = { outcome: 'ok', items: conn?.nodes ?? [], truncated: conn?.pageInfo?.hasNextPage === true };
+      const conn = (result.value.client as Record<string, unknown> | null | undefined)?.[key] as { nodes?: unknown; pageInfo?: { hasNextPage?: boolean } } | undefined;
+      if (!conn || !Array.isArray(conn.nodes)) {
+        sections[key] = { outcome: 'failed', items: [], failure: `${key} came back without a list. This is not an empty list.` };
+        return;
+      }
+      sections[key] = { outcome: 'ok', items: conn.nodes as Array<Record<string, unknown>>, truncated: conn.pageInfo?.hasNextPage === true };
     });
     const failedSections = names.filter((key) => sections[key].outcome === 'failed');
     return {

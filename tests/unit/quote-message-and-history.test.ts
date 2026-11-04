@@ -171,3 +171,30 @@ describe('MCP listing', () => {
     expect(JSON.parse(ran.result.content[0].text)).toMatchObject({ outcome: 'ok', verified: true });
   });
 });
+
+describe('read_client_history edge cases', () => {
+  const ok = (items: Array<Record<string, unknown>>, truncated = false) => ({ outcome: 'ok' as const, items, truncated });
+
+  it('ignores draft invoices', () => {
+    const summary = summarizeClientHistory({ jobs: ok([]), quotes: ok([]), requests: ok([]), invoices: ok([{ invoiceNumber: '9', invoiceStatus: 'draft' }]) });
+    expect(summary.pastCustomer).toBe(false);
+  });
+
+  it('says unknown when a section was cut off before anything was found', () => {
+    const summary = summarizeClientHistory({ jobs: ok([]), invoices: ok([]), requests: ok([]), quotes: ok([{ id: 'q1', quoteStatus: 'draft' }], true) });
+    expect(summary.pastCustomer).toBe('unknown');
+  });
+
+  it('treats a section with no list as failed, not empty', async () => {
+    const CLIENT = 'Z2lkOi8vSm9iYmVyL0NsaWVudC8x';
+    const jobber = { graphqlRequest: vi.fn(async (query: string) => {
+      if (query === CLIENT_HISTORY_QUERIES.client) return { client: { id: CLIENT, firstName: 'A', lastName: 'B' } };
+      if (query === CLIENT_HISTORY_QUERIES.jobs) return { client: { id: CLIENT } };
+      const key = (['invoices', 'quotes', 'requests'] as const).find((k) => query === CLIENT_HISTORY_QUERIES[k])!;
+      return { client: { id: CLIENT, [key]: { nodes: [], pageInfo: { hasNextPage: false } } } };
+    }) };
+    const result = await new OpsAssistantRead(jobber, createMockD1() as never).readClientHistory('u', { clientId: CLIENT }) as Record<string, any>;
+    expect(result.failedSections).toEqual(['jobs']);
+    expect(result.history.pastCustomer).toBe('unknown');
+  });
+});

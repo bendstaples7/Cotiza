@@ -1,6 +1,6 @@
-# Operations assistant (read-only)
+# Operations assistant
 
-An authenticated assistant can read Chicago Reno’s Jobber requests and quotes through Cotiza. Jobber’s own login stays on the server. The assistant never sees Jobber tokens, and it cannot create, edit, send, or delete Jobber records. The one write it can be given is appending to Cotiza’s quote-review ledger, under its own consent (see [Quote-review ledger](#quote-review-ledger)).
+An authenticated assistant can read Chicago Reno’s Jobber requests and quotes through Cotiza. Jobber’s own login stays on the server. The assistant never sees Jobber tokens, and by default it cannot create, edit, send, or delete Jobber records. Writes are opt-in scopes, each under its own consent: appending to Cotiza’s quote-review ledger (`review:write`, see [Quote-review ledger](#quote-review-ledger)), updating lead questions (`lead:write`), and editing **draft** quotes’ lines and message to the customer (`quote:write`, office account only, see [The `quote:write` scope](#the-quotewrite-scope)). No tool sends a quote, changes a quote’s status, or deletes a quote.
 
 Checked against OpenAI’s docs on 13 Oct 2026:
 
@@ -92,6 +92,10 @@ Both tables are **append-only**. The code only inserts, and database triggers ab
 
 Grants the read-only `weekly_payout_report` and `find_expenses` tools, and only for the office@chicago-reno.com user. It is offered and granted exactly like `review:write` (separate unticked box, never added by refresh, never offered to a client that asked for exactly `ops:read`), and the box is shown only to the office account. Without the scope the tools are hidden and a call returns `insufficient_scope`. See [weekly-payout-reports.md](weekly-payout-reports.md#connector-tool).
 
+### The `quote:write` scope
+
+Grants `apply_quote_edits` and `update_quote_message`, and only for the office@chicago-reno.com user. It is offered like `finance:read` (separate unticked box, office account only, never added by refresh). Both tools work only on **draft** quotes, refuse when the quote changed since `read_quote` (`version` for lines, `messageVersion` for the message), reread after saving and report `verified`. Jobber has no conditional update, so an edit made in Jobber in the seconds between the tool's check and its save can be overwritten; the reread reports the result either way. Neither tool sends the quote or changes its status or title. Every call is logged with the token id and quote number.
+
 ### One-time import from feedback.json
 
 `scripts/import-review-feedback.mjs` reads the ledger (`feedback_entries`, `quote_reviews`, and the older top-level `calibration` (quote 669) and `quote_697` records) and writes a SQL file. It does not connect to D1. Free-text statuses map onto the stored set (`confirmed direction; …` → `confirmed`), with the original wording kept in `status_detail`. Customer contact details are not imported: `client`/`email`/`phone`/`address` keys are dropped, customer full names from those fields are replaced with “the customer”, and email addresses (other than `@chicago-reno.com`) and phone numbers in text are removed. Statements are `INSERT OR IGNORE` with fixed ids, so re-running is safe.
@@ -112,7 +116,7 @@ Do not commit the generated SQL file.
 
 Jobber’s public docs say scopes are set on the app in the Developer Center and shown on Jobber’s Allow Access screen. The pages checked on 13 Oct 2026 do **not** publish a fixed list of scope ids. This change does **not** edit the Jobber app and does **not** re-authorize production.
 
-Before you trust a live answer, open the existing app and confirm it can **read** requests, quotes, clients, and expenses (the fixed queries ask for those). Leave write scopes as they already are. Do not add write scopes for this assistant.
+Before you trust a live answer, open the existing app and confirm it can **read** requests, quotes, clients, and expenses (the fixed queries ask for those). Leave write scopes as they already are. The `quote:write` tools use the app's existing quote write access (the same access Cotiza's quote push already uses); do not add other write scopes for this assistant.
 
 If a tool returns `read.error.code` of `auth`, Jobber refused the read. That is not an empty list.
 
