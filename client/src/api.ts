@@ -1364,6 +1364,67 @@ export interface LeadBundle {
   email: ContextBlock;
   phone: ContextBlock;
   infoNeeded: { items: LeadInfoItem[]; summary: LeadInfoSummary };
+  contactStatus: LeadContactStatus;
+  loggedContacts: LoggedLeadContact[];
+}
+
+export type LeadContactChannel = 'call' | 'text' | 'email' | 'in_person' | 'other';
+export type LeadContactSource = 'quo' | 'gmail' | 'jobber' | 'cotiza';
+
+export interface LeadContactEvent {
+  at: string;
+  channel: LeadContactChannel | 'note' | 'request';
+  direction: 'outgoing' | 'incoming';
+  source: LeadContactSource;
+  label: string;
+  note?: string | null;
+}
+
+export interface LeadContactStatus {
+  last: LeadContactEvent | null;
+  next: { on: string; source: 'set' | 'suggested'; overdue: boolean; dueToday: boolean; reason: string };
+  unavailable: LeadContactSource[];
+  notConnected: LeadContactSource[];
+  recent: LeadContactEvent[];
+}
+
+export interface LoggedLeadContact {
+  id: string;
+  requestId: string;
+  channel: LeadContactChannel;
+  direction: 'outgoing' | 'incoming';
+  note: string | null;
+  step: string | null;
+  contactedAt: string;
+  createdAt: string;
+}
+
+/** Last and next contact for queue cards. A lead whose status could not be worked out maps to null. */
+export async function fetchLeadContactStatuses(requestIds: string[]): Promise<{ statuses: Record<string, LeadContactStatus | null> }> {
+  if (!requestIds.length) return { statuses: {} };
+  const res = await fetch(API_BASE + '/api/leads/contact-status?ids=' + requestIds.map(encodeURIComponent).join(','), { headers: { ...authHeaders() } });
+  return handleResponse(res);
+}
+
+export async function logLeadContact(
+  requestId: string,
+  contact: { channel: LeadContactChannel; direction?: 'outgoing' | 'incoming'; note?: string; step?: string },
+): Promise<{ contact: LoggedLeadContact }> {
+  const res = await fetch(API_BASE + '/api/leads/' + encodeURIComponent(requestId) + '/contacts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(contact),
+  });
+  return handleResponseWithToast(res);
+}
+
+export async function setLeadNextContact(requestId: string, nextContactOn: string | null): Promise<{ nextContactOn: string | null }> {
+  const res = await fetch(API_BASE + '/api/leads/' + encodeURIComponent(requestId) + '/next-contact', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ nextContactOn }),
+  });
+  return handleResponseWithToast(res);
 }
 
 export async function fetchLead(requestId: string): Promise<LeadBundle> {

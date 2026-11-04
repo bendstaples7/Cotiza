@@ -3,10 +3,13 @@
  * checklist the team works from. Session-authenticated (Cotiza users only).
  *
  * GET    /api/leads/summaries?ids=a,b     info-needed counts for queue cards
+ * GET    /api/leads/contact-status?ids=a,b  last and next contact for queue cards
  * GET    /api/leads/:requestId            request, quotes, email and Quo context, checklist
  * GET    /api/leads/:requestId/photos/:i  one request photo (scaled down when large)
  * POST   /api/leads/:requestId/info       add a question
  * PATCH  /api/leads/info/:itemId          change status / answer / wording
+ * POST   /api/leads/:requestId/contacts   log a call, text, email or visit
+ * PUT    /api/leads/:requestId/next-contact  set (date) or clear (null) the next contact date
  */
 import { Hono } from 'hono';
 import type { Bindings } from '../bindings.js';
@@ -18,14 +21,56 @@ import { EmailContextService } from '../services/email-context-service.js';
 import { PhoneContextService } from '../services/phone-context-service.js';
 import { LeadInfoError, LeadInfoService, requireRequestId, summarize } from '../services/lead-info-service.js';
 import { sanitizeLogText } from '../services/jobber-log-sanitize.mjs';
+import { LeadContactError, LeadContactService } from '../services/lead-contact-service.js';
+import { gatherContactStatus, type RequestDetail } from '../services/lead-contact-status.js';
 
 type Env = { Bindings: Bindings; Variables: { user: { id: string; email: string } } };
 const app = new Hono<Env>();
 app.use('*', sessionMiddleware);
 
 function badRequest(err: unknown) {
-  return err instanceof LeadInfoError ? { error: err.message } : null;
+  return err instanceof LeadInfoError || err instanceof LeadContactError ? { error: err.message } : null;
 }
+
+function contextServices(env: Bindings) {
+  return {
+    email: new EmailContextService(env.GMAIL_CLIENT_ID, env.GMAIL_CLIENT_SECRET, env.GMAIL_REFRESH_TOKEN),
+    phone: new PhoneContextService(env.QUO_API_KEY ?? '', env.QUO_PHONE_NUMBER_ID ?? null),
+  };
+}
+
+const MAX_STATUS_IDS = 50;
+const STATUS_CONCURRENCY = 4;
+
+app.get('/contact-status', async (c) => {
+  const ids = [...new Set((c.req.query('ids') || '').split(',').map((s) => s.trim()).filter(Boolean))];
+  if (ids.length > MAX_STATUS_IDS) return c.json({ error: `At most ${MAX_STATUS_IDS} leads at once.` }, 400);
+  const valid = ids.filter((id) => { try { requireRequestId(id); return true; } catch { return false; } });
+  const userId = c.get('user').id;
+  const { jobberIntegration } = await openJobberIntegration(c.env.DB, c.env);
+  const read = new OpsAssistantRead(jobberIntegration, c.env.DB, c.env.IMAGES);
+  const contacts = new LeadContactService(c.env.DB);
+  const now = Date.now();
+  const statuses: Record<string, unknown> = {};
+  let next = 0;
+  const worker = async () => {
+    while (next < valid.length) {
+      const requestId = valid[next++];
+      try {
+        const request = await read.readRequest(userId, { requestId }) as unknown as { outcome?: string; request?: RequestDetail };
+        // One set of services per lead: each tracks its own failed-read flag.
+        const { email, phone } = contextServices(c.env);
+        const { status } = await gatherContactStatus({ requestId, detail: request.request, requestFailed: request.outcome !== 'ok', contacts, phone, email, now });
+        statuses[requestId] = status;
+      } catch (err) {
+        console.warn('[leads] contact status failed', sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 180));
+        statuses[requestId] = null;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(STATUS_CONCURRENCY, valid.length) }, worker));
+  return c.json({ statuses });
+});
 
 app.get('/summaries', async (c) => {
   const ids = (c.req.query('ids') || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -49,12 +94,22 @@ app.get('/:requestId', async (c) => {
   const contact = { email: detail?.email?.value ?? null, phone: detail?.phone?.value ?? null };
 
   // Email and Quo context are best-effort: a missing connection is reported, never an empty history.
-  const email = new EmailContextService(c.env.GMAIL_CLIENT_ID, c.env.GMAIL_CLIENT_SECRET, c.env.GMAIL_REFRESH_TOKEN);
-  const phone = new PhoneContextService(c.env.QUO_API_KEY ?? '', c.env.QUO_PHONE_NUMBER_ID ?? null);
+  // Separate service instances for the context text and the contact timeline: each tracks its own failed-read flag.
+  const { email, phone } = contextServices(c.env);
+  const timeline = contextServices(c.env);
   const failed = { status: 'failed' as const };
-  const [emailResult, phoneResult] = await Promise.all([
+  const [emailResult, phoneResult, contactTimeline] = await Promise.all([
     email.isAvailable() && contact.email ? email.fetchContextResult(contact.email).catch(() => failed) : Promise.resolve(null),
     phone.isAvailable() && contact.phone ? phone.fetchContextResult(contact.phone).catch(() => failed) : Promise.resolve(null),
+    gatherContactStatus({
+      requestId,
+      detail: detail as unknown as RequestDetail,
+      requestFailed: (request as { outcome?: string }).outcome !== 'ok',
+      contacts: new LeadContactService(c.env.DB),
+      phone: timeline.phone,
+      email: timeline.email,
+      now: Date.now(),
+    }),
   ]);
 
   return c.json({
@@ -65,6 +120,8 @@ app.get('/:requestId', async (c) => {
     email: !email.isAvailable() ? { status: 'not_connected' } : !contact.email ? { status: 'no_address' } : emailResult,
     phone: !phone.isAvailable() ? { status: 'not_connected' } : !contact.phone ? { status: 'no_number' } : phoneResult,
     infoNeeded: { items, summary: summarize(items) },
+    contactStatus: contactTimeline.status,
+    loggedContacts: contactTimeline.logged,
   });
 });
 
@@ -107,6 +164,35 @@ app.patch('/info/:itemId', async (c) => {
   try {
     const item = await new LeadInfoService(c.env.DB).update(c.req.param('itemId'), body, { userId: c.get('user').id, via: 'app' });
     return c.json({ item });
+  } catch (err) {
+    const bad = badRequest(err);
+    if (bad) return c.json(bad, 400);
+    throw err;
+  }
+});
+
+app.post('/:requestId/contacts', async (c) => {
+  let requestId: string;
+  try { requestId = requireRequestId(c.req.param('requestId')); } catch (err) { return c.json(badRequest(err), 400); }
+  const body = await c.req.json().catch(() => null);
+  try {
+    const contact = await new LeadContactService(c.env.DB).log(requestId, body, c.get('user').id);
+    return c.json({ contact }, 201);
+  } catch (err) {
+    const bad = badRequest(err);
+    if (bad) return c.json(bad, 400);
+    throw err;
+  }
+});
+
+app.put('/:requestId/next-contact', async (c) => {
+  let requestId: string;
+  try { requestId = requireRequestId(c.req.param('requestId')); } catch (err) { return c.json(badRequest(err), 400); }
+  const body = await c.req.json().catch(() => null) as { nextContactOn?: unknown } | null;
+  if (!body || !('nextContactOn' in body)) return c.json({ error: 'Send nextContactOn (YYYY-MM-DD) or null.' }, 400);
+  try {
+    const nextContactOn = await new LeadContactService(c.env.DB).setNextContact(requestId, body.nextContactOn, c.get('user').id);
+    return c.json({ nextContactOn });
   } catch (err) {
     const bad = badRequest(err);
     if (bad) return c.json(bad, 400);

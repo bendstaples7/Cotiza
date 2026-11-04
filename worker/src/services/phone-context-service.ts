@@ -324,6 +324,26 @@ export class PhoneContextService {
     return parts.join('\n');
   }
 
+  /**
+   * Texts and calls with the customer as dated events (newest first), for last-contact tracking.
+   * Message text is not returned. A failed read is reported, never an empty history.
+   */
+  async fetchActivityResult(customerPhone: string): Promise<
+    { status: 'ok'; events: Array<{ at: string; kind: 'text' | 'call'; direction: 'incoming' | 'outgoing'; answered: boolean }> } | { status: 'failed' }
+  > {
+    this.lastReadFailed = false;
+    const phone = toE164(customerPhone);
+    if (!this.isAvailable() || !phone) return { status: 'ok', events: [] };
+    const [messages, calls] = await Promise.all([this.fetchMessages(phone), this.fetchCalls(phone)]);
+    if (this.lastReadFailed) return { status: 'failed' };
+    const events = [
+      ...messages.map((m) => ({ at: m.createdAt, kind: 'text' as const, direction: m.direction, answered: true })),
+      ...calls.map((c) => ({ at: c.createdAt, kind: 'call' as const, direction: c.direction, answered: c.duration > 0 })),
+    ].filter((e) => Number.isFinite(Date.parse(e.at)));
+    events.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+    return { status: 'ok', events };
+  }
+
   /** Like fetchContext, but reports a failed read instead of returning an empty string for it. */
   async fetchContextResult(customerPhone: string): Promise<{ status: 'ok'; text: string } | { status: 'failed' }> {
     this.lastReadFailed = false;
