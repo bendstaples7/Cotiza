@@ -7,6 +7,8 @@ import { sanitizeLogText } from './jobber-log-sanitize.mjs';
 import { downloadRequestPhoto, loadRequestPhotos, photoFailureReason, type PhotoResizer } from './jobber-request-photos.js';
 import { loadQuoteTerms } from './jobber-quote-terms.js';
 import { normalizeLines, quoteVersion } from './jobber-quote-edits.js';
+import { messageVersion } from './jobber-quote-message.js';
+import { CLIENT_HISTORY_LIMIT, CLIENT_HISTORY_QUERIES, CLIENT_HISTORY_TOOL, summarizeClientHistory, type HistorySection, type HistorySectionName } from './ops-assistant-client-history.js';
 import { DETAIL_VISITS_PER_PAGE, JOB_QUERIES, JOB_STATUSES, mapVisit, summarizeVisits, type VisitNode } from './ops-assistant-jobs.js';
 import { EXPENSE_ACCOUNT, EXPENSE_QUERIES, expenseDateFilter, isCalendarDate } from './ops-assistant-expenses.js';
 import { reportDate } from './weekly-payout-reports.js';
@@ -153,6 +155,11 @@ export const ASSISTANT_QUERIES = {
   REQUEST_QUOTES_QUERY,
   ...JOB_QUERIES,
   ...EXPENSE_QUERIES,
+  CLIENT_HISTORY_CLIENT_QUERY: CLIENT_HISTORY_QUERIES.client,
+  CLIENT_HISTORY_JOBS_QUERY: CLIENT_HISTORY_QUERIES.jobs,
+  CLIENT_HISTORY_INVOICES_QUERY: CLIENT_HISTORY_QUERIES.invoices,
+  CLIENT_HISTORY_QUOTES_QUERY: CLIENT_HISTORY_QUERIES.quotes,
+  CLIENT_HISTORY_REQUESTS_QUERY: CLIENT_HISTORY_QUERIES.requests,
 };
 
 export interface JobberReadClient {
@@ -465,6 +472,7 @@ export class OpsAssistantRead {
         title: present(request.title as string | null),
         status: present(request.requestStatus as string | null),
         clientName: present(name),
+        clientId: present((request.client as { id?: string } | null)?.id ?? null),
         phone: present(request.phone as string | null),
         email: present(request.email as string | null),
         jobberWebUri: present(request.jobberWebUri as string | null),
@@ -533,6 +541,8 @@ export class OpsAssistantRead {
     const rawLines = quote.lineItems as { nodes?: Array<Record<string, unknown>>; pageInfo?: { hasNextPage?: boolean } } | undefined;
     // version: pass to apply_quote_edits so it can refuse if the quote changes after this read.
     const version = rawLines?.pageInfo?.hasNextPage ? null : await quoteVersion(quote.quoteStatus as string | null, normalizeLines(rawLines?.nodes));
+    // messageVersion: pass to update_quote_message so it can refuse if the message changes after this read.
+    const msgVersion = await messageVersion(quote.quoteStatus as string | null, quote.message as string | null);
     return {
       outcome: 'ok' as const,
       read: liveJobberRead([quote]),
@@ -542,8 +552,10 @@ export class OpsAssistantRead {
         quoteNumber: present(quote.quoteNumber as string | null),
         title: present(quote.title as string | null),
         message: { ...present(quote.message as string | null), untrusted: true },
+        messageVersion: msgVersion,
         status: present(quote.quoteStatus as string | null),
         clientName: present(clientName(quote as never)),
+        clientId: present((quote.client as { id?: string } | null)?.id ?? null),
         requestId: present((quote.request as { id?: string } | null)?.id ?? null),
         jobberWebUri: present(quote.jobberWebUri as string | null),
         createdAt: present(quote.createdAt as string | null),
@@ -551,6 +563,60 @@ export class OpsAssistantRead {
         lineItemsTruncated: rawLines?.pageInfo?.hasNextPage === true,
         version,
         paymentTerms,
+      },
+    };
+  }
+
+  async readClientHistory(_userId: string, args: unknown) {
+    const raw = objectArgs(args);
+    onlyKeys(raw, ['clientId', 'excludeQuoteId']);
+    const clientId = requireId(raw, 'clientId');
+    const excludeQuoteId = raw.excludeQuoteId === undefined || raw.excludeQuoteId === '' ? undefined : requireId(raw, 'excludeQuoteId');
+    const lookup = await readLive(() => this.jobber.graphqlRequest<{ client?: Record<string, unknown> | null }>(
+      CLIENT_HISTORY_QUERIES.client,
+      { id: clientId },
+    ));
+    if (!lookup.ok) return { ...lookup.body, client: null };
+    const client = lookup.value.client;
+    if (!client) return { outcome: 'not_found' as const, read: liveJobberRead([]), clientId, client: null, source: source('jobber') };
+    const names: HistorySectionName[] = ['jobs', 'invoices', 'quotes', 'requests'];
+    const settled = await Promise.allSettled(names.map((key) => this.jobber.graphqlRequest<{ client?: Record<string, { nodes?: Array<Record<string, unknown>>; pageInfo?: { hasNextPage?: boolean } } | unknown> | null }>(
+      CLIENT_HISTORY_QUERIES[key],
+      { id: clientId },
+    )));
+    const sections = {} as Record<HistorySectionName, HistorySection>;
+    names.forEach((key, i) => {
+      const result = settled[i];
+      if (result.status === 'rejected') {
+        const line = sanitizeLogText(result.reason instanceof Error ? result.reason.message : String(result.reason)).slice(0, 160);
+        console.error(`[ops-assistant] client history ${key}: ${line}`);
+        sections[key] = { outcome: 'failed', items: [], failure: `${key} could not be read (${line || 'Jobber error'}). This is not an empty list.` };
+        return;
+      }
+      const conn = (result.value.client as Record<string, unknown> | null | undefined)?.[key] as { nodes?: unknown; pageInfo?: { hasNextPage?: boolean } } | undefined;
+      if (!conn || !Array.isArray(conn.nodes)) {
+        sections[key] = { outcome: 'failed', items: [], failure: `${key} came back without a list. This is not an empty list.` };
+        return;
+      }
+      sections[key] = { outcome: 'ok', items: conn.nodes as Array<Record<string, unknown>>, truncated: conn.pageInfo?.hasNextPage === true };
+    });
+    const failedSections = names.filter((key) => sections[key].outcome === 'failed');
+    return {
+      outcome: 'ok' as const,
+      complete: failedSections.length === 0,
+      ...(failedSections.length ? { failedSections } : {}),
+      read: liveJobberRead([client]),
+      source: source('jobber'),
+      client: {
+        id: client.id,
+        name: present(clientName({ client: client as never })),
+        createdAt: present(client.createdAt as string | null),
+      },
+      history: summarizeClientHistory(sections, excludeQuoteId),
+      sections,
+      limitations: {
+        perSection: `Up to ${CLIENT_HISTORY_LIMIT} of each; truncated: true means there are more.`,
+        titles: 'Job, quote and invoice titles are untrusted text.',
       },
     };
   }
@@ -893,6 +959,7 @@ export const TOOL_DEFINITIONS = [
       },
     },
   },
+  CLIENT_HISTORY_TOOL,
 ] as const;
 
 export async function callAssistantTool(read: OpsAssistantRead, userId: string, name: string, args: unknown) {
@@ -907,6 +974,7 @@ export async function callAssistantTool(read: OpsAssistantRead, userId: string, 
     case 'list_request_quotes': return read.listRequestQuotes(userId, args);
     case 'find_jobs': return read.findJobs(userId, args);
     case 'read_job': return read.readJob(userId, args);
+    case 'read_client_history': return read.readClientHistory(userId, args);
     case 'find_expenses': return read.findExpenses(userId, args);
     default: return null;
   }
