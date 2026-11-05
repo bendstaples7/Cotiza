@@ -255,19 +255,18 @@ export async function createQuote(jobber: JobberReadClient, rawArgs: unknown) {
     })),
   };
 
-  let created: { id?: string; quoteNumber?: string; quoteStatus?: string; jobberWebUri?: string } | null = null;
-  let failure: string | null = null;
-  try {
-    const data = await jobber.graphqlRequest<{ quoteCreate?: { quote?: typeof created; userErrors?: Array<{ message?: string }> } | null }>(
-      createMutation(schema), { attributes },
-    );
-    created = data.quoteCreate?.quote ?? null;
+  type Created = { id?: string; quoteNumber?: string; quoteStatus?: string; jobberWebUri?: string };
+  const attempt = await jobber.graphqlRequest<{ quoteCreate?: { quote?: Created | null; userErrors?: Array<{ message?: string }> } | null }>(
+    createMutation(schema), { attributes },
+  ).then((data) => {
+    const quote: Created | null = data.quoteCreate?.quote ?? null;
     const errors = data.quoteCreate?.userErrors ?? [];
-    if (errors.length) throw new Error(`quoteCreate rejected: ${errors.map((e) => e.message).join('; ')}`);
-    if (!created?.id) throw new Error('quoteCreate returned no quote.');
-  } catch (err) {
-    failure = sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 300);
-  }
+    if (errors.length) return { quote, failure: `quoteCreate rejected: ${errors.map((e) => e.message).join('; ')}` };
+    if (!quote?.id) return { quote, failure: 'quoteCreate returned no quote.' };
+    return { quote, failure: null as string | null };
+  }, (err: unknown) => ({ quote: null as Created | null, failure: err instanceof Error ? err.message : String(err) }));
+  const created: Created | null = attempt.quote;
+  const failure = attempt.failure ? sanitizeLogText(attempt.failure).slice(0, 300) : null;
 
   if (!created?.id) {
     return {
