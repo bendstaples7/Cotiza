@@ -113,7 +113,8 @@ export function parseApplyArgs(raw: unknown): { quoteId: string; quoteVersion: s
     const quantity = num(line.quantity);
     const unitPrice = num(line.unitPrice);
     if (!(quantity > 0) || quantity > 100000) throw new QuoteEditArgsError(`lines[${index}].quantity must be a positive number.`);
-    if (!(unitPrice >= 0) || unitPrice > 1000000) throw new QuoteEditArgsError(`lines[${index}].unitPrice must be zero or more.`);
+    // Negative prices are allowed for credit lines (Jobber's UI accepts them).
+    if (!Number.isFinite(unitPrice) || unitPrice < -1000000 || unitPrice > 1000000) throw new QuoteEditArgsError(`lines[${index}].unitPrice must be a number between -1,000,000 and 1,000,000.`);
     if (line.saveToCatalog !== undefined && typeof line.saveToCatalog !== 'boolean') throw new QuoteEditArgsError(`lines[${index}].saveToCatalog must be true or false.`);
     if (line.saveToCatalog === true && line.id !== undefined) throw new QuoteEditArgsError(`lines[${index}].saveToCatalog is only for new lines (no id).`);
     return {
@@ -461,7 +462,7 @@ export const QUOTE_WRITE_TOOLS = [
               name: { type: 'string' },
               description: { type: 'string', description: 'Omit on an existing line to keep its current description.' },
               quantity: { type: 'number' },
-              unitPrice: { type: 'number' },
+              unitPrice: { type: 'number', description: 'Negative for a credit line.' },
               saveToCatalog: { type: 'boolean', description: 'New lines only: also save this line (name, description, price) to Jobber Products & Services so the team can reuse it. Skipped if the catalog already has that name.' },
             },
           },

@@ -106,7 +106,9 @@ describe('parseApplyArgs', () => {
     expect(() => parseApplyArgs({ ...base, quoteVersion: 'x' })).toThrow('quoteVersion');
     expect(() => parseApplyArgs({ ...base, lines: [] })).toThrow('lines');
     expect(() => parseApplyArgs({ ...base, lines: [{ ...A, quantity: 0 }] })).toThrow('quantity');
-    expect(() => parseApplyArgs({ ...base, lines: [{ ...A, unitPrice: -1 }] })).toThrow('unitPrice');
+    expect(parseApplyArgs({ ...base, lines: [{ ...A, unitPrice: -250 }] }).lines[0].unitPrice).toBe(-250);
+    expect(() => parseApplyArgs({ ...base, lines: [{ ...A, unitPrice: -2000000 }] })).toThrow('unitPrice');
+    expect(() => parseApplyArgs({ ...base, lines: [{ ...A, unitPrice: 'x' }] })).toThrow('unitPrice');
     expect(() => parseApplyArgs({ ...base, lines: [A, A] })).toThrow('twice');
     expect(parseApplyArgs({ ...base, lines: [{ name: ' New ', quantity: 2, unitPrice: 0 }] }).lines[0]).toEqual({ name: 'New', quantity: 2, unitPrice: 0 });
   });
@@ -216,6 +218,7 @@ describe('quote:write scope', () => {
   it('hides apply_quote_edits from tokens without quote:write and refuses calls', async () => {
     const list = readMcpJsonBody(await (await handleMcpPost(mcp('tools/list'), deps(principal('ops:read review:write')))).text()) as { result: { tools: Array<{ name: string }> } };
     expect(list.result.tools.map((t) => t.name)).not.toContain('apply_quote_edits');
+    expect(list.result.tools.map((t) => t.name)).not.toContain('create_quote');
     const jobber = fakeJobber([A, B]);
     const call = readMcpJsonBody(await (await handleMcpPost(mcp('tools/call', { name: 'apply_quote_edits', arguments: { quoteId: 'Z2lkOi8vSm9iYmVyL1F1b3RlLzE=', quoteVersion: '0123456789abcdef', lines: [A] } }), deps(principal('ops:read'), jobber))).text()) as { result: { content: Array<{ text: string }> } };
     expect(JSON.parse(call.result.content[0].text)).toMatchObject({ outcome: 'forbidden', failure: { code: 'insufficient_scope' } });
@@ -227,6 +230,7 @@ describe('quote:write scope', () => {
     const d = deps(principal('ops:read quote:write'), jobber);
     const list = readMcpJsonBody(await (await handleMcpPost(mcp('tools/list'), d)).text()) as { result: { tools: Array<{ name: string }> } };
     expect(list.result.tools.map((t) => t.name)).toContain('apply_quote_edits');
+    expect(list.result.tools.map((t) => t.name)).toContain('create_quote');
     const args = { quoteId: 'Z2lkOi8vSm9iYmVyL1F1b3RlLzE=', quoteVersion: await quoteVersion('draft', [A, B]), lines: [{ ...A, quantity: 10 }, B] };
     const call = readMcpJsonBody(await (await handleMcpPost(mcp('tools/call', { name: 'apply_quote_edits', arguments: args }), d)).text()) as { result: { content: Array<{ text: string }>; isError: boolean } };
     expect(call.result.isError).toBe(false);
