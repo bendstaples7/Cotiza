@@ -296,6 +296,51 @@ export interface QuoteDraft {
   updatedAt: Date;
 }
 
+/** A line item in a lead quote draft, with its price resolved from the catalog */
+export interface LeadQuoteDraftLineItem {
+  name: string;
+  description: string;
+  qty: number;
+  unit: string;
+  /** Catalog price, or null when no catalog entry has a price for this item */
+  unitPrice: number | null;
+  productId?: string | null;
+}
+
+/** One requested scope from the lead's request and whether the draft covers it */
+export interface LeadQuoteDraftScopeCheck {
+  scope: string;
+  requested: boolean;
+  covered: boolean;
+  note?: string;
+}
+
+/** An open risk on a lead quote draft, for the team to resolve before sending */
+export interface LeadQuoteDraftRisk {
+  kind: string;
+  detail: string;
+}
+
+/**
+ * A draft quote generated in Cotiza for a Ready-to-quote lead. This is a view over
+ * `quote_drafts` + `quote_line_items` + `deposit_schedule`, not a separate stored shape.
+ */
+export interface LeadQuoteDraft {
+  requestId: string;
+  /** `quote_drafts.id`, or null before the draft row exists */
+  draftId: string | null;
+  lineItems: LeadQuoteDraftLineItem[];
+  milestones: PaymentMilestone[];
+  customerNote: string;
+  scopeCheck: LeadQuoteDraftScopeCheck[];
+  openRisks: LeadQuoteDraftRisk[];
+  status: 'cotiza_draft' | 'pushed';
+  jobberQuoteId: string | null;
+  jobberQuoteNumber: string | null;
+  jobberQuoteWebUri: string | null;
+  generatedAt: string;
+}
+
 /** Form answer from a Jobber request submission */
 export interface JobberFormAnswer {
   label: string;
