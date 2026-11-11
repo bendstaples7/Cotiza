@@ -14,6 +14,8 @@
  * POST   /api/leads/:requestId/send-text  send one confirmed text through Quo and log it
  * POST   /api/leads/jobber-notes/:noteId/retry  try again to add a Cotiza note to the Jobber request
  * POST   /api/leads/:requestId/quotes/:quoteId/review-request  the team sent a draft quote to Ben for review
+ * POST   /api/leads/:requestId/draft      generate a Cotiza draft quote for this lead (idempotent)
+ * GET    /api/leads/:requestId/draft      the Cotiza draft stored for this lead, or null
  * POST   /api/leads/:requestId/close     close a lead with a reason (postponed: with a check-back date)
  * POST   /api/leads/:requestId/reopen    reopen a closed lead
  *
@@ -31,6 +33,8 @@ import { downloadRequestPhoto, loadRequestPhotos, photoFailureReason } from '../
 import { EmailContextService } from '../services/email-context-service.js';
 import { PhoneContextService } from '../services/phone-context-service.js';
 import { LeadInfoError, LeadInfoService, requireRequestId, summarize } from '../services/lead-info-service.js';
+import { buildCustomerNote, findAssumptionConflicts } from '../services/lead-quote-draft.js';
+import { generateQuoteDraft } from './quotes.js';
 import { sanitizeLogText } from '../services/jobber-log-sanitize.mjs';
 import { LeadContactError, LeadContactService, validateContact } from '../services/lead-contact-service.js';
 import { gatherLeadWorkflow, type RequestDetail } from '../services/lead-contact-status.js';
@@ -483,6 +487,64 @@ app.post('/:requestId/quotes/:quoteId/review-request', async (c) => {
     kind: 'review_requested', quoteNumber: quote.number,
   });
   return c.json({ requestedAt, quoteStage: await gatherQuoteStage(c.env.DB, requestId, known), jobberNote });
+});
+
+const ASSUMED_RE = /^assumed:\s*/i;
+
+/**
+ * Build a Cotiza draft quote for this lead through the shared generation path, then add the
+ * lead-only customer note (every Assumed: line) and the assumption/request measurement conflicts
+ * as action items. Idempotent: a request that already has a draft returns it, never a duplicate.
+ */
+app.post('/:requestId/draft', async (c) => {
+  let requestId: string;
+  try { requestId = requireRequestId(c.req.param('requestId')); } catch (err) { return c.json(badRequest(err), 400); }
+  const userId = c.get('user').id;
+
+  const existing = await c.env.DB.prepare(
+    'SELECT id FROM quote_drafts WHERE user_id = ? AND jobber_request_id = ? ORDER BY created_at ASC LIMIT 1',
+  ).bind(userId, requestId).first<{ id: string }>();
+  if (existing) return c.json({ draftId: existing.id });
+
+  const items = await new LeadInfoService(c.env.DB).list(requestId);
+  const assumptions = items.filter((i) => ASSUMED_RE.test(i.question)).map((i) => i.question);
+  const answers = items
+    .filter((i) => i.status === 'answered' && i.answer)
+    .map((i) => `${i.question}: ${i.answer}`);
+  const leadContextText = [...assumptions, ...answers].join('\n');
+
+  const draft = await generateQuoteDraft(c, {
+    jobberRequestId: requestId,
+    leadContextText,
+    decorate: (d) => {
+      d.customerNote = buildCustomerNote(d.customerNote, assumptions);
+      const lineItemId = d.lineItems[0]?.id ?? '';
+      const conflicts = findAssumptionConflicts(assumptions, [d.customerRequestText ?? '']);
+      d.actionItems = [
+        ...(d.actionItems ?? []),
+        ...conflicts.map((risk) => ({
+          id: crypto.randomUUID(), quoteDraftId: d.id, lineItemId, description: risk.detail, completed: false,
+        })),
+      ];
+    },
+  });
+
+  await new ActivityLogService(c.env.DB).log({
+    userId, component: 'LeadHub', operation: 'draft_quote', severity: 'info',
+    description: `Generated Cotiza draft ${draft.id} for request ${requestId}.`,
+  }).catch(() => undefined);
+
+  return c.json({ draftId: draft.id });
+});
+
+/** The Cotiza draft stored for this lead, or null. Never generates. */
+app.get('/:requestId/draft', async (c) => {
+  let requestId: string;
+  try { requestId = requireRequestId(c.req.param('requestId')); } catch (err) { return c.json(badRequest(err), 400); }
+  const row = await c.env.DB.prepare(
+    'SELECT id FROM quote_drafts WHERE user_id = ? AND jobber_request_id = ? ORDER BY created_at DESC LIMIT 1',
+  ).bind(c.get('user').id, requestId).first<{ id: string }>();
+  return c.json({ draftId: row?.id ?? null });
 });
 
 /**

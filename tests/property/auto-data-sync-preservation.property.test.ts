@@ -407,8 +407,8 @@ describe('Property 4 — Jobber Fallback Preservation', () => {
       'utf-8',
     );
 
-    // Scope to the POST /generate handler where the catalog fetching lives
-    const generateHandlerMatch = quotesSource.match(/app\.post\('\/generate'\s*,/);
+    // Scope to the shared generateQuoteDraft (POST /generate and the lead Draft quote route both call it)
+    const generateHandlerMatch = quotesSource.match(/export async function generateQuoteDraft\(/);
     expect(generateHandlerMatch).not.toBeNull();
     const handlerStart = generateHandlerMatch!.index!;
     const restOfFile = quotesSource.slice(handlerStart + 1);

@@ -250,7 +250,7 @@ function normalizeMilestones(source: PaymentMilestone[]): PaymentMilestone[] {
   });
 }
 
-function buildCustomerNote(narrative: string | null | undefined, assumptions: string[]): string {
+export function buildCustomerNote(narrative: string | null | undefined, assumptions: string[]): string {
   const trimmed = narrative?.trim();
   if (!assumptions.length) {
     return trimmed || 'Draft quote prepared from the request.';
@@ -268,7 +268,7 @@ function buildCustomerNote(narrative: string | null | undefined, assumptions: st
  * A deterministic risk when an assumption's measurement disagrees with the
  * request/email measurement for the same item.
  */
-function findAssumptionConflicts(assumptions: string[], texts: string[]): LeadQuoteDraftRisk[] {
+export function findAssumptionConflicts(assumptions: string[], texts: string[]): LeadQuoteDraftRisk[] {
   const risks: LeadQuoteDraftRisk[] = [];
 
   for (const assumption of assumptions) {
