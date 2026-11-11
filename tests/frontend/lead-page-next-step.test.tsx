@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom';
 import LeadPage from '../../client/src/pages/LeadPage';
 import type { LeadBundle, LeadWorkflow } from '../../client/src/api';
 
@@ -17,6 +17,8 @@ const api = vi.hoisted(() => ({
   retryJobberNote: vi.fn(),
   warnIfJobberNoteFailed: vi.fn(),
   requestQuoteReview: vi.fn(),
+  createLeadDraft: vi.fn(),
+  fetchLeadDraft: vi.fn().mockResolvedValue({ draftId: null }),
   closeLead: vi.fn(),
   reopenLead: vi.fn(),
   syncLeadTrello: vi.fn(),
@@ -227,5 +229,65 @@ describe('Lead page next step', () => {
     await userEvent.click(within(step).getByRole('button', { name: 'Close in Cotiza too' }));
     expect(api.closeLead).toHaveBeenCalledWith(REQ, { reason: 'other', note: 'Already in Bid Lost in Trello' });
     expect(within(step).queryByRole('button', { name: 'Mark done' })).not.toBeInTheDocument();
+  });
+
+  describe('Draft quote button', () => {
+    const readyWorkflow: LeadWorkflow = {
+      ...workflow, progress: 'ready_to_quote', secondary: undefined,
+      action: { kind: 'draft_quote', label: 'Draft quote', why: 'We have what we need to quote.', step: 'draft_quote', channel: 'other' },
+    };
+    const DraftProbe = () => {
+      const { id } = useParams();
+      return <div data-testid="draft-page">{id}</div>;
+    };
+    function renderReady() {
+      api.fetchLead.mockResolvedValue({ ...bundle, workflow: readyWorkflow });
+      return render(
+        <MemoryRouter initialEntries={[`/quotes/leads/${REQ}?action=draft_quote`]}>
+          <Routes>
+            <Route path="/quotes/leads/:requestId" element={<LeadPage />} />
+            <Route path="/quotes/drafts/:id" element={<DraftProbe />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+    }
+
+    it('posts once and opens the new draft', async () => {
+      api.createLeadDraft.mockResolvedValue({ draftId: 'draft_1' });
+      renderReady();
+      const step = await screen.findByRole('region', { name: 'Next step' });
+      await userEvent.click(within(step).getByRole('button', { name: 'Draft quote' }));
+      expect(api.createLeadDraft).toHaveBeenCalledWith(REQ);
+      expect(await screen.findByTestId('draft-page')).toHaveTextContent('draft_1');
+    });
+
+    it('shows Drafting… while the draft is being made', async () => {
+      let resolve!: (v: { draftId: string }) => void;
+      api.createLeadDraft.mockReturnValue(new Promise((r) => { resolve = r; }));
+      renderReady();
+      const step = await screen.findByRole('region', { name: 'Next step' });
+      await userEvent.click(within(step).getByRole('button', { name: 'Draft quote' }));
+      expect(within(step).getByRole('button', { name: 'Drafting…' })).toBeDisabled();
+      resolve({ draftId: 'draft_2' });
+      expect(await screen.findByTestId('draft-page')).toHaveTextContent('draft_2');
+    });
+
+    it('shows the error inline when the draft fails', async () => {
+      api.createLeadDraft.mockRejectedValue({ message: 'No request text to quote.' });
+      renderReady();
+      const step = await screen.findByRole('region', { name: 'Next step' });
+      await userEvent.click(within(step).getByRole('button', { name: 'Draft quote' }));
+      expect(await within(step).findByRole('alert')).toHaveTextContent('No request text to quote.');
+      expect(screen.queryByTestId('draft-page')).not.toBeInTheDocument();
+    });
+
+    it('opens the existing draft instead of making a second', async () => {
+      api.fetchLeadDraft.mockResolvedValue({ draftId: 'draft_0' });
+      renderReady();
+      const step = await screen.findByRole('region', { name: 'Next step' });
+      await userEvent.click(await within(step).findByRole('button', { name: 'Open draft' }));
+      expect(api.createLeadDraft).not.toHaveBeenCalled();
+      expect(await screen.findByTestId('draft-page')).toHaveTextContent('draft_0');
+    });
   });
 });

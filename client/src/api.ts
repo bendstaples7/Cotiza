@@ -1461,6 +1461,21 @@ export async function requestQuoteReview(requestId: string, quoteId: string): Pr
   return handleResponseWithToast(res);
 }
 
+/** Create the Cotiza draft quote for a lead (idempotent; returns the existing one). */
+export async function createLeadDraft(requestId: string): Promise<{ draftId: string }> {
+  const res = await fetch(API_BASE + '/api/leads/' + encodeURIComponent(requestId) + '/draft', {
+    method: 'POST',
+    headers: { ...authHeaders() },
+  });
+  return handleResponseWithToast(res);
+}
+
+/** The Cotiza draft already stored for this lead, or null. */
+export async function fetchLeadDraft(requestId: string): Promise<{ draftId: string | null }> {
+  const res = await fetch(API_BASE + '/api/leads/' + encodeURIComponent(requestId) + '/draft', { headers: { ...authHeaders() } });
+  return handleResponse(res);
+}
+
 /** A lead's place in the handbook follow-up cadence and the one next action (worker: lead-workflow.ts). */
 export type LeadWorkflowAction = { kind: LeadActionKind; label: string; why: string; step: string; channel: 'text' | 'call' | 'email' | 'other' };
 

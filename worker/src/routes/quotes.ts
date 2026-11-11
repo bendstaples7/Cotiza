@@ -1,6 +1,6 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import type { Bindings } from '../bindings.js';
-import type { User, ProductCatalogEntry, QuoteTemplate, JobberCustomerRequest, JobberReadMeta, SimilarQuote, StructuredRule, RuleCondition, RuleAction, TriggerMode, ActionItem, CreateManualRequestPayload, UpdateProductivityRatePayload, DepositSchedule, DraftEmailContextResponse } from 'shared';
+import type { User, ProductCatalogEntry, QuoteTemplate, QuoteDraft, JobberCustomerRequest, JobberReadMeta, SimilarQuote, StructuredRule, RuleCondition, RuleAction, TriggerMode, ActionItem, CreateManualRequestPayload, UpdateProductivityRatePayload, DepositSchedule, DraftEmailContextResponse } from 'shared';
 import { extractCustomerEmailFromRequestBody, splitEmailContextFromCustomerText, parseEmailMessages } from 'shared';
 import { sessionMiddleware } from '../middleware/session.js';
 import { PlatformError } from '../errors/index.js';
@@ -772,17 +772,30 @@ async function fetchManualTemplates(db: D1Database, userId: string): Promise<Quo
  * POST /generate
  * Submit a customer request and generate a quote draft.
  */
-app.post('/generate', async (c) => {
+export interface GenerateQuoteBody {
+  customerText?: string;
+  mediaItemIds?: string[];
+  manualCatalog?: ProductCatalogEntry[];
+  manualTemplates?: QuoteTemplate[];
+  jobberRequestId?: string;
+  manualRequestId?: string;
+  /** Lead-only text (Assumed: lines + need-from-customer answers) appended to the request text. */
+  leadContextText?: string;
+  /** Lead-only mutation applied to the draft before it is saved. */
+  decorate?: (draft: QuoteDraft) => void;
+}
+
+/**
+ * The one generation path: request text -> saved draft.
+ * POST /generate and POST /api/leads/:requestId/draft both call this.
+ */
+export async function generateQuoteDraft(
+  // Only c.env and the user id are read below, so any route's context fits (Hono Context itself is invariant).
+  c: { env: Bindings; get(key: 'user'): { id: string } },
+  body: GenerateQuoteBody,
+): Promise<QuoteDraft> {
   const userId = c.get('user').id;
   const db = c.env.DB;
-  const body = await c.req.json() as {
-    customerText?: string;
-    mediaItemIds?: string[];
-    manualCatalog?: ProductCatalogEntry[];
-    manualTemplates?: QuoteTemplate[];
-    jobberRequestId?: string;
-    manualRequestId?: string;
-  };
 
   // Validate that the request has enough input to generate a quote.
   // Trim string inputs so whitespace-only values don't bypass validation.
@@ -1024,6 +1037,10 @@ app.post('/generate', async (c) => {
     // Graceful degradation — email context failure must not block quote generation
   }
 
+  if (body.leadContextText?.trim()) {
+    body.customerText = [body.customerText ?? '', body.leadContextText].filter((t) => t.trim()).join('\n\n');
+  }
+
   const result = await quoteEngine.generateQuote(
     {
       customerText: body.customerText ?? '',
@@ -1073,8 +1090,14 @@ app.post('/generate', async (c) => {
     }
   }
 
+  body.decorate?.(result.draft);
   const saved = await quoteDraftService.save(result.draft);
-  return c.json(saved, 201);
+  return saved;
+}
+
+app.post('/generate', async (c) => {
+  const body = await c.req.json() as GenerateQuoteBody;
+  return c.json(await generateQuoteDraft(c, body), 201);
 });
 
 /**
