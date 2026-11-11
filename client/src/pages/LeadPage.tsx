@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import LeadReceivedBadge from '../components/LeadReceivedBadge';
 import type { ErrorResponse } from 'shared';
 import {
   addLeadInfo,
+  createLeadDraft,
   fetchLead,
+  fetchLeadDraft,
   fetchLeadPhotoUrl,
   closeLead,
   LEAD_CLOSE_REASONS,
@@ -268,6 +270,7 @@ function NextStepPanel({ lead, workflow, onChanged, panelRef, onSwitch }: { lead
   const clientName = req?.clientName?.availability === 'present' ? req.clientName.value ?? null : null;
   const title = req?.title?.availability === 'present' ? req.title.value ?? null : null;
   const jobberUrl = req?.jobberWebUri?.availability === 'present' ? req.jobberWebUri.value ?? null : null;
+  const navigate = useNavigate();
   const action = workflow.action;
   const messages = buildActionMessage(action.kind, { clientName, title, items: lead.infoNeeded.items });
   const [text, setText] = useState(messages?.text ?? '');
@@ -275,6 +278,7 @@ function NextStepPanel({ lead, workflow, onChanged, panelRef, onSwitch }: { lead
   const [copied, setCopied] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [draftId, setDraftId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ text: string; warn: boolean } | null>(null);
   const [doneAt, setDoneAt] = useState<string | null>(null);
@@ -283,6 +287,27 @@ function NextStepPanel({ lead, workflow, onChanged, panelRef, onSwitch }: { lead
   // Rebuild the proposed text when the action or checklist changes (until the team edits it).
   useEffect(() => { if (!edited) setText(messages?.text ?? ''); }, [messages?.text, edited]);
   useEffect(() => { setEdited(false); setConfirming(false); }, [action.kind]);
+  // The Cotiza draft already made for this lead, so the button opens it instead of making a second.
+  useEffect(() => {
+    if (action.kind !== 'draft_quote' && action.kind !== 'ben_edits') return;
+    let current = true;
+    fetchLeadDraft(lead.requestId).then((r) => { if (current) setDraftId(r.draftId); }).catch(() => undefined);
+    return () => { current = false; };
+  }, [action.kind, lead.requestId]);
+
+  const draftQuote = async () => {
+    if (draftId) { navigate('/quotes/drafts/' + draftId); return; }
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await createLeadDraft(lead.requestId);
+      navigate('/quotes/drafts/' + result.draftId);
+    } catch (err) {
+      setError((err as ErrorResponse).message ?? 'Could not draft the quote.');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const quoConnected = !(lead.contactStatus?.notConnected ?? []).includes('quo');
   const phone = lead.contact.phone;
@@ -437,12 +462,11 @@ function NextStepPanel({ lead, workflow, onChanged, panelRef, onSwitch }: { lead
       )}
 
       {(action.kind === 'draft_quote' || action.kind === 'ben_edits') && !stageQuote && (
-        <>
-          <p style={{ ...muted, margin: 0 }}>We have what we need. Draft the quote in Jobber from the request and the assumptions below, then mark this done.</p>
-          <div style={actions}>
-            {jobberUrl && <a style={primaryLink} href={jobberUrl} target="_blank" rel="noreferrer">Open in Jobber</a>}
-          </div>
-        </>
+        <div style={actions}>
+          <button type="button" style={primaryBtn} disabled={busy} onClick={() => { void draftQuote(); }}>
+            {busy ? 'Drafting…' : draftId ? 'Open draft' : 'Draft quote'}
+          </button>
+        </div>
       )}
 
       {stageQuote && (action.kind === 'draft_quote' || action.kind === 'ben_edits') && (
