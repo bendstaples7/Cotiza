@@ -346,4 +346,78 @@ describe('EmailContextService', () => {
       expect(oauthCalls.length).toBe(1);
     });
   });
+
+  describe('fetchInvoiceMessages', () => {
+    it('collects nested multipart text and attachment filenames and keeps the full body', async () => {
+      const tokenResponse = {
+        access_token: 'test-access-token',
+        expires_in: 3600,
+        token_type: 'Bearer',
+      };
+      const longText = 'Amount due $216.20 on 2026-10-29\n' + 'x'.repeat(600) + 'END';
+      const listResponse = {
+        messages: [{ id: 'msg1', threadId: 'thread1' }, { id: 'msg2', threadId: 'thread2' }],
+        resultSizeEstimate: 2,
+      };
+      const nested = {
+        id: 'msg1',
+        threadId: 'thread1',
+        payload: {
+          mimeType: 'multipart/mixed',
+          headers: [
+            { name: 'From', value: '20four7VA <billing@20four7va.com>' },
+            { name: 'Subject', value: 'Invoice #5511-R-0024' },
+          ],
+          parts: [
+            {
+              mimeType: 'multipart/alternative',
+              parts: [
+                { mimeType: 'text/plain', body: { data: btoa(longText) } },
+                { mimeType: 'text/html', body: { data: btoa('<p>hi</p>') } },
+              ],
+            },
+            { mimeType: 'application/pdf', filename: 'top.pdf', body: { attachmentId: 'a1' } },
+            {
+              mimeType: 'multipart/mixed',
+              parts: [{ mimeType: 'application/pdf', filename: 'nested.pdf', body: { attachmentId: 'a2' } }],
+            },
+          ],
+        },
+        internalDate: '1781605800000',
+      };
+      const flat = {
+        id: 'msg2',
+        threadId: 'thread2',
+        payload: {
+          mimeType: 'text/plain',
+          headers: [
+            { name: 'From', value: '20four7VA <billing@20four7va.com>' },
+            { name: 'Subject', value: 'Invoice #5511-R-0025' },
+          ],
+          body: { data: btoa('Amount due $12.00 on 2026-01-02') },
+        },
+        internalDate: '1781605800001',
+      };
+
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(tokenResponse) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(listResponse) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(nested) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(flat) });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const service = new EmailContextService(
+        VALID_CREDENTIALS.clientId,
+        VALID_CREDENTIALS.clientSecret,
+        VALID_CREDENTIALS.refreshToken,
+      );
+      const messages = await service.fetchInvoiceMessages();
+
+      expect(messages).toHaveLength(2);
+      expect(messages[0].bodyText).toContain('END');
+      expect(messages[0].bodyText.length).toBeGreaterThan(500);
+      expect(messages[0].attachmentNames).toEqual(['top.pdf', 'nested.pdf']);
+      expect(messages[1].bodyText).toBe('Amount due $12.00 on 2026-01-02');
+    });
+  });
 });

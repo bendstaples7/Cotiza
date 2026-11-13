@@ -201,7 +201,14 @@ export default {
   async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(sweepExpiredReceipts(env.R2_BUCKET));
     // Dry-run invoice detector (card fae9e3e9): record would-log rows, never touches Jobber.
-    if (env.GMAIL_CLIENT_ID) ctx.waitUntil(runInvoiceInboxScan(new EmailContextService(env.GMAIL_CLIENT_ID, env.GMAIL_CLIENT_SECRET, env.GMAIL_REFRESH_TOKEN), env.DB));
+    if (
+      event.cron === JOBBER_SESSION_KEEPALIVE_CRON &&
+      env.GMAIL_CLIENT_ID?.trim() &&
+      env.GMAIL_CLIENT_SECRET?.trim() &&
+      env.GMAIL_REFRESH_TOKEN?.trim()
+    ) {
+      ctx.waitUntil(runInvoiceInboxScan(new EmailContextService(env.GMAIL_CLIENT_ID, env.GMAIL_CLIENT_SECRET, env.GMAIL_REFRESH_TOKEN), env.DB));
+    }
     if (event.cron === JOBBER_SESSION_KEEPALIVE_CRON) {
       await handleJobberSessionKeepAlive(env);
       return;

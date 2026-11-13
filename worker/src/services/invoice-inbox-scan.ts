@@ -31,7 +31,7 @@ export function invoiceDedupeKey(
   date: string | null,
 ): string | null {
   if (vendor && number) return `${vendor}|${number}`.toLowerCase();
-  if (amount !== null && date) return `${Math.round(amount * 100)}|${date}`;
+  if (vendor && amount !== null && date) return `${vendor}|${Math.round(amount * 100)}|${date}`.toLowerCase();
   return null;
 }
 
@@ -53,12 +53,12 @@ export function draftFromMessage(message: GmailInvoiceMessage): {
   const numberMatch = text.match(/#\s*([A-Za-z0-9][A-Za-z0-9-]{2,})/);
   const invoiceNumber = numberMatch ? numberMatch[1].toUpperCase() : null;
 
-  const amountMatch =
-    message.bodyText.match(/\$\s?([0-9][0-9,]*\.[0-9]{2})/) ??
-    message.subject.match(/\$\s?([0-9][0-9,]*\.[0-9]{2})/);
-  const amount = amountMatch
-    ? Math.round(parseFloat(amountMatch[1].replace(/,/g, '')) * 100) / 100
-    : null;
+  // Amount comes only from a labelled total (total / amount due / balance due); an
+  // unlabelled $ token is a guess, and several different labelled totals are ambiguous.
+  const labelledTotals = [...text.matchAll(/\b(?:total|amount\s+due|balance\s+due)\b[^$]{0,40}\$\s?([0-9][0-9,]*\.[0-9]{2})/gi)]
+    .map((match) => Math.round(parseFloat(match[1].replace(/,/g, '')) * 100) / 100);
+  const distinctTotals = [...new Set(labelledTotals)];
+  const amount = distinctTotals.length === 1 ? distinctTotals[0] : null;
 
   const dateMatch = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
   const expenseDate = dateMatch ? dateMatch[1] : null;
@@ -68,9 +68,12 @@ export function draftFromMessage(message: GmailInvoiceMessage): {
   const missing: string[] = [];
   if (!vendor) missing.push('vendor');
   if (!invoiceNumber) missing.push('invoiceNumber');
-  if (amount === null) missing.push('amount');
   if (!expenseDate) missing.push('expenseDate');
   if (!attachmentName) missing.push('attachment');
+
+  const reasons: string[] = [];
+  if (amount === null) reasons.push('no unambiguous total');
+  if (missing.length > 0) reasons.push('missing ' + missing.join(', '));
 
   return {
     messageId: message.id,
@@ -79,8 +82,8 @@ export function draftFromMessage(message: GmailInvoiceMessage): {
     amount,
     expenseDate,
     attachmentName,
-    status: missing.length > 0 ? 'uncertain' : 'would_log',
-    reason: missing.length > 0 ? 'missing ' + missing.join(', ') : null,
+    status: reasons.length > 0 ? 'uncertain' : 'would_log',
+    reason: reasons.length > 0 ? reasons.join('; ') : null,
   };
 }
 
@@ -103,7 +106,8 @@ export async function scanInvoiceInbox(deps: {
           .first(),
       );
     }
-    const status = duplicate ? 'skipped' : draft.status;
+    // No dedupe key means the row could never be recognised as a repeat — never would_log.
+    const status = duplicate ? 'skipped' : !key ? 'uncertain' : draft.status;
     await deps.db
       .prepare(
         'INSERT INTO invoice_inbox_items (message_id, thread_id, vendor, invoice_number, amount, expense_date, attachment_name, dedupe_key, status, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(message_id) DO NOTHING',

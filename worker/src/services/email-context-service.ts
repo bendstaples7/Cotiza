@@ -136,7 +136,7 @@ export class EmailContextService {
 
   // ── Decode base64 Gmail body ───────────────────────────────────
 
-  private decodeBase64(data: string): string {
+  private decodeBase64(data: string, maxChars = 500): string {
     // Gmail uses URL-safe base64 with padding
     try {
       // Replace URL-safe chars and fix padding
@@ -144,8 +144,8 @@ export class EmailContextService {
       const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
       // Use atob in the worker environment (Cloudflare Workers have it)
       const decoded = atob(padded);
-      // Limit body text to 500 chars to avoid bloating the prompt
-      return decoded.slice(0, 500);
+      // Conversation context caps body text to 500 chars to avoid bloating the prompt
+      return decoded.slice(0, maxChars);
     } catch {
       return '';
     }
@@ -400,32 +400,30 @@ export class EmailContextService {
     return this.lastReadFailed ? { status: 'failed' } : { status: 'ok', text };
   }
 
-  /** Recent PDF invoice emails for the dry-run invoice poller (card fae9e3e9). */
+  /** Recent PDF invoice emails for the dry-run invoice poller (card fae9e3e9). Throws when Gmail cannot be read. */
   async fetchInvoiceMessages(limit = 25): Promise<import('./invoice-inbox-scan.js').GmailInvoiceMessage[]> {
     if (!this.isAvailable()) return [];
+    this.lastReadFailed = false;
     const accessToken = await this.getAccessToken();
-    if (!accessToken) return [];
+    if (!accessToken) throw new Error('Gmail token refresh failed');
     const list = await this.apiFetch<GmailListResponse>(
       accessToken,
       '/messages?q=' + encodeURIComponent('has:attachment filename:pdf newer_than:2d') + '&maxResults=' + limit,
     );
+    if (this.lastReadFailed) throw new Error('Gmail invoice list read failed');
     const messages: import('./invoice-inbox-scan.js').GmailInvoiceMessage[] = [];
     for (const ref of (list?.messages ?? []).slice(0, limit)) {
       const msg = await this.apiFetch<GmailMessage>(accessToken, `/messages/${ref.id}?format=full`);
-      if (!msg) continue;
-      const parts = (msg.payload?.parts ?? []) as Array<{
-        mimeType?: string;
-        filename?: string;
-        body?: { data?: string };
-      }>;
-      const textPart = parts.find((part) => part.mimeType === 'text/plain' && part.body?.data);
+      if (this.lastReadFailed || !msg) throw new Error('Gmail invoice message read failed');
+      const collected = { texts: [] as string[], names: [] as string[] };
+      collectMimeParts(msg.payload, collected);
       messages.push({
         id: ref.id,
         threadId: msg.threadId,
         from: this.getHeader(msg.payload?.headers ?? [], 'From'),
         subject: this.getHeader(msg.payload?.headers ?? [], 'Subject'),
-        bodyText: textPart?.body?.data ? this.decodeBase64(textPart.body.data) : '',
-        attachmentNames: parts.map((part) => part.filename).filter((name): name is string => Boolean(name)),
+        bodyText: collected.texts.map((data) => this.decodeBase64(data, Infinity)).filter(Boolean).join('\n'),
+        attachmentNames: collected.names,
       });
     }
     return messages;
@@ -439,6 +437,21 @@ export class EmailContextService {
     const profile = await this.apiFetch<{ emailAddress?: string }>(accessToken, '/profile');
     return profile?.emailAddress ?? null;
   }
+}
+
+interface MimePartLike {
+  mimeType?: string;
+  filename?: string;
+  body?: { data?: string };
+  parts?: MimePartLike[];
+}
+
+/** Depth-first walk of a Gmail MIME tree: every text/plain body and every attachment filename. */
+function collectMimeParts(part: MimePartLike | undefined, acc: { texts: string[]; names: string[] }): void {
+  if (!part) return;
+  if (part.filename) acc.names.push(part.filename);
+  if (part.mimeType === 'text/plain' && part.body?.data) acc.texts.push(part.body.data);
+  for (const child of part.parts ?? []) collectMimeParts(child, acc);
 }
 
 /** Extract the email address from a "Name <email@example.com>" header value. */

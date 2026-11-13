@@ -7,6 +7,7 @@ import {
   runInvoiceInboxScan,
   type GmailInvoiceMessage,
 } from '../../worker/src/services/invoice-inbox-scan.js';
+import { EmailContextService } from '../../worker/src/services/email-context-service.js';
 
 function msg(over: Partial<GmailInvoiceMessage> = {}): GmailInvoiceMessage {
   return {
@@ -35,7 +36,10 @@ function db() {
         first: async () =>
           rows.some((row) => row.dedupe_key === args[0] && row.message_id !== args[1]) ? { 1: 1 } : null,
         run: async () => {
-          rows.push({ message_id: String(args[0]), dedupe_key: String(args[7]) });
+          const messageId = String(args[0]);
+          if (!rows.some((row) => row.message_id === messageId)) {
+            rows.push({ message_id: messageId, dedupe_key: String(args[7]) });
+          }
           return { success: true };
         },
       }),
@@ -54,7 +58,7 @@ describe('invoice inbox scan', () => {
     expect(classifyInvoiceMessage(msg({ attachmentNames: ['5511-R-0024.png'] }))).toBe(false);
   });
 
-  it('drafts would_log fields and falls back to amount|date for the dedupe key', () => {
+  it('drafts would_log fields and falls back to vendor|amount|date for the dedupe key', () => {
     const draft = draftFromMessage(msg());
     expect([draft.status, draft.invoiceNumber, draft.amount, draft.expenseDate]).toEqual([
       'would_log',
@@ -63,7 +67,29 @@ describe('invoice inbox scan', () => {
       '2026-10-29',
     ]);
     expect(draftFromMessage(msg({ bodyText: 'Due on 2026-10-29' })).status).toBe('uncertain');
-    expect(invoiceDedupeKey('ACME', null, 216.2, '2026-10-29')).toBe('21620|2026-10-29');
+    expect(invoiceDedupeKey('ACME', null, 216.2, '2026-10-29')).toBe('acme|21620|2026-10-29');
+    expect(invoiceDedupeKey(null, '5511-R-0024', 216.2, '2026-10-29')).toBeNull();
+  });
+
+  it('prefers a labelled total and reports uncertainty when no unambiguous total exists', () => {
+    const subtotalAndTotal = draftFromMessage(
+      msg({ bodyText: 'Subtotal: $200.00\nTotal: $216.20 due on 2026-10-29' }),
+    );
+    expect([subtotalAndTotal.status, subtotalAndTotal.amount]).toEqual(['would_log', 216.2]);
+    const conflicting = draftFromMessage(
+      msg({ bodyText: 'Total: $100.00\nAmount Due: $120.00 on 2026-10-29' }),
+    );
+    expect([conflicting.status, conflicting.amount, conflicting.reason]).toEqual([
+      'uncertain',
+      null,
+      'no unambiguous total',
+    ]);
+    const unlabelled = draftFromMessage(msg({ bodyText: 'Please pay $99.00 on 2026-10-29' }));
+    expect([unlabelled.status, unlabelled.amount, unlabelled.reason]).toEqual([
+      'uncertain',
+      null,
+      'no unambiguous total',
+    ]);
   });
 
   it('records one row per invoice and marks a repeat dedupe key skipped', async () => {
@@ -84,6 +110,50 @@ describe('invoice inbox scan', () => {
     });
     expect(result).toEqual({ scanned: 3, wouldLog: 1, uncertain: 0, skipped: 1 });
     expect(store.rows.map((row) => row.message_id)).toEqual(['m1', 'm3']);
+  });
+
+  it('re-running over the same messages adds no duplicate rows', async () => {
+    const store = db();
+    const messages = [
+      msg(),
+      msg({
+        id: 'm2',
+        from: 'Other <other@example.com>',
+        subject: 'Team offsite',
+        bodyText: 'See you there',
+        attachmentNames: [],
+      }),
+    ];
+    const first = await scanInvoiceInbox({ messages, db: store as unknown as D1Database });
+    const second = await scanInvoiceInbox({ messages, db: store as unknown as D1Database });
+    expect(first).toEqual({ scanned: 2, wouldLog: 1, uncertain: 0, skipped: 0 });
+    expect(second).toEqual(first);
+    expect(store.rows.map((row) => row.message_id)).toEqual(['m1']);
+  });
+
+  it('logs scan failed and records nothing when the Gmail read fails', async () => {
+    const errors: unknown[][] = [];
+    const logs: unknown[][] = [];
+    vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      errors.push(args);
+    });
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      logs.push(args);
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ access_token: 'tok', expires_in: 3600, token_type: 'Bearer' }) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ emailAddress: 'ben@gmail.com' }) })
+        .mockResolvedValueOnce({ ok: false, json: () => Promise.resolve({}) }),
+    );
+    const store = db();
+    await runInvoiceInboxScan(new EmailContextService('id', 'secret', 'refresh'), store as unknown as D1Database);
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    expect(store.rows).toEqual([]);
+    expect(logs).toEqual([]);
+    expect(errors).toEqual([['[invoice-inbox] scan failed', expect.any(Error)]]);
   });
 
   it('swallows a mailbox that throws', async () => {
