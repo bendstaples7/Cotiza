@@ -24,6 +24,7 @@ import systemsRoutes from './routes/systems.js';
 import dashboardRoutes from './routes/dashboard.js';
 import reviewRoutes from './routes/reviews.js';
 import mediaServeRoutes from './routes/media-serve.js';
+import assistantReceiptRoutes, { sweepExpiredReceipts } from './routes/assistant-receipt.js';
 import reportRoutes from './routes/reports.js';
 import opsAssistantRoutes from './routes/ops-assistant.js';
 import leadRoutes from './routes/leads.js';
@@ -32,6 +33,7 @@ const app = new Hono<{ Bindings: Bindings }>();
 
 // Public R2 media delivery (must be before CORS body limits — img tags cannot auth)
 app.route('/', mediaServeRoutes);
+app.route('/', assistantReceiptRoutes);
 
 // Webhook routes — no CORS or auth, verified via HMAC signature
 app.route('/api/webhooks', webhookRoutes);
@@ -195,6 +197,7 @@ export default {
     await handleImageQueue(batch, env);
   },
   async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(sweepExpiredReceipts(env.R2_BUCKET));
     if (event.cron === JOBBER_SESSION_KEEPALIVE_CRON) {
       await handleJobberSessionKeepAlive(env);
       return;
