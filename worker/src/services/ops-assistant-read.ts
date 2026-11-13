@@ -1009,3 +1009,67 @@ export async function callAssistantTool(read: OpsAssistantRead, userId: string, 
     default: return null;
   }
 }
+
+/** Expense-receipt writes (card 0d929d22). Office account only, expense:write scope. */
+const RECEIPT_TTL_MS = 15 * 60 * 1000;
+const EXPENSE_ONE_QUERY = `query AssistantExpenseOne($id: EncodedId!) {
+  expense(id: $id) { id title description date total updatedAt }
+}`;
+const RECEIPT_MUTATION = `mutation AssistantExpenseReceipt($expenseId: EncodedId!, $input: ExpenseEditInput!) {
+  expenseEdit(expenseId: $expenseId, input: $input) { expense { id updatedAt } userErrors { message path } }
+}`;
+export interface ReceiptTarget { bucket: R2Bucket; origin: string }
+
+function receiptPdf(raw: unknown): Uint8Array {
+  if (typeof raw !== 'string' || raw.length < 8 || raw.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(raw)) throw new InvalidAssistantArgs('pdfBase64 must be base64 PDF data.');
+  if (raw.length > 6_990_508) throw new InvalidAssistantArgs('The PDF is over 5 MB.');
+  const bin = atob(raw);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  if (String.fromCharCode(...bytes.slice(0, 5)) !== '%PDF-') throw new InvalidAssistantArgs('The file must start with %PDF-.');
+  return bytes;
+}
+async function publishReceipt(target: ReceiptTarget, pdf: Uint8Array): Promise<string> {
+  const raw = Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => String.fromCharCode(b)).join('');
+  const token = btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  const name = `${Date.now() + RECEIPT_TTL_MS}-${token}.pdf`;
+  await target.bucket.put(`assistant-receipts/${name}`, pdf, { httpMetadata: { contentType: 'application/pdf' } });
+  return `${target.origin}/assistant-receipt/${name}`;
+}
+type ExpenseOne = { id?: string; title?: string | null; description?: string | null; date?: string | null; total?: number | null; updatedAt?: string | null };
+async function readExpense(jobber: JobberReadClient, id: string): Promise<ExpenseOne | null> {
+  try { return (await jobber.graphqlRequest<{ expense?: ExpenseOne | null }>(EXPENSE_ONE_QUERY, { id })).expense ?? null; }
+  catch { return null; }
+}
+async function attachExpenseReceipt(jobber: JobberReadClient, target: ReceiptTarget, raw: Record<string, unknown>) {
+  onlyKeys(raw, ['expenseId', 'pdfBase64', 'fileName']);
+  const expenseId = requireId(raw, 'expenseId');
+  const pdf = receiptPdf(raw.pdfBase64);
+  const before = await readExpense(jobber, expenseId);
+  if (!before) return { outcome: 'refused' as const, changed: false, reason: 'That expense was not found. Nothing was attached.' };
+  const receiptUrl = await publishReceipt(target, pdf);
+  let reply: { expenseEdit?: { expense?: { id?: string } | null; userErrors?: Array<{ message?: string }> } | null };
+  try { reply = await jobber.graphqlRequest(RECEIPT_MUTATION, { expenseId, input: { receiptUrl } }); }
+  catch { return { outcome: 'uncertain' as const, changed: 'unknown' as const, message: 'Jobber did not reply. Do not retry blindly: check Jobber first.' }; }
+  const errors = (reply.expenseEdit?.userErrors ?? []).map((e) => e.message || 'Jobber rejected the receipt.');
+  if (errors.length) return { outcome: 'failed' as const, changed: 'unknown' as const, userErrors: errors, message: 'Jobber rejected the receipt. Check the expense in Jobber before trying again.' };
+  if (!reply.expenseEdit?.expense?.id) return { outcome: 'uncertain' as const, changed: 'unknown' as const, message: 'Jobber returned no expense. Do not retry blindly: check the expense in Jobber first.' };
+  const after = await readExpense(jobber, expenseId);
+  return {
+    outcome: 'ok' as const, changed: true, expenseId, bytes: pdf.length, verification: {
+      fieldsUnchanged: before && after ? before.title === after.title && before.description === after.description && before.date === after.date && before.total === after.total : null,
+      updatedAtAdvanced: before?.updatedAt && after?.updatedAt ? Date.parse(after.updatedAt) > Date.parse(before.updatedAt) : null,
+    },
+    message: 'Jobber accepted the receipt URL. The Jobber API cannot show a receipt back, so confirm the PDF in Jobber\'s web UI. No other field was edited.',
+  };
+}
+export const EXPENSE_WRITE_TOOLS = [{
+  name: 'attach_expense_receipt',
+  description: 'Attach one PDF receipt (max 5 MB) to an existing Jobber expense through a short-lived private URL. Changes only the receipt. Confirm the PDF in Jobber\'s web UI; the API cannot show it back. Office account only. If uncertain, check Jobber before retrying.',
+  annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  inputSchema: { type: 'object', additionalProperties: false, required: ['expenseId', 'pdfBase64'], properties: { expenseId: { type: 'string' }, pdfBase64: { type: 'string' }, fileName: { type: 'string' } } },
+}] as const;
+export const EXPENSE_WRITE_TOOL_NAMES = new Set<string>(EXPENSE_WRITE_TOOLS.map((t) => t.name));
+export async function callExpenseWriteTool(jobber: JobberReadClient, target: ReceiptTarget, name: string, args: unknown) {
+  return name === 'attach_expense_receipt' ? attachExpenseReceipt(jobber, target, objectArgs(args)) : null;
+}
