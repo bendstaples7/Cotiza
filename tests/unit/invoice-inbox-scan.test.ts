@@ -58,6 +58,75 @@ describe('invoice inbox scan', () => {
     expect(classifyInvoiceMessage(msg({ attachmentNames: ['5511-R-0024.png'] }))).toBe(false);
   });
 
+  it('treats a Square "You paid an invoice" email with no attachment as would_log', () => {
+    const square = msg({
+      from: '20four7VA <messenger@messaging.squareup.com>',
+      subject: 'You paid an invoice! (#5511-R-0025)',
+      bodyText: 'You have paid invoice #5511-R-0025 from 20four7VA for $216.20.',
+      snippet: 'Charged to Visa 0391 on file on November 5, 2026',
+      attachmentNames: [],
+    });
+    expect(classifyInvoiceMessage(square)).toBe(true);
+    const draft = draftFromMessage(square);
+    expect([
+      draft.vendor,
+      draft.invoiceNumber,
+      draft.amount,
+      draft.expenseDate,
+      draft.attachmentName,
+      draft.status,
+    ]).toEqual(['20four7VA', '5511-R-0025', 216.2, '2026-11-05', null, 'would_log']);
+  });
+
+  it('does not classify a lookalike sender whose display name contains the Square domain', () => {
+    expect(
+      classifyInvoiceMessage(
+        msg({
+          from: '"messaging.squareup.com" <x@evil.test>',
+          subject: 'You paid an invoice! (#5511-R-0027)',
+          bodyText: 'You have paid invoice #5511-R-0027 for $10.00.',
+          attachmentNames: [],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('does not classify Square mail without a paid statement in the body or snippet', () => {
+    expect(
+      classifyInvoiceMessage(
+        msg({
+          from: '20four7VA <messenger@messaging.squareup.com>',
+          subject: 'You paid an invoice! (#5511-R-0028)',
+          bodyText: 'Your invoice #5511-R-0028 is overdue. Amount due $10.00.',
+          snippet: 'This invoice is now past due',
+          attachmentNames: [],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('leaves the expense date uncertain when the named date is impossible', () => {
+    const draft = draftFromMessage(msg({ bodyText: 'Amount due $216.20 on February 30, 2026' }));
+    expect(draft.expenseDate).toBeNull();
+  });
+  it('leaves the expense date uncertain when the ISO date is impossible', () => {
+    const draft = draftFromMessage(msg({ bodyText: 'Amount due $216.20 on 2026-02-30' }));
+    expect(draft.expenseDate).toBeNull();
+  });
+
+  it('classifies Square receipt wording (Invoice Paid / Total Paid) as paid', () => {
+    expect(
+      classifyInvoiceMessage(
+        msg({
+          from: '20four7VA <messenger@messaging.squareup.com>',
+          subject: 'You paid an invoice! (#5511-R-0026)',
+          bodyText: 'Invoice Paid $216.20 Total Paid $216.20 Paid with Visa 0391',
+          attachmentNames: [],
+        }),
+      ),
+    ).toBe(true);
+  });
+
   it('drafts would_log fields and falls back to vendor|amount|date for the dedupe key', () => {
     const draft = draftFromMessage(msg());
     expect([draft.status, draft.invoiceNumber, draft.amount, draft.expenseDate]).toEqual([

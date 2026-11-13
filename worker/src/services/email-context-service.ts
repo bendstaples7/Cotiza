@@ -410,7 +410,7 @@ export class EmailContextService {
     if (!accessToken) throw new Error('Gmail token refresh failed');
     const list = await this.apiFetch<GmailListResponse>(
       accessToken,
-      '/messages?q=' + encodeURIComponent('has:attachment filename:pdf newer_than:2d') + '&maxResults=' + limit,
+      '/messages?q=' + encodeURIComponent('newer_than:2d (has:attachment filename:pdf OR from:messaging.squareup.com subject:"You paid an invoice")') + '&maxResults=' + limit,
     );
     if (this.lastReadFailed) throw new Error('Gmail invoice list read failed');
     const messages: import('./invoice-inbox-scan.js').GmailInvoiceMessage[] = [];
@@ -425,6 +425,7 @@ export class EmailContextService {
         from: this.getHeader(msg.payload?.headers ?? [], 'From'),
         subject: this.getHeader(msg.payload?.headers ?? [], 'Subject'),
         bodyText: collected.texts.map((data) => this.decodeBase64(data, Infinity)).filter(Boolean).join('\n').slice(0, INVOICE_BODY_MAX_CHARS),
+        snippet: msg.snippet,
         attachmentNames: collected.names,
       });
     }

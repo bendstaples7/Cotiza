@@ -1,4 +1,8 @@
 const SENDER_HINTS = [/20four7/i, /four7\s*va/i];
+const SQUARE_SENDER = /<[^>]*@messaging\.squareup\.com>|^[^<]*@messaging\.squareup\.com$/i;
+const SQUARE_SUBJECT = /you paid an invoice/i;
+const SQUARE_PAID = /you have paid invoice|paid invoice #|invoice paid|total paid/i;
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const MAX_PER_RUN = 25;
 
 export interface GmailInvoiceMessage {
@@ -7,6 +11,7 @@ export interface GmailInvoiceMessage {
   from: string;
   subject: string;
   bodyText: string;
+  snippet?: string;
   attachmentNames: string[];
 }
 
@@ -18,8 +23,14 @@ export interface InvoiceScanResult {
 }
 
 export function classifyInvoiceMessage(
-  message: Pick<GmailInvoiceMessage, 'from' | 'subject' | 'attachmentNames'>,
+  message: Pick<GmailInvoiceMessage, 'from' | 'subject' | 'bodyText' | 'snippet' | 'attachmentNames'>,
 ): boolean {
+  // Square's "You paid an invoice!" mail carries no PDF - the document is a link.
+  // The same subject also goes out for unpaid/overdue invoices, so require the body
+  // or snippet to state the invoice was actually paid.
+  if (SQUARE_SENDER.test(message.from) && SQUARE_SUBJECT.test(message.subject)) {
+    return SQUARE_PAID.test(`${message.bodyText}\n${message.snippet ?? ''}`);
+  }
   if (!message.attachmentNames.some((name) => /\.pdf$/i.test(name))) return false;
   return SENDER_HINTS.some((hint) => hint.test(message.from)) || /\binvoice\b/i.test(message.subject);
 }
@@ -49,7 +60,7 @@ export function draftFromMessage(message: GmailInvoiceMessage): {
   const rawVendor = (lt === -1 ? message.from : message.from.slice(0, lt)).replace(/['"]/g, '').trim();
   const vendor = rawVendor || null;
 
-  const text = message.subject + '\n' + message.bodyText;
+  const text = [message.subject, message.bodyText, message.snippet ?? ''].join('\n');
   const numberMatch = text.match(/#\s*([A-Za-z0-9][A-Za-z0-9-]{2,})/);
   const invoiceNumber = numberMatch ? numberMatch[1].toUpperCase() : null;
 
@@ -58,10 +69,30 @@ export function draftFromMessage(message: GmailInvoiceMessage): {
   const labelledTotals = [...text.matchAll(/\b(?:total|amount\s+due|balance\s+due)\b[^$]{0,40}\$\s?([0-9][0-9,]*\.[0-9]{2})/gi)]
     .map((match) => Math.round(parseFloat(match[1].replace(/,/g, '')) * 100) / 100);
   const distinctTotals = [...new Set(labelledTotals)];
-  const amount = distinctTotals.length === 1 ? distinctTotals[0] : null;
+  const paidInvoice = text.match(/\bpaid\s+(?:an\s+)?invoice\b[^$]{0,80}?\bfor\s+\$\s?([0-9][0-9,]*\.[0-9]{2})/i);
+  const amount = distinctTotals.length === 1
+    ? distinctTotals[0]
+    : !distinctTotals.length && paidInvoice
+      ? Math.round(parseFloat(paidInvoice[1].replace(/,/g, '')) * 100) / 100
+      : null;
 
-  const dateMatch = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
-  const expenseDate = dateMatch ? dateMatch[1] : null;
+  const isoDate = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
+  const namedDate = text.match(/\b([A-Z][a-z]+)\s+(\d{1,2}),\s+(\d{4})\b/);
+  let expenseDate: string | null = null;
+  if (isoDate) {
+    const iso = new Date(isoDate[1] + 'T12:00:00Z');
+    expenseDate = !Number.isNaN(iso.getTime()) && iso.toISOString().slice(0, 10) === isoDate[1] ? isoDate[1] : null;
+  } else if (namedDate) {
+    const parsedNamed = Date.parse(`${namedDate[1]} ${namedDate[2]}, ${namedDate[3]} 12:00:00 UTC`);
+    if (!Number.isNaN(parsedNamed)) {
+      const named = new Date(parsedNamed);
+      const matchesCaptured =
+        named.getUTCFullYear() === Number(namedDate[3]) &&
+        named.getUTCMonth() === MONTHS.indexOf(namedDate[1]) &&
+        named.getUTCDate() === Number(namedDate[2]);
+      if (matchesCaptured) expenseDate = named.toISOString().slice(0, 10);
+    }
+  }
 
   const attachmentName = message.attachmentNames.find((name) => /\.pdf$/i.test(name)) ?? null;
 
@@ -69,7 +100,7 @@ export function draftFromMessage(message: GmailInvoiceMessage): {
   if (!vendor) missing.push('vendor');
   if (!invoiceNumber) missing.push('invoiceNumber');
   if (!expenseDate) missing.push('expenseDate');
-  if (!attachmentName) missing.push('attachment');
+  if (!attachmentName && !SQUARE_SENDER.test(message.from)) missing.push('attachment');
 
   const reasons: string[] = [];
   if (amount === null) reasons.push('no unambiguous total');
