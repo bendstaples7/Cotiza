@@ -1,4 +1,6 @@
 const SENDER_HINTS = [/20four7/i, /four7\s*va/i];
+const SQUARE_SENDER = /messaging\.squareup\.com/i;
+const SQUARE_SUBJECT = /you paid an invoice/i;
 const MAX_PER_RUN = 25;
 
 export interface GmailInvoiceMessage {
@@ -7,6 +9,7 @@ export interface GmailInvoiceMessage {
   from: string;
   subject: string;
   bodyText: string;
+  snippet?: string;
   attachmentNames: string[];
 }
 
@@ -20,6 +23,8 @@ export interface InvoiceScanResult {
 export function classifyInvoiceMessage(
   message: Pick<GmailInvoiceMessage, 'from' | 'subject' | 'attachmentNames'>,
 ): boolean {
+  // Square's "You paid an invoice!" mail carries no PDF - the document is a link.
+  if (SQUARE_SENDER.test(message.from) && SQUARE_SUBJECT.test(message.subject)) return true;
   if (!message.attachmentNames.some((name) => /\.pdf$/i.test(name))) return false;
   return SENDER_HINTS.some((hint) => hint.test(message.from)) || /\binvoice\b/i.test(message.subject);
 }
@@ -49,7 +54,7 @@ export function draftFromMessage(message: GmailInvoiceMessage): {
   const rawVendor = (lt === -1 ? message.from : message.from.slice(0, lt)).replace(/['"]/g, '').trim();
   const vendor = rawVendor || null;
 
-  const text = message.subject + '\n' + message.bodyText;
+  const text = [message.subject, message.bodyText, message.snippet ?? ''].join('\n');
   const numberMatch = text.match(/#\s*([A-Za-z0-9][A-Za-z0-9-]{2,})/);
   const invoiceNumber = numberMatch ? numberMatch[1].toUpperCase() : null;
 
@@ -58,10 +63,17 @@ export function draftFromMessage(message: GmailInvoiceMessage): {
   const labelledTotals = [...text.matchAll(/\b(?:total|amount\s+due|balance\s+due)\b[^$]{0,40}\$\s?([0-9][0-9,]*\.[0-9]{2})/gi)]
     .map((match) => Math.round(parseFloat(match[1].replace(/,/g, '')) * 100) / 100);
   const distinctTotals = [...new Set(labelledTotals)];
-  const amount = distinctTotals.length === 1 ? distinctTotals[0] : null;
+  const paidInvoice = text.match(/\bpaid\s+(?:an\s+)?invoice\b[^$]{0,80}?\bfor\s+\$\s?([0-9][0-9,]*\.[0-9]{2})/i);
+  const amount = distinctTotals.length === 1
+    ? distinctTotals[0]
+    : !distinctTotals.length && paidInvoice
+      ? Math.round(parseFloat(paidInvoice[1].replace(/,/g, '')) * 100) / 100
+      : null;
 
-  const dateMatch = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
-  const expenseDate = dateMatch ? dateMatch[1] : null;
+  const isoDate = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
+  const namedDate = text.match(/\b([A-Z][a-z]+\s+\d{1,2},\s+\d{4})\b/);
+  const parsedNamed = namedDate ? Date.parse(namedDate[1] + ' 12:00:00 UTC') : NaN;
+  const expenseDate = isoDate ? isoDate[1] : Number.isNaN(parsedNamed) ? null : new Date(parsedNamed).toISOString().slice(0, 10);
 
   const attachmentName = message.attachmentNames.find((name) => /\.pdf$/i.test(name)) ?? null;
 
@@ -69,7 +81,7 @@ export function draftFromMessage(message: GmailInvoiceMessage): {
   if (!vendor) missing.push('vendor');
   if (!invoiceNumber) missing.push('invoiceNumber');
   if (!expenseDate) missing.push('expenseDate');
-  if (!attachmentName) missing.push('attachment');
+  if (!attachmentName && !SQUARE_SENDER.test(message.from)) missing.push('attachment');
 
   const reasons: string[] = [];
   if (amount === null) reasons.push('no unambiguous total');

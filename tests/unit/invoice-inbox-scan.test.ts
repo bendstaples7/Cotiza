@@ -58,6 +58,26 @@ describe('invoice inbox scan', () => {
     expect(classifyInvoiceMessage(msg({ attachmentNames: ['5511-R-0024.png'] }))).toBe(false);
   });
 
+  it('treats a Square "You paid an invoice" email with no attachment as would_log', () => {
+    const square = msg({
+      from: '20four7VA <messenger@messaging.squareup.com>',
+      subject: 'You paid an invoice! (#5511-R-0025)',
+      bodyText: 'You have paid invoice #5511-R-0025 from 20four7VA for $216.20.',
+      snippet: 'Charged to Visa 0391 on file on November 5, 2026',
+      attachmentNames: [],
+    });
+    expect(classifyInvoiceMessage(square)).toBe(true);
+    const draft = draftFromMessage(square);
+    expect([
+      draft.vendor,
+      draft.invoiceNumber,
+      draft.amount,
+      draft.expenseDate,
+      draft.attachmentName,
+      draft.status,
+    ]).toEqual(['20four7VA', '5511-R-0025', 216.2, '2026-11-05', null, 'would_log']);
+  });
+
   it('drafts would_log fields and falls back to vendor|amount|date for the dedupe key', () => {
     const draft = draftFromMessage(msg());
     expect([draft.status, draft.invoiceNumber, draft.amount, draft.expenseDate]).toEqual([

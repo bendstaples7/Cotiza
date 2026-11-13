@@ -11,6 +11,7 @@ import { handleScheduledSync } from './scheduled/corpus-sync.js';
 import { handleJobberSessionKeepAlive, JOBBER_SESSION_KEEPALIVE_CRON } from './scheduled/jobber-session-keepalive.js';
 import { EmailContextService } from './services/email-context-service.js';
 import { runInvoiceInboxScan } from './services/invoice-inbox-scan.js';
+import invoiceInboxRoutes from './routes/invoice-inbox.js';
 import authRoutes from './routes/auth.js';
 import mediaRoutes from './routes/media.js';
 import postRoutes from './routes/posts.js';
@@ -189,6 +190,7 @@ app.route('/api/jobber-auth', jobberAuthRoutes);
 app.route('/api/systems', systemsRoutes);
 app.route('/api', reviewRoutes);
 app.route('/api/dashboard', dashboardRoutes);
+app.route('/api/invoice-inbox', invoiceInboxRoutes);
 
 // Error handler (must be registered after routes)
 app.onError(errorHandler);
