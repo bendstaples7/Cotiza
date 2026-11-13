@@ -564,4 +564,22 @@ describe('attach_expense_receipt', () => {
     expect((await tool({ graphqlRequest: err })).outcome).toBe('uncertain');
     expect(err).toHaveBeenCalledTimes(2);
   });
+
+  it('attaches when sha256 matches the PDF bytes', async () => {
+    const graphqlRequest = vi.fn().mockResolvedValueOnce({ expense: before }).mockResolvedValueOnce({ expenseEdit: { expense: { id: 'exp-1' }, userErrors: [] } }).mockResolvedValueOnce({ expense: { ...before, updatedAt: '2026-10-29T17:00:00Z' } });
+    const out = await callExpenseWriteTool({ graphqlRequest } as never, target(), 'attach_expense_receipt', { expenseId: 'exp-1', pdfBase64: btoa('%PDF-1.4 test'), sha256: await sha256Hex('%PDF-1.4 test') }) as Promise<Record<string, any>>;
+    expect(out.outcome).toBe('ok');
+  });
+
+  it('rejects a sha256 mismatch before touching R2 or Jobber', async () => {
+    const bucket = createMockR2();
+    const graphqlRequest = vi.fn();
+    await expect(callExpenseWriteTool({ graphqlRequest } as never, { bucket, origin: 'https://worker.test' } as never, 'attach_expense_receipt', { expenseId: 'exp-1', pdfBase64: btoa('%PDF-1.4 test'), sha256: '0'.repeat(64) })).rejects.toThrow(/does not match/);
+    expect(bucket.put).not.toHaveBeenCalled();
+    expect(graphqlRequest).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed sha256', async () => {
+    await expect(callExpenseWriteTool({ graphqlRequest: vi.fn() } as never, target(), 'attach_expense_receipt', { expenseId: 'exp-1', pdfBase64: btoa('%PDF-1.4 test'), sha256: 'ABC' })).rejects.toThrow(/64 lowercase hex/);
+  });
 });
