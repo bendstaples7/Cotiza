@@ -21,7 +21,7 @@
     "test:e2e:headed": "npx playwright test --headed"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260317.1",
+    "@cloudflare/workers-types": "^4.20260702.1",
     "@playwright/test": "^1.52.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
