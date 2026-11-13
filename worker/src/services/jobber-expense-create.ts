@@ -193,12 +193,11 @@ export async function logExpense(
   onlyKeys(raw, ['sourceKey', 'title', 'description', 'date', 'total', 'receiptUrl']);
   const sourceKey = text(raw, 'sourceKey', 120, true)!;
   const title = text(raw, 'title', 120, true)!;
-  const description = text(raw, 'description', 2000, false);
+  const description = text(raw, 'description', 2000, true)!;
   const date = requireDate(raw);
   const total = requireTotal(raw);
-  const receiptRaw = text(raw, 'receiptUrl', 2048, false);
-  const receiptUrl = receiptRaw ? normalizeReceiptUrl(receiptRaw) : undefined;
-  if (description && !mentionsSource(description, sourceKey)) {
+  const receiptUrl = normalizeReceiptUrl(text(raw, 'receiptUrl', 2048, true)!);
+  if (!mentionsSource(description, sourceKey)) {
     throw new InvalidAssistantArgs('description must contain sourceKey exactly, so the expense can be found again.');
   }
 
@@ -233,25 +232,21 @@ export async function logExpense(
   }
 
   // 3. Receipt: download before creating anything, then serve it from our private short-lived URL.
-  let jobberReceiptUrl: string | undefined;
-  if (receiptUrl) {
-    const receipt = await downloadReceipt(fetchReceipt, receiptUrl);
-    if (!receipt.ok) {
-      await release();
-      return failed('receipt_unavailable', `The receipt link could not be downloaded as a PDF (${receipt.reason}). Nothing was created.`, sourceKey);
-    }
-    try {
-      jobberReceiptUrl = await publishReceipt(target, receipt.pdf);
-    } catch (err) {
-      await release();
-      return failed('receipt_store_failed', `Could not store the receipt, so nothing was created. (${safeMessage(err)})`, sourceKey);
-    }
+  const receipt = await downloadReceipt(fetchReceipt, receiptUrl);
+  if (!receipt.ok) {
+    await release();
+    return failed('receipt_unavailable', `The receipt link could not be downloaded as a PDF (${receipt.reason}). Nothing was created.`, sourceKey);
+  }
+  let jobberReceiptUrl: string;
+  try {
+    jobberReceiptUrl = await publishReceipt(target, receipt.pdf);
+  } catch (err) {
+    await release();
+    return failed('receipt_store_failed', `Could not store the receipt, so nothing was created. (${safeMessage(err)})`, sourceKey);
   }
 
   // 4. Create once.
-  const input: Record<string, unknown> = { title, date: `${date}T12:00:00Z`, total };
-  if (description) input.description = description;
-  if (jobberReceiptUrl) input.receiptUrl = jobberReceiptUrl;
+  const input: Record<string, unknown> = { title, description, date: `${date}T12:00:00Z`, total, receiptUrl: jobberReceiptUrl };
   let created: { expenseCreate?: { expense?: ExpenseNode | null; userErrors?: Array<{ message?: string }> } | null };
   try {
     created = await jobber.graphqlRequest(EXPENSE_CREATE, { input });
@@ -295,9 +290,7 @@ export async function logExpense(
     expenseId,
     verified,
     expense: stored ?? mapExpense(created.expenseCreate!.expense!),
-    receipt: jobberReceiptUrl
-      ? { submitted: true, note: 'The Jobber API cannot show receipts back. Confirm the PDF on the expense in Jobber\'s web UI.' }
-      : { submitted: false },
+    receipt: { submitted: true, note: 'The Jobber API cannot show receipts back. Confirm the PDF on the expense in Jobber\'s web UI.' },
   };
 }
 
@@ -308,7 +301,7 @@ export const EXPENSE_CREATE_TOOL = {
   inputSchema: {
     type: 'object',
     additionalProperties: false,
-    required: ['sourceKey', 'title', 'date', 'total'],
+    required: ['sourceKey', 'title', 'description', 'date', 'total', 'receiptUrl'],
     properties: {
       sourceKey: { type: 'string', maxLength: 120 },
       title: { type: 'string', maxLength: 120 },

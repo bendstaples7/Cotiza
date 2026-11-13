@@ -83,7 +83,7 @@ describe('logExpense', () => {
     const first = await logExpense(j as never, db as never, target, 'u', INPUT, pdf());
     expect(first).toMatchObject({ outcome: 'created', expenseId: 'exp-1', verified: true });
     const input = (creates(j)[0][1] as { input: Record<string, unknown> }).input;
-    expect(input).toMatchObject({ title: INPUT.title, total: 216.2, date: '2026-10-29T12:00:00Z' });
+    expect(input).toMatchObject({ title: INPUT.title, description: INPUT.description, total: 216.2, date: '2026-10-29T12:00:00Z' });
     expect(String(input.receiptUrl)).toMatch(/^https:\/\/cotiza\.test\/assistant-receipt\/\d{13}-[A-Za-z0-9_-]{43}\.pdf$/);
     const second = await logExpense(j as never, db as never, target, 'u', INPUT, pdf());
     expect(second.outcome).toBe('duplicate');
@@ -120,6 +120,29 @@ describe('logExpense', () => {
     expect(creates(j)).toHaveLength(0);
   });
 
+  it('creates nothing when a redirect leaves squareup.com', async () => {
+    const j = jobber(created);
+    const hop = vi.fn(async () => new Response(null, { status: 302, headers: { location: 'https://evil.example/x.pdf' } }));
+    const r = await logExpense(j as never, writesDb() as never, TARGET(), 'u', INPUT, hop);
+    expect(r).toMatchObject({ outcome: 'failed', failure: { code: 'receipt_unavailable' } });
+    expect(creates(j)).toHaveLength(0);
+  });
+
+  it('creates nothing when the receipt is over 5 MB', async () => {
+    const j = jobber(created);
+    const big = vi.fn(async () => new Response(new Uint8Array(5 * 1024 * 1024 + 1), { status: 200 }));
+    const r = await logExpense(j as never, writesDb() as never, TARGET(), 'u', INPUT, big);
+    expect(r).toMatchObject({ outcome: 'failed', failure: { code: 'receipt_unavailable' } });
+    expect(creates(j)).toHaveLength(0);
+  });
+
+  it('requires a description and a receipt link', async () => {
+    const { description: _d, ...noDescription } = INPUT;
+    const { receiptUrl: _r, ...noReceipt } = INPUT;
+    await expect(logExpense(jobber(created) as never, writesDb() as never, TARGET(), 'u', noDescription, pdf())).rejects.toThrow(/description/);
+    await expect(logExpense(jobber(created) as never, writesDb() as never, TARGET(), 'u', noReceipt, pdf())).rejects.toThrow(/receiptUrl/);
+  });
+
   it('requires the description to carry the source key', async () => {
     await expect(logExpense(jobber(created) as never, writesDb() as never, TARGET(), 'u', { ...INPUT, description: 'no ref' }, pdf())).rejects.toThrow(/sourceKey/);
   });
@@ -153,6 +176,7 @@ describe('log_expense connector wiring', () => {
   it('lists log_expense only for an office token with expense:create', async () => {
     expect(await list('ops:read expense:write', 'office@chicago-reno.com')).not.toContain('log_expense');
     expect(await list('ops:read expense:create', 'office@chicago-reno.com')).toContain('log_expense');
+    expect(await list('ops:read expense:create', 'ben@chicago-reno.com')).not.toContain('log_expense');
   });
 
   it('refuses without the scope and without calling Jobber', async () => {
@@ -169,5 +193,16 @@ describe('log_expense connector wiring', () => {
     const res = await handleMcpPost(mcp('tools/call', { name: 'log_expense', arguments: INPUT }), d);
     const body = readMcpJsonBody(await res.text()) as { result: { content: Array<{ text: string }> } };
     expect(JSON.parse(body.result.content[0].text).failure.code).toBe('forbidden_user');
+  });
+
+  it('marks an unconfirmed create as an error for the client', async () => {
+    const d = deps('ops:read expense:create', 'office@chicago-reno.com');
+    // Every row answers both the office-email lookup and the prior-claim lookup; inserts report 0 changes.
+    const row = { email: 'office@chicago-reno.com', status: 'unknown', jobber_expense_id: null };
+    configurePrepareResults(d.db as never, Array.from({ length: 10 }, () => ({ first: row, run: { meta: { changes: 0 } } })));
+    const res = await handleMcpPost(mcp('tools/call', { name: 'log_expense', arguments: INPUT }), d);
+    const body = readMcpJsonBody(await res.text()) as { result: { isError: boolean; content: Array<{ text: string }> } };
+    expect(JSON.parse(body.result.content[0].text).outcome).toBe('unresolved_prior_attempt');
+    expect(body.result.isError).toBe(true);
   });
 });

@@ -391,7 +391,8 @@ export async function handleMcpPost(request: Request, deps: {
         result: {
           content: photoToolContent(result),
           isError: outcome === 'failed' || outcome === 'invalid_request'
-            || ((isQuoteWrite || isExpenseWrite) && outcome !== 'ok'),
+            || ((isQuoteWrite || isExpenseWrite) && outcome !== 'ok')
+            || (isExpenseCreate && outcome !== 'created' && outcome !== 'duplicate'),
         },
       }, 200, headers);
     } catch (err) {
