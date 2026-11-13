@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CallBudget, pkceS256, redirectUriAllowed, sha256Hex, D1AssistantDirectory, oauthAuthorizationServerMetadata } from '../../worker/src/services/assistant-access.js';
 import { classifyJobberReadError } from '../../worker/src/services/jobber-read.js';
-import { ASSISTANT_QUERIES, OpsAssistantRead, SEARCH_LIMITATIONS } from '../../worker/src/services/ops-assistant-read.js';
+import { ASSISTANT_QUERIES, OpsAssistantRead, SEARCH_LIMITATIONS, callExpenseWriteTool } from '../../worker/src/services/ops-assistant-read.js';
 import { handleMcpPost, readMcpJsonBody } from '../../worker/src/routes/ops-assistant.js';
 import { createOpsAssistantApp } from '../../worker/src/routes/ops-assistant.js';
 import { createMockD1, configurePrepareResults } from './helpers/mock-d1.js';
+import { createMockR2 } from './helpers/mock-r2.js';
 import type { AssistantDirectory, AssistantPrincipal } from '../../worker/src/services/assistant-access.js';
 
 const RESOURCE = 'http://127.0.0.1:8787/mcp';
@@ -116,7 +117,7 @@ describe('assistant auth', () => {
   it('publishes OAuth metadata with PKCE S256 and the read, review-write and finance-read scopes', () => {
     const metadata = oauthAuthorizationServerMetadata('http://127.0.0.1:8787');
     expect(metadata.code_challenge_methods_supported).toEqual(['S256']);
-    expect(metadata.scopes_supported).toEqual(['ops:read', 'review:write', 'finance:read', 'quote:write', 'lead:write']);
+    expect(metadata.scopes_supported).toEqual(['ops:read', 'review:write', 'finance:read', 'quote:write', 'expense:write', 'lead:write']);
     expect(metadata.token_endpoint_auth_methods_supported).toEqual(['none']);
   });
 
@@ -534,5 +535,33 @@ describe('oauth registration guard', () => {
     expect(body.client_id).toMatch(/^ctz_client_/);
     expect(body.redirect_uris[0]).toContain('chatgpt.com');
     expect(String(db.prepare.mock.calls[0][0])).toMatch(/ON CONFLICT\(client_id\) DO UPDATE/i);
+  });
+});
+
+describe('attach_expense_receipt', () => {
+  const before = { id: 'exp-1', title: 'T', description: null, date: '2026-10-29T15:00:00Z', total: 10, updatedAt: '2026-10-29T16:00:00Z' };
+  const target = () => ({ bucket: createMockR2(), origin: 'https://worker.test' }) as never;
+  const tool = (jobber: unknown) => callExpenseWriteTool(jobber as never, target(), 'attach_expense_receipt', { expenseId: 'exp-1', pdfBase64: btoa('%PDF-1.4 test') }) as Promise<Record<string, any>>;
+
+  it('sends input.receiptUrl, confirms the read-back and names the web-UI check', async () => {
+    const graphqlRequest = vi.fn().mockResolvedValueOnce({ expense: before }).mockResolvedValueOnce({ expenseEdit: { expense: { id: 'exp-1' }, userErrors: [] } }).mockResolvedValueOnce({ expense: { ...before, updatedAt: '2026-10-29T17:00:00Z' } });
+    const out = await tool({ graphqlRequest });
+    expect(graphqlRequest.mock.calls[1][1].input.receiptUrl).toMatch(/\/assistant-receipt\/\d{13}-[A-Za-z0-9_-]{43}\.pdf$/);
+    expect(out.outcome).toBe('ok');
+    expect(out.verification).toEqual({ fieldsUnchanged: true, updatedAtAdvanced: true });
+    expect(out.message).toContain('web UI');
+  });
+
+  it('rejects a non-PDF and surfaces userErrors', async () => {
+    await expect(callExpenseWriteTool({ graphqlRequest: vi.fn() } as never, target(), 'attach_expense_receipt', { expenseId: 'exp-1', pdfBase64: btoa('hello') })).rejects.toThrow(/%PDF-/);
+    const failed = await tool({ graphqlRequest: vi.fn().mockResolvedValueOnce({ expense: before }).mockResolvedValueOnce({ expenseEdit: { userErrors: [{ message: 'nope' }] } }) });
+    expect(failed.outcome).toBe('failed');
+    expect(failed.userErrors).toEqual(['nope']);
+  });
+
+  it('returns uncertain and never retries a thrown write', async () => {
+    const err = vi.fn().mockResolvedValueOnce({ expense: before }).mockRejectedValueOnce(new Error('timeout'));
+    expect((await tool({ graphqlRequest: err })).outcome).toBe('uncertain');
+    expect(err).toHaveBeenCalledTimes(2);
   });
 });

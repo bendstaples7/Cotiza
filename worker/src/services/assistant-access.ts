@@ -5,9 +5,11 @@ const REVIEW_WRITE = 'review:write';
 const FINANCE_READ = 'finance:read';
 /** Apply Ben-approved line edits to draft Jobber quotes. Granted only by a separate consent tick. */
 const QUOTE_WRITE = 'quote:write';
+/** Attach a PDF receipt to a Jobber expense. Granted only by a separate consent tick. */
+const EXPENSE_WRITE = 'expense:write';
 /** Add and update questions on a lead's info-needed list (Cotiza data only). Granted only by a separate consent tick. */
 const LEAD_WRITE = 'lead:write';
-const KNOWN_SCOPES = [SCOPE, REVIEW_WRITE, FINANCE_READ, QUOTE_WRITE, LEAD_WRITE] as const;
+const KNOWN_SCOPES = [SCOPE, REVIEW_WRITE, FINANCE_READ, QUOTE_WRITE, EXPENSE_WRITE, LEAD_WRITE] as const;
 const ACCESS_TTL_MS = 60 * 60 * 1000;
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CODE_TTL_MS = 5 * 60 * 1000;
@@ -16,6 +18,7 @@ export const ASSISTANT_SCOPE = SCOPE;
 export const REVIEW_WRITE_SCOPE = REVIEW_WRITE;
 export const FINANCE_READ_SCOPE = FINANCE_READ;
 export const QUOTE_WRITE_SCOPE = QUOTE_WRITE;
+export const EXPENSE_WRITE_SCOPE = EXPENSE_WRITE;
 export const LEAD_WRITE_SCOPE = LEAD_WRITE;
 
 /**
