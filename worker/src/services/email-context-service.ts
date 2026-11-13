@@ -399,6 +399,46 @@ export class EmailContextService {
     const text = await this.fetchContext(customerEmail);
     return this.lastReadFailed ? { status: 'failed' } : { status: 'ok', text };
   }
+
+  /** Recent PDF invoice emails for the dry-run invoice poller (card fae9e3e9). */
+  async fetchInvoiceMessages(limit = 25): Promise<import('./invoice-inbox-scan.js').GmailInvoiceMessage[]> {
+    if (!this.isAvailable()) return [];
+    const accessToken = await this.getAccessToken();
+    if (!accessToken) return [];
+    const list = await this.apiFetch<GmailListResponse>(
+      accessToken,
+      '/messages?q=' + encodeURIComponent('has:attachment filename:pdf newer_than:2d') + '&maxResults=' + limit,
+    );
+    const messages: import('./invoice-inbox-scan.js').GmailInvoiceMessage[] = [];
+    for (const ref of (list?.messages ?? []).slice(0, limit)) {
+      const msg = await this.apiFetch<GmailMessage>(accessToken, `/messages/${ref.id}?format=full`);
+      if (!msg) continue;
+      const parts = (msg.payload?.parts ?? []) as Array<{
+        mimeType?: string;
+        filename?: string;
+        body?: { data?: string };
+      }>;
+      const textPart = parts.find((part) => part.mimeType === 'text/plain' && part.body?.data);
+      messages.push({
+        id: ref.id,
+        threadId: msg.threadId,
+        from: this.getHeader(msg.payload?.headers ?? [], 'From'),
+        subject: this.getHeader(msg.payload?.headers ?? [], 'Subject'),
+        bodyText: textPart?.body?.data ? this.decodeBase64(textPart.body.data) : '',
+        attachmentNames: parts.map((part) => part.filename).filter((name): name is string => Boolean(name)),
+      });
+    }
+    return messages;
+  }
+
+  /** Mailbox the Gmail token reads, for the invoice poller log line (card fae9e3e9). Never throws. */
+  async fetchMailboxAddress(): Promise<string | null> {
+    if (!this.isAvailable()) return null;
+    const accessToken = await this.getAccessToken();
+    if (!accessToken) return null;
+    const profile = await this.apiFetch<{ emailAddress?: string }>(accessToken, '/profile');
+    return profile?.emailAddress ?? null;
+  }
 }
 
 /** Extract the email address from a "Name <email@example.com>" header value. */
