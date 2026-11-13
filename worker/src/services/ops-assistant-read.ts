@@ -1029,6 +1029,14 @@ function receiptPdf(raw: unknown): Uint8Array {
   if (String.fromCharCode(...bytes.slice(0, 5)) !== '%PDF-') throw new InvalidAssistantArgs('The file must start with %PDF-.');
   return bytes;
 }
+function receiptSha256(raw: unknown): string {
+  if (typeof raw !== 'string' || !/^[0-9a-f]{64}$/.test(raw)) throw new InvalidAssistantArgs('sha256 must be 64 lowercase hex characters.');
+  return raw;
+}
+async function pdfSha256(pdf: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', pdf);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
 export async function publishReceipt(target: ReceiptTarget, pdf: Uint8Array): Promise<string> {
   const raw = Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => String.fromCharCode(b)).join('');
   const token = btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
@@ -1042,9 +1050,11 @@ async function readExpense(jobber: JobberReadClient, id: string): Promise<Expens
   catch { return null; }
 }
 async function attachExpenseReceipt(jobber: JobberReadClient, target: ReceiptTarget, raw: Record<string, unknown>) {
-  onlyKeys(raw, ['expenseId', 'pdfBase64', 'fileName']);
+  onlyKeys(raw, ['expenseId', 'pdfBase64', 'fileName', 'sha256']);
   const expenseId = requireId(raw, 'expenseId');
+  const expected = raw.sha256 === undefined ? undefined : receiptSha256(raw.sha256);
   const pdf = receiptPdf(raw.pdfBase64);
+  if (expected && (await pdfSha256(pdf)) !== expected) throw new InvalidAssistantArgs('sha256 does not match the PDF bytes; nothing was attached.');
   const before = await readExpense(jobber, expenseId);
   if (!before) return { outcome: 'refused' as const, changed: false, reason: 'That expense was not found. Nothing was attached.' };
   const receiptUrl = await publishReceipt(target, pdf);
@@ -1065,9 +1075,9 @@ async function attachExpenseReceipt(jobber: JobberReadClient, target: ReceiptTar
 }
 export const EXPENSE_WRITE_TOOLS = [{
   name: 'attach_expense_receipt',
-  description: 'Attach one PDF receipt (max 5 MB) to an existing Jobber expense through a short-lived private URL. Changes only the receipt. Confirm the PDF in Jobber\'s web UI; the API cannot show it back. Office account only. If uncertain, check Jobber before retrying.',
+  description: 'Attach one PDF receipt (max 5 MB) to an existing Jobber expense through a short-lived private URL. Changes only the receipt. Confirm the PDF in Jobber\'s web UI; the API cannot show it back. Office account only. If uncertain, check Jobber before retrying. Pass sha256 (64 lowercase hex, e.g. from sha256sum) of the decoded PDF; a mismatch is rejected before anything is attached.',
   annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-  inputSchema: { type: 'object', additionalProperties: false, required: ['expenseId', 'pdfBase64'], properties: { expenseId: { type: 'string' }, pdfBase64: { type: 'string' }, fileName: { type: 'string' } } },
+  inputSchema: { type: 'object', additionalProperties: false, required: ['expenseId', 'pdfBase64'], properties: { expenseId: { type: 'string' }, pdfBase64: { type: 'string' }, fileName: { type: 'string' }, sha256: { type: 'string', pattern: '^[0-9a-f]{64}$' } } },
 }] as const;
 export const EXPENSE_WRITE_TOOL_NAMES = new Set<string>(EXPENSE_WRITE_TOOLS.map((t) => t.name));
 export async function callExpenseWriteTool(jobber: JobberReadClient, target: ReceiptTarget, name: string, args: unknown) {
