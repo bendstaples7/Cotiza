@@ -36,10 +36,15 @@ export async function inspectExpenseCapabilities(jobber: JobberReadClient) {
   if (!root?.__schema?.queryType?.fields) throw new Error('Jobber schema introspection unavailable.');
   const queries = root.__schema.queryType.fields.filter(field => /expense/i.test(field.name)).map(publicField);
   const mutations = (root.__schema.mutationType?.fields ?? []).filter(field => /expense/i.test(field.name)).map(publicField);
+  // A receipt upload is not always an expense-named mutation (card 0d929d22), so also look for it by what it
+  // does: upload/blob/receipt mutations, whose input fields reveal the signed-blob contract behind receiptSignedBlobId.
+  const receiptMutations = (root.__schema.mutationType?.fields ?? [])
+    .filter(field => /upload|blob|receipt|attach/i.test(field.name)).map(publicField);
   // Prioritize creation and receipt contracts; query pagination/scalar types must
   // not exhaust the budget before the write input can be inspected.
   const pending = ['ExpenseCreateInput', 'ExpenseCreatePayload', 'Expense',
     ...mutations.flatMap(field => (field.args ?? []).map(arg => named(arg.type))),
+    ...receiptMutations.flatMap(field => (field.args ?? []).map(arg => named(arg.type))),
   ].filter((name): name is string => Boolean(name));
   const visited = new Set<string>();
   const types: SchemaType[] = [];
@@ -60,13 +65,15 @@ export async function inspectExpenseCapabilities(jobber: JobberReadClient) {
     }
   }
   return {
-    queries, mutations, types,
+    queries, mutations, receiptMutations, types,
     discoveryComplete: pending.every(name => visited.has(name)),
     expenseWritesExposed: mutations.length > 0,
+    receiptUploadExposed: receiptMutations.length > 0,
     assistantWritesEnabled: false,
     limitations: [
       'Schema visibility depends on the connected app permissions and API version. Absence does not prove Jobber has no such API.',
       'An exposed mutation is not proof that creation or receipt upload works. Validate its exact input and response contract before enabling writes.',
+      'A receipt-upload mutation being listed does not prove a receipt can be attached: confirm how a signed blob id is obtained before enabling uploads; a short-lived receiptUrl is the fallback to evaluate.',
       'No records were created or changed. No receipt was uploaded. Existing ops:read tokens remain read-only.',
     ],
   };
