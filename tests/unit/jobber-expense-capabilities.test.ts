@@ -63,4 +63,39 @@ describe('expense capability discovery', () => {
     expect(calls).toBe(13);
     expect(result.discoveryComplete).toBe(false);
   });
+  it('surfaces receipt-upload mutations and inspects their input types (card 0d929d22)', async () => {
+    const seen: string[] = [];
+    const graphqlRequest = vi.fn(async (_query: string, vars?: Record<string, unknown>): Promise<any> => {
+      if (!vars) return { __schema: {
+        queryType: { fields: [{ name: 'expenses', type: ref('ExpenseConnection') }] },
+        mutationType: { fields: [
+          { name: 'expenseCreate', type: ref('ExpenseCreatePayload'), args: [{ name: 'input', type: ref('ExpenseCreateInput') }] },
+          { name: 'expenseEdit', type: ref('ExpenseEditPayload'), args: [{ name: 'expenseId', type: ref('EncodedId') }, { name: 'input', type: ref('ExpenseEditInput') }] },
+          { name: 'expenseUploadCreate', type: ref('ExpenseUploadPayload'), args: [{ name: 'signedBlobIds', type: ref('EncodedIdList') }] },
+          { name: 'directUpload', type: ref('DirectUploadPayload'), args: [{ name: 'signedBlobIds', type: ref('SignedBlobInput') }] },
+        ] },
+      } };
+      seen.push(String(vars.name));
+      return { __type: null };
+    });
+    const result = await inspectExpenseCapabilities({ graphqlRequest });
+    expect(result.mutations.map((m) => m.name)).toEqual(['expenseCreate', 'expenseEdit', 'expenseUploadCreate']);
+    expect(result.receiptMutations.map((m) => m.name)).toEqual(['expenseUploadCreate', 'directUpload']);
+    expect(result.receiptUploadExposed).toBe(true);
+    expect(seen).toContain('SignedBlobInput');
+  });
+  it('reports no receipt-upload mutation when the schema has none (card 0d929d22)', async () => {
+    const graphqlRequest = vi.fn(async (_query: string, vars?: Record<string, unknown>): Promise<any> => {
+      if (!vars) return { __schema: {
+        queryType: { fields: [{ name: 'expenses', type: ref('ExpenseConnection') }] },
+        mutationType: { fields: [
+          { name: 'expenseCreate', type: ref('ExpenseCreatePayload'), args: [{ name: 'input', type: ref('ExpenseCreateInput') }] },
+        ] },
+      } };
+      return { __type: null };
+    });
+    const result = await inspectExpenseCapabilities({ graphqlRequest });
+    expect(result.receiptMutations).toEqual([]);
+    expect(result.receiptUploadExposed).toBe(false);
+  });
 });
