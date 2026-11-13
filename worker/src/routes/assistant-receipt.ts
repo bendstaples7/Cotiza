@@ -12,4 +12,19 @@ app.get('/assistant-receipt/:name', async (c) => {
   return new Response(object.body, { headers: { 'Content-Type': 'application/pdf', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' } });
 });
 
+/** Deletes assistant-receipts/ objects whose expiry prefix is in the past (scheduled sweep). */
+export async function sweepExpiredReceipts(bucket: R2Bucket): Promise<void> {
+  const prefix = 'assistant-receipts/';
+  const now = Date.now();
+  let cursor: string | undefined;
+  do {
+    const page = await bucket.list({ prefix, cursor });
+    const expired = page.objects
+      .map((o) => o.key)
+      .filter((key) => RECEIPT_NAME.test(key.slice(prefix.length)) && Number(key.slice(prefix.length, prefix.length + 13)) < now);
+    if (expired.length) await bucket.delete(expired);
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+}
+
 export default app;

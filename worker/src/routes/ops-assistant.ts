@@ -194,12 +194,20 @@ export async function handleMcpPost(request: Request, deps: {
   if (!principal) return unauthorized(metadata);
 
   const text = await request.text();
-  if (text.length > 32_768) return json({ error: 'Request is too large' }, 413);
+  if (text.length > 7_000_000) return json({ error: 'Request is too large' }, 413);
   let message: { jsonrpc?: string; id?: unknown; method?: string; params?: Record<string, unknown> };
   try {
     message = JSON.parse(text);
   } catch {
     return mcpEvent({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }, 400);
+  }
+  // A 5 MB PDF arrives base64-encoded inside attach_expense_receipt; only that office write gets the large limit.
+  if (text.length > 32_768) {
+    const receiptUpload = message.method === 'tools/call'
+      && String(message.params?.name || '') === 'attach_expense_receipt'
+      && hasScope(principal.scope, EXPENSE_WRITE_SCOPE)
+      && (await connectorUserCanReadPayouts(deps.db, principal.userId).catch(() => false));
+    if (!receiptUpload) return json({ error: 'Request is too large' }, 413);
   }
   if (Array.isArray(message) || message.jsonrpc !== '2.0' || typeof message.method !== 'string') {
     return mcpEvent({ jsonrpc: '2.0', id: message.id ?? null, error: { code: -32600, message: 'Invalid request' } }, 400);
@@ -247,7 +255,7 @@ export async function handleMcpPost(request: Request, deps: {
           + (canEditQuotes
             ? ' You may also create new DRAFT Jobber quotes with create_quote (use basedOnQuoteId for change orders), apply line edits to DRAFT Jobber quotes with apply_quote_edits, and replace a draft quote\'s message to the customer with update_quote_message, only after Ben approves those exact quotes or edits. None of them sends a quote or contacts anyone.'
             : '')
-          + (canEditExpenses
+          + (await listsExpenses()
             ? ' You may also attach one PDF receipt (up to 5 MB) to an existing Jobber expense with attach_expense_receipt, after Ben approves it; confirm it in Jobber\'s web UI.'
             : '')
           + (await listsFinance()
@@ -297,9 +305,11 @@ export async function handleMcpPost(request: Request, deps: {
     }
     const isExpenseWrite = EXPENSE_WRITE_TOOL_NAMES.has(name);
     if (isExpenseWrite && (!canEditExpenses || !deps.jobber || !deps.bucket)) {
+      await audit(deps.db, principal.userId, name, `tool=${name} outcome=insufficient_scope token=${principal.tokenId}`, 'info');
       return forbidden(id, headers, 'insufficient_scope', `Attaching an expense receipt needs the office account and a fresh tick (scope ${EXPENSE_WRITE_SCOPE}). Nothing was changed.`);
     }
     if (isExpenseWrite && !(await officeAllowed().catch(() => false))) {
+      await audit(deps.db, principal.userId, name, `tool=${name} outcome=forbidden_user token=${principal.tokenId}`, 'info');
       return forbidden(id, headers, 'forbidden_user', 'Only the office account can attach expense receipts. Nothing was changed.');
     }
     const isFinance = FINANCE_READ_TOOL_NAMES.has(name);
@@ -328,7 +338,7 @@ export async function handleMcpPost(request: Request, deps: {
       return forbidden(id, headers, 'forbidden_user', 'Only the Chicago Reno office account can read payout reports and expenses. Nothing was read.');
     }
     const isLead = LEAD_READ_TOOL_NAMES.has(name) || LEAD_WRITE_TOOL_NAMES.has(name);
-    const audited = REVIEW_WRITE_TOOL_NAMES.has(name) || LEAD_WRITE_TOOL_NAMES.has(name) || isFinance || isQuoteWrite;
+    const audited = REVIEW_WRITE_TOOL_NAMES.has(name) || LEAD_WRITE_TOOL_NAMES.has(name) || isFinance || isQuoteWrite || isExpenseWrite;
     try {
       const result = isQuoteWrite
         ? name === QUOTE_MESSAGE_TOOL.name
@@ -361,7 +371,7 @@ export async function handleMcpPost(request: Request, deps: {
         result: {
           content: photoToolContent(result),
           isError: outcome === 'failed' || outcome === 'invalid_request'
-            || (isQuoteWrite && outcome !== 'ok'),
+            || ((isQuoteWrite || isExpenseWrite) && outcome !== 'ok'),
         },
       }, 200, headers);
     } catch (err) {
