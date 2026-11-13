@@ -1,7 +1,7 @@
 const SENDER_HINTS = [/20four7/i, /four7\s*va/i];
 const SQUARE_SENDER = /<[^>]*@messaging\.squareup\.com>|^[^<]*@messaging\.squareup\.com$/i;
 const SQUARE_SUBJECT = /you paid an invoice/i;
-const SQUARE_PAID = /you have paid invoice|paid invoice #/i;
+const SQUARE_PAID = /you have paid invoice|paid invoice #|invoice paid|total paid/i;
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const MAX_PER_RUN = 25;
 
@@ -80,7 +80,8 @@ export function draftFromMessage(message: GmailInvoiceMessage): {
   const namedDate = text.match(/\b([A-Z][a-z]+)\s+(\d{1,2}),\s+(\d{4})\b/);
   let expenseDate: string | null = null;
   if (isoDate) {
-    expenseDate = isoDate[1];
+    const iso = new Date(isoDate[1] + 'T12:00:00Z');
+    expenseDate = !Number.isNaN(iso.getTime()) && iso.toISOString().slice(0, 10) === isoDate[1] ? isoDate[1] : null;
   } else if (namedDate) {
     const parsedNamed = Date.parse(`${namedDate[1]} ${namedDate[2]}, ${namedDate[3]} 12:00:00 UTC`);
     if (!Number.isNaN(parsedNamed)) {
