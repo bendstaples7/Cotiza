@@ -4,7 +4,9 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('../../worker/src/services/auth-service.js', () => ({
   AuthService: class {
     async verifySession(token: string) {
-      return token === 'office' ? { id: 'u', email: 'office@chicago-reno.com' } : null;
+      if (token === 'office') return { id: 'u', email: 'office@chicago-reno.com' };
+      if (token === 'other') return { id: 'u2', email: 'someone@example.com' };
+      return null;
     }
   },
 }));
@@ -48,9 +50,18 @@ describe('invoice inbox review route', () => {
     expect((await app().fetch(request(''), env() as never)).status).toBe(401);
   });
 
+  it('rejects an invalid token', async () => {
+    expect((await app().fetch(request('nope'), env() as never)).status).toBe(401);
+  });
+
+  it('rejects a signed-in user who is not the finance account', async () => {
+    expect((await app().fetch(request('other'), env() as never)).status).toBe(403);
+  });
+
   it('returns the mailbox and items for an office session', async () => {
     const res = await app().fetch(request('office'), env() as never);
     expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('no-store');
     expect(await res.json()).toEqual({
       mailbox: 'office@chicago-reno.com',
       items: [{ status: 'would_log', vendor: '20four7VA' }],

@@ -1,6 +1,8 @@
 const SENDER_HINTS = [/20four7/i, /four7\s*va/i];
-const SQUARE_SENDER = /messaging\.squareup\.com/i;
+const SQUARE_SENDER = /<[^>]*@messaging\.squareup\.com>|^[^<]*@messaging\.squareup\.com$/i;
 const SQUARE_SUBJECT = /you paid an invoice/i;
+const SQUARE_PAID = /you have paid invoice|paid invoice #/i;
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const MAX_PER_RUN = 25;
 
 export interface GmailInvoiceMessage {
@@ -21,10 +23,14 @@ export interface InvoiceScanResult {
 }
 
 export function classifyInvoiceMessage(
-  message: Pick<GmailInvoiceMessage, 'from' | 'subject' | 'attachmentNames'>,
+  message: Pick<GmailInvoiceMessage, 'from' | 'subject' | 'bodyText' | 'snippet' | 'attachmentNames'>,
 ): boolean {
   // Square's "You paid an invoice!" mail carries no PDF - the document is a link.
-  if (SQUARE_SENDER.test(message.from) && SQUARE_SUBJECT.test(message.subject)) return true;
+  // The same subject also goes out for unpaid/overdue invoices, so require the body
+  // or snippet to state the invoice was actually paid.
+  if (SQUARE_SENDER.test(message.from) && SQUARE_SUBJECT.test(message.subject)) {
+    return SQUARE_PAID.test(`${message.bodyText}\n${message.snippet ?? ''}`);
+  }
   if (!message.attachmentNames.some((name) => /\.pdf$/i.test(name))) return false;
   return SENDER_HINTS.some((hint) => hint.test(message.from)) || /\binvoice\b/i.test(message.subject);
 }
@@ -71,9 +77,21 @@ export function draftFromMessage(message: GmailInvoiceMessage): {
       : null;
 
   const isoDate = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
-  const namedDate = text.match(/\b([A-Z][a-z]+\s+\d{1,2},\s+\d{4})\b/);
-  const parsedNamed = namedDate ? Date.parse(namedDate[1] + ' 12:00:00 UTC') : NaN;
-  const expenseDate = isoDate ? isoDate[1] : Number.isNaN(parsedNamed) ? null : new Date(parsedNamed).toISOString().slice(0, 10);
+  const namedDate = text.match(/\b([A-Z][a-z]+)\s+(\d{1,2}),\s+(\d{4})\b/);
+  let expenseDate: string | null = null;
+  if (isoDate) {
+    expenseDate = isoDate[1];
+  } else if (namedDate) {
+    const parsedNamed = Date.parse(`${namedDate[1]} ${namedDate[2]}, ${namedDate[3]} 12:00:00 UTC`);
+    if (!Number.isNaN(parsedNamed)) {
+      const named = new Date(parsedNamed);
+      const matchesCaptured =
+        named.getUTCFullYear() === Number(namedDate[3]) &&
+        named.getUTCMonth() === MONTHS.indexOf(namedDate[1]) &&
+        named.getUTCDate() === Number(namedDate[2]);
+      if (matchesCaptured) expenseDate = named.toISOString().slice(0, 10);
+    }
+  }
 
   const attachmentName = message.attachmentNames.find((name) => /\.pdf$/i.test(name)) ?? null;
 

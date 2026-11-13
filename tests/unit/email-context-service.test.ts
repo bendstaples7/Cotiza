@@ -461,6 +461,7 @@ describe('EmailContextService', () => {
       const listUrl = decodeURIComponent(fetchMock.mock.calls[1][0] as string);
       expect(listUrl).toContain('messaging.squareup.com');
       expect(listUrl).toContain('You paid an invoice');
+      expect(messages[0].bodyText).toBe('You have paid invoice #5511-R-0025 from 20four7VA for $216.20.');
       expect(messages[0].snippet).toBe('Charged to Visa 0391 on file on November 5, 2026');
     });
 
