@@ -419,5 +419,48 @@ describe('EmailContextService', () => {
       expect(messages[0].attachmentNames).toEqual(['top.pdf', 'nested.pdf']);
       expect(messages[1].bodyText).toBe('Amount due $12.00 on 2026-01-02');
     });
+
+    it('caps a very large invoice body so one email cannot exhaust memory', async () => {
+      const tokenResponse = {
+        access_token: 'test-access-token',
+        expires_in: 3600,
+        token_type: 'Bearer',
+      };
+      const hugeText = 'Total: $1,234.56\n' + 'x'.repeat(200_000);
+      const listResponse = {
+        messages: [{ id: 'msg1', threadId: 'thread1' }],
+        resultSizeEstimate: 1,
+      };
+      const huge = {
+        id: 'msg1',
+        threadId: 'thread1',
+        payload: {
+          mimeType: 'text/plain',
+          headers: [
+            { name: 'From', value: 'billing@20four7va.com' },
+            { name: 'Subject', value: 'Invoice #5511-R-0026' },
+          ],
+          body: { data: btoa(hugeText) },
+        },
+        internalDate: '1781605800002',
+      };
+
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(tokenResponse) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(listResponse) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(huge) });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const service = new EmailContextService(
+        VALID_CREDENTIALS.clientId,
+        VALID_CREDENTIALS.clientSecret,
+        VALID_CREDENTIALS.refreshToken,
+      );
+      const messages = await service.fetchInvoiceMessages();
+
+      expect(messages).toHaveLength(1);
+      expect(messages[0].bodyText.length).toBe(50000);
+      expect(messages[0].bodyText).toContain('Total: $1,234.56');
+    });
   });
 });
