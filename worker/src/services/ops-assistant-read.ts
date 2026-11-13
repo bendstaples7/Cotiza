@@ -1029,7 +1029,7 @@ function receiptPdf(raw: unknown): Uint8Array {
   if (String.fromCharCode(...bytes.slice(0, 5)) !== '%PDF-') throw new InvalidAssistantArgs('The file must start with %PDF-.');
   return bytes;
 }
-async function publishReceipt(target: ReceiptTarget, pdf: Uint8Array): Promise<string> {
+export async function publishReceipt(target: ReceiptTarget, pdf: Uint8Array): Promise<string> {
   const raw = Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => String.fromCharCode(b)).join('');
   const token = btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
   const name = `${Date.now() + RECEIPT_TTL_MS}-${token}.pdf`;
