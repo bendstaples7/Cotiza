@@ -465,6 +465,94 @@ describe('EmailContextService', () => {
       expect(messages[0].snippet).toBe('Charged to Visa 0391 on file on November 5, 2026');
     });
 
+    it('keeps the Square invoice link from the HTML part as receiptUrl', async () => {
+      const tokenResponse = {
+        access_token: 'test-access-token',
+        expires_in: 3600,
+        token_type: 'Bearer',
+      };
+      const listResponse = {
+        messages: [{ id: 'msg1', threadId: 'thread1' }],
+        resultSizeEstimate: 1,
+      };
+      const link = 'https://a.squareupmessaging.com/CL0/https%3A%2F%2Fsquareup.com%2Finvoices%2F1/1';
+      const square = {
+        id: 'msg1',
+        threadId: 'thread1',
+        payload: {
+          mimeType: 'multipart/alternative',
+          headers: [
+            { name: 'From', value: '20four7VA <messenger@messaging.squareup.com>' },
+            { name: 'Subject', value: 'You paid an invoice! (#5511-R-0025)' },
+          ],
+          parts: [
+            { mimeType: 'text/plain', body: { data: btoa('You have paid invoice #5511-R-0025 from 20four7VA for $216.20.') } },
+            { mimeType: 'text/html', body: { data: btoa(`<a href="${link}">View invoice</a>`) } },
+          ],
+        },
+        internalDate: '1781605800000',
+      };
+
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(tokenResponse) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(listResponse) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(square) });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const service = new EmailContextService(
+        VALID_CREDENTIALS.clientId,
+        VALID_CREDENTIALS.clientSecret,
+        VALID_CREDENTIALS.refreshToken,
+      );
+      const messages = await service.fetchInvoiceMessages();
+
+      expect(messages[0].receiptUrl).toBe(link);
+    });
+
+    it('leaves receiptUrl null when the HTML carries two Square invoice links', async () => {
+      const tokenResponse = {
+        access_token: 'test-access-token',
+        expires_in: 3600,
+        token_type: 'Bearer',
+      };
+      const listResponse = {
+        messages: [{ id: 'msg1', threadId: 'thread1' }],
+        resultSizeEstimate: 1,
+      };
+      const first = 'https://a.squareupmessaging.com/CL0/https%3A%2F%2Fsquareup.com%2Finvoices%2F1/1';
+      const second = 'https://a.squareupmessaging.com/CL0/https%3A%2F%2Fsquareup.com%2Finvoices%2F2/1';
+      const square = {
+        id: 'msg1',
+        threadId: 'thread1',
+        payload: {
+          mimeType: 'multipart/alternative',
+          headers: [
+            { name: 'From', value: '20four7VA <messenger@messaging.squareup.com>' },
+            { name: 'Subject', value: 'You paid an invoice! (#5511-R-0025)' },
+          ],
+          parts: [
+            { mimeType: 'text/html', body: { data: btoa(`<a href="${first}">One</a><a href="${second}">Two</a>`) } },
+          ],
+        },
+        internalDate: '1781605800000',
+      };
+
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(tokenResponse) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(listResponse) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(square) });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const service = new EmailContextService(
+        VALID_CREDENTIALS.clientId,
+        VALID_CREDENTIALS.clientSecret,
+        VALID_CREDENTIALS.refreshToken,
+      );
+      const messages = await service.fetchInvoiceMessages();
+
+      expect(messages[0].receiptUrl).toBeNull();
+    });
+
     it('caps a very large invoice body so one email cannot exhaust memory', async () => {
       const tokenResponse = {
         access_token: 'test-access-token',
