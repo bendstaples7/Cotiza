@@ -541,4 +541,20 @@ describe('invoice inbox scan', () => {
     expect(store.rows[0]).toMatchObject({ status: 'logged', jobber_expense_id: 'exp-new' });
     vi.restoreAllMocks();
   });
+  it('keeps a caller-supplied live.label instead of the service addLabel', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const log = vi.fn(async () => ({ outcome: 'created' as const, expenseId: 'exp-new', verified: true }));
+    const callerLabel = vi.fn(async () => ({ ok: true } as const));
+    const addLabel = vi.fn(async () => ({ ok: true } as const));
+    await runInvoiceInboxScan(
+      { fetchMailboxAddress: () => Promise.resolve('b@x.com'), fetchInvoiceMessages: () => Promise.resolve([msg({ receiptUrl: SQUARE_LINK })]), addLabel },
+      store as unknown as D1Database,
+      { ...liveDeps({ log }), label: callerLabel },
+    );
+    expect(callerLabel).toHaveBeenCalledWith('m1');
+    expect(addLabel).not.toHaveBeenCalled();
+    expect(store.rows[0]).toMatchObject({ status: 'logged', jobber_expense_id: 'exp-new', reason: null });
+    vi.restoreAllMocks();
+  });
 });

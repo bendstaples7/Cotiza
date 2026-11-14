@@ -682,4 +682,24 @@ describe('EmailContextService', () => {
       expect(messages[0].bodyText).toContain('Total: $1,234.56');
     });
   });
+
+  describe('addLabel', () => {
+    it('reports Gmail 500 when the label create fails', async () => {
+      const tokenResponse = { access_token: 'test-access-token', expires_in: 3600, token_type: 'Bearer' };
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(tokenResponse) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ labels: [] }) })
+        .mockResolvedValueOnce({ ok: false, status: 500, json: () => Promise.resolve({}) });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const service = new EmailContextService(
+        VALID_CREDENTIALS.clientId,
+        VALID_CREDENTIALS.clientSecret,
+        VALID_CREDENTIALS.refreshToken,
+      );
+      const result = await service.addLabel('m1', 'Cotiza/Logged');
+
+      expect(result).toEqual({ ok: false, reason: 'Gmail 500' });
+    });
+  });
 });
