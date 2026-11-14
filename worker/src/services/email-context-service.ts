@@ -442,6 +442,40 @@ export class EmailContextService {
     const profile = await this.apiFetch<{ emailAddress?: string }>(accessToken, '/profile');
     return profile?.emailAddress ?? null;
   }
+
+  /** Add one label to one message, creating it once when missing. A missing `gmail.modify` scope is
+   *  a reason to skip, never retried and never allowed to undo a logged row. */
+  async addLabel(messageId: string, name: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (!this.isAvailable()) return { ok: false, reason: 'not configured' };
+    const token = await this.getAccessToken();
+    if (!token) return { ok: false, reason: 'no access token' };
+    const list = await this.apiFetch<{ labels?: Array<{ id?: string; name?: string }> }>(token, '/labels');
+    let id = (list?.labels ?? []).find((label) => label.name === name)?.id;
+    if (!id) id = (await this.gmailPost<{ id?: string }>(token, '/labels', { name })).data?.id;
+    if (!id) return { ok: false, reason: 'needs gmail.modify' };
+    const res = await this.gmailPost(token, `/messages/${messageId}/modify`, { addLabelIds: [id] });
+    return res.ok ? { ok: true } : { ok: false, reason: res.status === 403 ? 'needs gmail.modify' : `Gmail ${res.status}` };
+  }
+
+  /** POST one JSON body; status is returned so 403 is told apart from a 5xx. */
+  private async gmailPost<T>(token: string, path: string, body: unknown): Promise<{ ok: boolean; status: number; data: T | null }> {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), API_TIMEOUT_MS);
+    try {
+      const res = await fetch(GMAIL_API_BASE + path, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: ctl.signal,
+      });
+      if (!res.ok) return { ok: false, status: res.status, data: null };
+      return { ok: true, status: res.status, data: (await res.json()) as T };
+    } catch {
+      return { ok: false, status: 0, data: null };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 }
 
 interface MimePartLike {

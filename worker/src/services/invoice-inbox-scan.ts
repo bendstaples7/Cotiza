@@ -171,7 +171,7 @@ export async function scanInvoiceInbox(deps: {
 interface WouldLogRow { status: string; dedupe_key: string | null; vendor: string | null; invoice_number: string | null; amount: number | null; expense_date: string | null }
 interface ExpenseNode { id?: string; title?: string | null; description?: string | null; total?: number | null; date?: string | null }
 interface ExistingExpense { found: ExpenseNode | null; complete: boolean }
-export interface InvoiceLiveDeps { jobber: JobberReadClient; target: ReceiptTarget; userId: string; log?: typeof logExpense; fetchReceipt?: ReceiptFetcher }
+export interface InvoiceLiveDeps { jobber: JobberReadClient; target: ReceiptTarget; userId: string; log?: typeof logExpense; fetchReceipt?: ReceiptFetcher; label?: (messageId: string) => Promise<{ ok: true } | { ok: false; reason: string }> }
 
 const DAY_MS = 86_400_000;
 const EXPENSE_PAGE_SIZE = 100;
@@ -296,11 +296,14 @@ async function logWouldLogRows(
     if ((outcome.outcome === 'created' || outcome.outcome === 'duplicate') && expenseId) {
       await setItem(db, message.id, 'logged', null, expenseId);
       result.logged++;
+      // A missing label scope must not undo a logged row; keep it logged and record the note.
+      const applied = await live.label?.(message.id);
+      if (applied && !applied.ok) await setItem(db, message.id, 'logged', `label skipped: ${applied.reason}`, expenseId);
     } else {
       const reason = 'message' in outcome && typeof outcome.message === 'string'
         ? outcome.message
         : 'failure' in outcome
-          ? outcome.failure.code === 'receipt_unavailable' && outcome.failure.message.includes('not_a_pdf')
+          ? outcome.failure.code === 'receipt_unavailable' && outcome.failure.detail === 'not_a_pdf'
             ? 'receipt is not a PDF'
             : outcome.failure.message
           : 'log_expense did not confirm the expense';
@@ -315,6 +318,7 @@ export async function runInvoiceInboxScan(
   service: {
     fetchInvoiceMessages(limit?: number): Promise<GmailInvoiceMessage[]>;
     fetchMailboxAddress(): Promise<string | null>;
+    addLabel?(messageId: string, name: string): Promise<{ ok: true } | { ok: false; reason: string }>;
   },
   db: D1Database,
   live?: InvoiceLiveDeps | null,
@@ -328,7 +332,12 @@ export async function runInvoiceInboxScan(
       `[invoice-inbox] ${goLive ? 'live' : 'dry-run'} scanned=${result.scanned} would_log=${result.wouldLog} uncertain=${result.uncertain} skipped=${result.skipped} mailbox=${mailbox ?? 'unknown'}`,
     );
     if (goLive && live) {
-      const pass = await logWouldLogRows(messages, db, live);
+      const addLabel = service.addLabel?.bind(service);
+      const withLabel = {
+        ...live,
+        label: addLabel ? (id: string) => addLabel(id, 'Cotiza/Logged') : undefined,
+      };
+      const pass = await logWouldLogRows(messages, db, withLabel);
       console.log(`[invoice-inbox] logged=${pass.logged} skipped=${pass.skipped} uncertain=${pass.uncertain}`);
     }
   } catch (err) {

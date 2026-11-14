@@ -116,7 +116,7 @@ describe('logExpense', () => {
     const j = jobber(created);
     const html = vi.fn(async () => new Response('<html>', { status: 200 }));
     const r = await logExpense(j as never, writesDb() as never, TARGET(), 'u', INPUT, html);
-    expect(r).toMatchObject({ outcome: 'failed', failure: { code: 'receipt_unavailable' } });
+    expect(r).toMatchObject({ outcome: 'failed', failure: { code: 'receipt_unavailable', detail: 'not_a_pdf' } });
     expect(creates(j)).toHaveLength(0);
   });
 

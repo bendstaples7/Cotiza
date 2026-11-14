@@ -493,22 +493,52 @@ describe('invoice inbox scan', () => {
     expect(store.rows[0]).toMatchObject({ status: 'uncertain', reason: 'existing-expense check incomplete' });
   });
 
-  it("records 'receipt is not a PDF' when logExpense refuses the receipt", async () => {
+  it("maps 'receipt is not a PDF' from failure.detail, not the message", async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     const store = db();
-    const log = vi.fn(async () => ({
-      outcome: 'failed' as const,
-      failure: { code: 'receipt_unavailable', message: 'receipt unavailable (not_a_pdf)' },
-    }));
-    await runInvoiceInboxScan(
-      {
-        fetchMailboxAddress: () => Promise.resolve('ben@gmail.com'),
-        fetchInvoiceMessages: () => Promise.resolve([msg({ receiptUrl: SQUARE_LINK })]),
-      },
-      store as unknown as D1Database,
-      liveDeps({ log }),
-    );
+    const log = vi.fn(async () => ({ outcome: 'failed' as const, failure: { code: 'receipt_unavailable', message: 'the receipt could not be read', detail: 'not_a_pdf' } }));
+    await runInvoiceInboxScan({ fetchMailboxAddress: () => Promise.resolve('b@x.com'), fetchInvoiceMessages: () => Promise.resolve([msg({ receiptUrl: SQUARE_LINK })]) }, store as unknown as D1Database, liveDeps({ log }));
     vi.restoreAllMocks();
     expect(store.rows[0]).toMatchObject({ status: 'uncertain', reason: 'receipt is not a PDF' });
+  });
+  it('adds the Cotiza/Logged label after a live log', async () => {
+    const store = db();
+    const log = vi.fn(async () => ({ outcome: 'created' as const, expenseId: 'exp-new', verified: true }));
+    const addLabel = vi.fn(async () => ({ ok: true } as const));
+    await runInvoiceInboxScan({ fetchMailboxAddress: () => Promise.resolve('b@x.com'), fetchInvoiceMessages: () => Promise.resolve([msg({ receiptUrl: SQUARE_LINK })]), addLabel }, store as unknown as D1Database, liveDeps({ log }));
+    expect(addLabel).toHaveBeenCalledWith('m1', 'Cotiza/Logged');
+    expect(store.rows[0]).toMatchObject({ status: 'logged', jobber_expense_id: 'exp-new', reason: null });
+  });
+  it('keeps the row logged with a note when the label scope is missing', async () => {
+    const store = db();
+    const log = vi.fn(async () => ({ outcome: 'created' as const, expenseId: 'exp-new', verified: true }));
+    const addLabel = vi.fn(async () => ({ ok: false, reason: 'needs gmail.modify' } as const));
+    await runInvoiceInboxScan({ fetchMailboxAddress: () => Promise.resolve('b@x.com'), fetchInvoiceMessages: () => Promise.resolve([msg({ receiptUrl: SQUARE_LINK })]), addLabel }, store as unknown as D1Database, liveDeps({ log }));
+    expect(store.rows[0]).toMatchObject({ status: 'logged', jobber_expense_id: 'exp-new', reason: 'label skipped: needs gmail.modify' });
+  });
+  it('labels the logged message through a this-using addLabel without throwing', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const log = vi.fn(async () => ({ outcome: 'created' as const, expenseId: 'exp-new', verified: true }));
+    const seen: string[][] = [];
+    class LabelingService {
+      tag = 'Cotiza/Logged';
+      async fetchMailboxAddress() {
+        return 'b@x.com';
+      }
+      async fetchInvoiceMessages() {
+        return [msg({ receiptUrl: SQUARE_LINK })];
+      }
+      async addLabel(id: string, name: string) {
+        seen.push([id, name, this.tag]);
+        return { ok: true } as const;
+      }
+    }
+    await runInvoiceInboxScan(new LabelingService(), store as unknown as D1Database, liveDeps({ log }));
+    expect(errors).not.toHaveBeenCalled();
+    expect(seen).toEqual([['m1', 'Cotiza/Logged', 'Cotiza/Logged']]);
+    expect(store.rows[0]).toMatchObject({ status: 'logged', jobber_expense_id: 'exp-new' });
+    vi.restoreAllMocks();
   });
 });

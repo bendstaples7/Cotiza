@@ -175,8 +175,8 @@ function mapExpense(node: ExpenseNode) {
   return { id: node.id ?? null, title: node.title ?? null, description: node.description ?? null, total: node.total ?? null, date: node.date ?? null };
 }
 
-function failed(code: string, message: string, sourceKey: string) {
-  return { outcome: 'failed' as const, sourceKey, failure: { code, message } };
+function failed(code: string, message: string, sourceKey: string, detail?: string) {
+  return { outcome: 'failed' as const, sourceKey, failure: { code, message, detail } };
 }
 
 interface WriteRow { status: string; jobber_expense_id: string | null }
@@ -235,7 +235,7 @@ export async function logExpense(
   const receipt = await downloadReceipt(fetchReceipt, receiptUrl);
   if (!receipt.ok) {
     await release();
-    return failed('receipt_unavailable', `The receipt link could not be downloaded as a PDF (${receipt.reason}). Nothing was created.`, sourceKey);
+    return failed('receipt_unavailable', `The receipt link could not be downloaded as a PDF (${receipt.reason}). Nothing was created.`, sourceKey, receipt.reason);
   }
   let jobberReceiptUrl: string;
   try {
