@@ -451,8 +451,12 @@ export class EmailContextService {
     if (!token) return { ok: false, reason: 'no access token' };
     const list = await this.apiFetch<{ labels?: Array<{ id?: string; name?: string }> }>(token, '/labels');
     let id = (list?.labels ?? []).find((label) => label.name === name)?.id;
-    if (!id) id = (await this.gmailPost<{ id?: string }>(token, '/labels', { name })).data?.id;
-    if (!id) return { ok: false, reason: 'needs gmail.modify' };
+    if (!id) {
+      const created = await this.gmailPost<{ id?: string }>(token, '/labels', { name });
+      if (!created.ok) return { ok: false, reason: created.status === 403 ? 'needs gmail.modify' : `Gmail ${created.status}` };
+      id = created.data?.id;
+    }
+    if (!id) return { ok: false, reason: 'Gmail label create returned no id' };
     const res = await this.gmailPost(token, `/messages/${messageId}/modify`, { addLabelIds: [id] });
     return res.ok ? { ok: true } : { ok: false, reason: res.status === 403 ? 'needs gmail.modify' : `Gmail ${res.status}` };
   }

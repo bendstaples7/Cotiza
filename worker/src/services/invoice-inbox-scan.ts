@@ -335,7 +335,7 @@ export async function runInvoiceInboxScan(
       const addLabel = service.addLabel?.bind(service);
       const withLabel = {
         ...live,
-        label: addLabel ? (id: string) => addLabel(id, 'Cotiza/Logged') : undefined,
+        label: live.label ?? (addLabel ? (id: string) => addLabel(id, 'Cotiza/Logged') : undefined),
       };
       const pass = await logWouldLogRows(messages, db, withLabel);
       console.log(`[invoice-inbox] logged=${pass.logged} skipped=${pass.skipped} uncertain=${pass.uncertain}`);
