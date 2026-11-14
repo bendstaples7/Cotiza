@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   LeadQuoteDraftService,
+  findAssumptionConflicts,
   type LeadQuoteDraftDeps,
 } from '../../worker/src/services/lead-quote-draft.js';
 
@@ -168,5 +169,18 @@ describe('LeadQuoteDraftService.generate', () => {
 
     const priced = draft.lineItems.find((item) => item.name === 'Vinyl Flooring Installation');
     expect(priced?.unitPrice).toBe(4.5);
+  });
+
+  it('flags the email measurement when the assumption is also in the compared text', () => {
+    // The lead draft route compares the whole draft request text, which already
+    // contains the Assumed: lines; the assumption's own 40 ft must not mask the
+    // email's 90/43 ft.
+    const draftText = [requestText, assumptions.join('\n'), emailText].join('\n\n');
+    const risks = findAssumptionConflicts(assumptions, [draftText]);
+    const conflict = risks.find(
+      (risk) => risk.kind === 'assumption_conflict' && risk.detail.includes('40'),
+    );
+    expect(conflict).toBeDefined();
+    expect(conflict?.detail).toMatch(/90|43/);
   });
 });
