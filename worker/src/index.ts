@@ -212,16 +212,22 @@ export default {
       const service = new EmailContextService(env.GMAIL_CLIENT_ID, env.GMAIL_CLIENT_SECRET, env.GMAIL_REFRESH_TOKEN);
       const liveEnv = env as Bindings & { INVOICE_INBOX_GO_LIVE?: string; INVOICE_INBOX_ORIGIN?: string };
       if (liveEnv.INVOICE_INBOX_GO_LIVE === 'true') {
-        const { openJobberIntegration } = await import('./services/jobber-integration.js');
-        const { jobberIntegration } = await openJobberIntegration(env.DB, env);
-        ctx.waitUntil(runInvoiceInboxScan(service, env.DB, {
-          jobber: jobberIntegration,
-          target: {
-            bucket: env.R2_BUCKET,
-            origin: liveEnv.INVOICE_INBOX_ORIGIN || 'https://social-media-cross-poster.chicago-reno.workers.dev',
-          },
-          userId: 'invoice-inbox',
-        }));
+        ctx.waitUntil((async () => {
+          try {
+            const { openJobberIntegration } = await import('./services/jobber-integration.js');
+            const { jobberIntegration } = await openJobberIntegration(env.DB, env);
+            await runInvoiceInboxScan(service, env.DB, {
+              jobber: jobberIntegration,
+              target: {
+                bucket: env.R2_BUCKET,
+                origin: liveEnv.INVOICE_INBOX_ORIGIN || 'https://social-media-cross-poster.chicago-reno.workers.dev',
+              },
+              userId: 'invoice-inbox',
+            });
+          } catch (err) {
+            console.error('[invoice-inbox] go-live setup failed, staying dry-run', err);
+          }
+        })());
       } else {
         ctx.waitUntil(runInvoiceInboxScan(service, env.DB));
       }

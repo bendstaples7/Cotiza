@@ -82,9 +82,16 @@ function db() {
 
 const SQUARE_LINK = 'https://a.squareupmessaging.com/CL0/https%3A%2F%2Fsquareup.com%2Finvoices%2F1/1/0101';
 
-function jobber(existing: Array<Record<string, unknown>> = []) {
+function jobber(pages: Array<Array<Record<string, unknown>>> = []) {
+  let call = 0;
   return {
-    graphqlRequest: vi.fn(async () => ({ expenses: { edges: existing.map((node) => ({ node })) } })),
+    graphqlRequest: vi.fn(async () => {
+      const edges = (pages[call] ?? []).map((node) => ({ node }));
+      const hasNextPage = call < pages.length;
+      const pageInfo = { hasNextPage, endCursor: hasNextPage ? `cursor-${call}` : null };
+      call++;
+      return { expenses: { edges, pageInfo } };
+    }),
   };
 }
 
@@ -325,16 +332,99 @@ describe('invoice inbox scan', () => {
         fetchInvoiceMessages: () => Promise.resolve([msg({ receiptUrl: SQUARE_LINK })]),
       },
       store as unknown as D1Database,
+      liveDeps({ jobber: j, log: vi.fn() }),
+      false,
     );
     vi.restoreAllMocks();
     expect(j.graphqlRequest).not.toHaveBeenCalled();
     expect(store.rows[0]).toMatchObject({ status: 'would_log', jobber_expense_id: null });
   });
 
+  it('finds a hand-entered expense on a later expenses page', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const j = jobber([
+      [{ id: 'exp-other', title: 'Unrelated', total: 10, date: '2026-10-29T12:00:00Z' }],
+      [{ id: 'exp-late', title: 'Garlien Weekly 20Four7 VA', total: 216.2, date: '2026-10-29T12:00:00Z' }],
+    ]);
+    const log = vi.fn();
+    await runInvoiceInboxScan(
+      {
+        fetchMailboxAddress: () => Promise.resolve('ben@gmail.com'),
+        fetchInvoiceMessages: () => Promise.resolve([msg({ receiptUrl: SQUARE_LINK })]),
+      },
+      store as unknown as D1Database,
+      liveDeps({ log, jobber: j }),
+    );
+    expect(j.graphqlRequest).toHaveBeenCalledTimes(2);
+    expect(log).not.toHaveBeenCalled();
+    expect(store.rows[0]).toMatchObject({ status: 'skipped', jobber_expense_id: 'exp-late' });
+    vi.restoreAllMocks();
+  });
+
+  it('marks the row uncertain when the expenses pages are unfinished', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const j = jobber(Array.from({ length: 10 }, () => []));
+    const log = vi.fn();
+    await runInvoiceInboxScan(
+      {
+        fetchMailboxAddress: () => Promise.resolve('ben@gmail.com'),
+        fetchInvoiceMessages: () => Promise.resolve([msg({ receiptUrl: SQUARE_LINK })]),
+      },
+      store as unknown as D1Database,
+      liveDeps({ log, jobber: j }),
+    );
+    expect(j.graphqlRequest).toHaveBeenCalledTimes(10);
+    expect(log).not.toHaveBeenCalled();
+    expect(store.rows[0]).toMatchObject({ status: 'uncertain', reason: 'existing-expense check incomplete' });
+    vi.restoreAllMocks();
+  });
+
+  it('matches a prior-day expense by calendar day', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const j = jobber([[{ id: 'exp-prior', title: 'Garlien Weekly 20Four7 VA', total: 216.2, date: '2026-10-28T00:00:00Z' }]]);
+    const log = vi.fn();
+    await runInvoiceInboxScan(
+      {
+        fetchMailboxAddress: () => Promise.resolve('ben@gmail.com'),
+        fetchInvoiceMessages: () => Promise.resolve([msg({ receiptUrl: SQUARE_LINK })]),
+      },
+      store as unknown as D1Database,
+      liveDeps({ log, jobber: j }),
+    );
+    vi.restoreAllMocks();
+    expect(log).not.toHaveBeenCalled();
+    expect(store.rows[0]).toMatchObject({ status: 'skipped', jobber_expense_id: 'exp-prior' });
+  });
+
+  it('marks the row uncertain when log throws and continues', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const log = vi.fn()
+      .mockRejectedValueOnce(new Error('jobber exploded'))
+      .mockResolvedValueOnce({ outcome: 'created' as const, expenseId: 'exp-2', verified: true });
+    await runInvoiceInboxScan(
+      {
+        fetchMailboxAddress: () => Promise.resolve('ben@gmail.com'),
+        fetchInvoiceMessages: () => Promise.resolve([
+          msg({ id: 'm1', receiptUrl: SQUARE_LINK }),
+          msg({ id: 'm2', subject: 'Invoice #5511-R-0025', receiptUrl: SQUARE_LINK }),
+        ]),
+      },
+      store as unknown as D1Database,
+      liveDeps({ log }),
+    );
+    vi.restoreAllMocks();
+    expect(store.rows[0]).toMatchObject({ status: 'uncertain', reason: 'jobber exploded' });
+    expect(store.rows[1]).toMatchObject({ status: 'logged', jobber_expense_id: 'exp-2' });
+  });
+
   it('marks a hand-entered Jobber expense skipped instead of creating a duplicate', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     const store = db();
-    const j = jobber([{ id: 'exp-old', title: 'Garlien Weekly 20Four7 VA', total: 216.2, date: '2026-10-30T12:00:00Z' }]);
+    const j = jobber([[{ id: 'exp-old', title: 'Garlien Weekly 20Four7 VA', total: 216.2, date: '2026-10-30T12:00:00Z' }]]);
     const log = vi.fn();
     await runInvoiceInboxScan(
       {

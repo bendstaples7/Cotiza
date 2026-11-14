@@ -3,6 +3,7 @@ import type { ActivityLogService } from './activity-log-service.js';
 const GMAIL_API_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
 /** Invoice bodies are capped so one huge email cannot exhaust Worker memory (card fae9e3e9). */
 const INVOICE_BODY_MAX_CHARS = 50_000;
+const INVOICE_HTML_MAX_CHARS = 200_000;
 const OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const API_TIMEOUT_MS = 8_000;
 
@@ -427,7 +428,7 @@ export class EmailContextService {
         bodyText: collected.texts.map((data) => this.decodeBase64(data, Infinity)).filter(Boolean).join('\n').slice(0, INVOICE_BODY_MAX_CHARS),
         snippet: msg.snippet,
         attachmentNames: collected.names,
-        receiptUrl: squareInvoiceLink(collected.htmls.map((data) => this.decodeBase64(data, Infinity)).join('\n')),
+        receiptUrl: squareInvoiceLink(collected.htmls.map((data) => this.decodeBase64(data, INVOICE_HTML_MAX_CHARS)).join('\n').slice(0, INVOICE_HTML_MAX_CHARS)),
       });
     }
     return messages;
@@ -471,7 +472,7 @@ export function squareInvoiceLink(html: string): string | null {
     }
     if (url.hostname === 'a.squareupmessaging.com' && url.pathname.startsWith('/CL0/')) {
       links.add(url.toString());
-    } else if ((url.hostname === 'squareup.com' || url.hostname === 'app.squareup.com') && /invoice|receipt/i.test(url.pathname)) {
+    } else if ((url.hostname === 'squareup.com' || url.hostname === 'app.squareup.com') && /^\/(?:invoices?|receipts?)(?:\/|$)/.test(url.pathname)) {
       links.add(url.toString());
     }
   }
