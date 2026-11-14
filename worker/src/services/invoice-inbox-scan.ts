@@ -205,7 +205,7 @@ async function findExistingExpense(
     } | null;
   };
   const needle = squashed(vendor);
-  if (!needle) return { found: null, complete: true };
+  if (!needle) return { found: null, complete: false };
   let after: string | null = null;
   for (let page = 0; page < MAX_EXPENSE_PAGES; page++) {
     const reply: ExpensePage = await jobber.graphqlRequest<ExpensePage>(EXPENSE_PAGES_QUERY, { first: EXPENSE_PAGE_SIZE, after });
@@ -299,7 +299,11 @@ async function logWouldLogRows(
     } else {
       const reason = 'message' in outcome && typeof outcome.message === 'string'
         ? outcome.message
-        : 'failure' in outcome ? outcome.failure.message : 'log_expense did not confirm the expense';
+        : 'failure' in outcome
+          ? outcome.failure.code === 'receipt_unavailable' && outcome.failure.message.includes('not_a_pdf')
+            ? 'receipt is not a PDF'
+            : outcome.failure.message
+          : 'log_expense did not confirm the expense';
       await setItem(db, message.id, 'uncertain', reason);
       result.uncertain++;
     }

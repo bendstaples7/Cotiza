@@ -46,6 +46,10 @@ export interface Bindings {
   GMAIL_CLIENT_SECRET: string;
   /** Gmail API OAuth refresh token (with https://www.googleapis.com/auth/gmail.readonly scope) for email context enrichment. */
   GMAIL_REFRESH_TOKEN: string;
+  /** Invoice-inbox poller: "true" turns the live Jobber write on; unset or anything else stays dry-run. */
+  INVOICE_INBOX_GO_LIVE?: string;
+  /** Public origin the private receipt route is published under when logging an invoice expense. */
+  INVOICE_INBOX_ORIGIN?: string;
   /** Quo (OpenPhone) API key for call and text history on the lead page. Optional: the page says Quo isn't connected without it. */
   QUO_API_KEY?: string;
   /** Quo phone number id (PN...) whose messages and calls to read. Optional. */

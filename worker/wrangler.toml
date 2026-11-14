@@ -34,6 +34,9 @@ FRONTEND_URL = "https://cotiza-e4h.pages.dev"
 D1_DATABASE_ID = "300f9629-60b2-4e2d-a574-e77bf50235ff"
 # GitHub repo slug (owner/name) used to dispatch the cookie-refresh workflow.
 GITHUB_REPO = "bendstaples7/chicago-reno-social-generator"
+# Invoice-inbox poller (card fae9e3e9): go-live stays off until Ben flips it.
+INVOICE_INBOX_GO_LIVE = "false"
+INVOICE_INBOX_ORIGIN = "https://social-media-cross-poster.chicago-reno.workers.dev"
 
 # Secrets (set via `wrangler secret put <NAME>`):
 # All secrets below are REQUIRED for the deployed worker to function correctly.

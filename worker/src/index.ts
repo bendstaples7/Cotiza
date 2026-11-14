@@ -210,8 +210,7 @@ export default {
       env.GMAIL_REFRESH_TOKEN?.trim()
     ) {
       const service = new EmailContextService(env.GMAIL_CLIENT_ID, env.GMAIL_CLIENT_SECRET, env.GMAIL_REFRESH_TOKEN);
-      const liveEnv = env as Bindings & { INVOICE_INBOX_GO_LIVE?: string; INVOICE_INBOX_ORIGIN?: string };
-      if (liveEnv.INVOICE_INBOX_GO_LIVE === 'true') {
+      if (env.INVOICE_INBOX_GO_LIVE === 'true') {
         ctx.waitUntil((async () => {
           try {
             const { openJobberIntegration } = await import('./services/jobber-integration.js');
@@ -220,12 +219,13 @@ export default {
               jobber: jobberIntegration,
               target: {
                 bucket: env.R2_BUCKET,
-                origin: liveEnv.INVOICE_INBOX_ORIGIN || 'https://social-media-cross-poster.chicago-reno.workers.dev',
+                origin: env.INVOICE_INBOX_ORIGIN || 'https://social-media-cross-poster.chicago-reno.workers.dev',
               },
               userId: 'invoice-inbox',
             });
           } catch (err) {
             console.error('[invoice-inbox] go-live setup failed, staying dry-run', err);
+            await runInvoiceInboxScan(service, env.DB);
           }
         })());
       } else {
