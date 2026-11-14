@@ -198,16 +198,17 @@ async function findExistingExpense(
   amount: number,
   expenseDate: string,
 ): Promise<ExistingExpense> {
+  type ExpensePage = {
+    expenses?: {
+      edges?: Array<{ node: ExpenseNode }>;
+      pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+    } | null;
+  };
   const needle = squashed(vendor);
   if (!needle) return { found: null, complete: true };
   let after: string | null = null;
   for (let page = 0; page < MAX_EXPENSE_PAGES; page++) {
-    const reply = await jobber.graphqlRequest<{
-      expenses?: {
-        edges?: Array<{ node: ExpenseNode }>;
-        pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
-      } | null;
-    }>(EXPENSE_PAGES_QUERY, { first: EXPENSE_PAGE_SIZE, after });
+    const reply: ExpensePage = await jobber.graphqlRequest<ExpensePage>(EXPENSE_PAGES_QUERY, { first: EXPENSE_PAGE_SIZE, after });
     const found = (reply.expenses?.edges ?? []).map((edge) => edge.node).find((node) => {
       if (!node.id) return false;
       if (Math.round(Number(node.total) * 100) !== Math.round(amount * 100)) return false;
