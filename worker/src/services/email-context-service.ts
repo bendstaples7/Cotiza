@@ -3,6 +3,7 @@ import type { ActivityLogService } from './activity-log-service.js';
 const GMAIL_API_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
 /** Invoice bodies are capped so one huge email cannot exhaust Worker memory (card fae9e3e9). */
 const INVOICE_BODY_MAX_CHARS = 50_000;
+const INVOICE_HTML_MAX_CHARS = 200_000;
 const OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const API_TIMEOUT_MS = 8_000;
 
@@ -417,7 +418,7 @@ export class EmailContextService {
     for (const ref of (list?.messages ?? []).slice(0, limit)) {
       const msg = await this.apiFetch<GmailMessage>(accessToken, `/messages/${ref.id}?format=full`);
       if (this.lastReadFailed || !msg) throw new Error('Gmail invoice message read failed');
-      const collected = { texts: [] as string[], names: [] as string[] };
+      const collected = { texts: [] as string[], names: [] as string[], htmls: [] as string[] };
       collectMimeParts(msg.payload, collected);
       messages.push({
         id: ref.id,
@@ -427,6 +428,7 @@ export class EmailContextService {
         bodyText: collected.texts.map((data) => this.decodeBase64(data, Infinity)).filter(Boolean).join('\n').slice(0, INVOICE_BODY_MAX_CHARS),
         snippet: msg.snippet,
         attachmentNames: collected.names,
+        receiptUrl: squareInvoiceLink(collected.htmls.map((data) => this.decodeBase64(data, INVOICE_HTML_MAX_CHARS)).join('\n').slice(0, INVOICE_HTML_MAX_CHARS)),
       });
     }
     return messages;
@@ -449,12 +451,32 @@ interface MimePartLike {
   parts?: MimePartLike[];
 }
 
-/** Depth-first walk of a Gmail MIME tree: every text/plain body and every attachment filename. */
-function collectMimeParts(part: MimePartLike | undefined, acc: { texts: string[]; names: string[] }): void {
+/** Depth-first walk of a Gmail MIME tree: every text body and every attachment filename. */
+function collectMimeParts(part: MimePartLike | undefined, acc: { texts: string[]; names: string[]; htmls: string[] }): void {
   if (!part) return;
   if (part.filename) acc.names.push(part.filename);
   if (part.mimeType === 'text/plain' && part.body?.data) acc.texts.push(part.body.data);
+  if (part.mimeType === 'text/html' && part.body?.data) acc.htmls.push(part.body.data);
   for (const child of part.parts ?? []) collectMimeParts(child, acc);
+}
+
+/** The one Square invoice link in an email body; null when none or more than one. */
+export function squareInvoiceLink(html: string): string | null {
+  const links = new Set<string>();
+  for (const match of html.matchAll(/https?:\/\/[^\s"'<>()]+/g)) {
+    let url: URL;
+    try {
+      url = new URL(match[0].replace(/&amp;/g, '&'));
+    } catch {
+      continue;
+    }
+    if (url.hostname === 'a.squareupmessaging.com' && url.pathname.startsWith('/CL0/')) {
+      links.add(url.toString());
+    } else if ((url.hostname === 'squareup.com' || url.hostname === 'app.squareup.com') && /^\/(?:invoices?|receipts?)(?:\/|$)/.test(url.pathname)) {
+      links.add(url.toString());
+    }
+  }
+  return links.size === 1 ? [...links][0] : null;
 }
 
 /** Extract the email address from a "Name <email@example.com>" header value. */

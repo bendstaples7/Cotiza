@@ -24,6 +24,13 @@ function msg(over: Partial<GmailInvoiceMessage> = {}): GmailInvoiceMessage {
 interface DbRow {
   message_id: string;
   dedupe_key: string;
+  vendor?: string | null;
+  invoice_number?: string | null;
+  amount?: number | null;
+  expense_date?: string | null;
+  status?: string;
+  reason?: string | null;
+  jobber_expense_id?: string | null;
 }
 
 /** In-memory stand-in for the invoice_inbox_items table. */
@@ -31,19 +38,69 @@ function db() {
   const rows: DbRow[] = [];
   return {
     rows,
-    prepare: (_sql: string) => ({
+    prepare: (sql: string) => ({
       bind: (...args: Array<string | number | null>) => ({
-        first: async () =>
-          rows.some((row) => row.dedupe_key === args[0] && row.message_id !== args[1]) ? { 1: 1 } : null,
+        first: async () => {
+          if (sql.includes('SELECT 1')) {
+            return rows.some((row) => row.dedupe_key === args[0] && row.message_id !== args[1]) ? { 1: 1 } : null;
+          }
+          if (sql.includes('WHERE message_id')) {
+            return rows.find((row) => row.message_id === args[0]) ?? null;
+          }
+          return null;
+        },
         run: async () => {
+          if (sql.includes('UPDATE')) {
+            const row = rows.find((item) => item.message_id === args[3]);
+            if (row) {
+              row.status = String(args[0]);
+              row.reason = args[1] as string | null;
+              row.jobber_expense_id = args[2] as string | null;
+            }
+            return { success: true };
+          }
           const messageId = String(args[0]);
           if (!rows.some((row) => row.message_id === messageId)) {
-            rows.push({ message_id: messageId, dedupe_key: String(args[7]) });
+            rows.push({
+              message_id: messageId,
+              dedupe_key: String(args[7]),
+              vendor: args[2] as string | null,
+              invoice_number: args[3] as string | null,
+              amount: args[4] as number | null,
+              expense_date: args[5] as string | null,
+              status: String(args[8]),
+              reason: args[9] as string | null,
+              jobber_expense_id: null,
+            });
           }
           return { success: true };
         },
       }),
     }),
+  };
+}
+
+const SQUARE_LINK = 'https://a.squareupmessaging.com/CL0/https%3A%2F%2Fsquareup.com%2Finvoices%2F1/1/0101';
+
+function jobber(pages: Array<Array<Record<string, unknown>>> = []) {
+  let call = 0;
+  return {
+    graphqlRequest: vi.fn(async () => {
+      const edges = (pages[call] ?? []).map((node) => ({ node }));
+      const hasNextPage = call < pages.length;
+      const pageInfo = { hasNextPage, endCursor: hasNextPage ? `cursor-${call}` : null };
+      call++;
+      return { expenses: { edges, pageInfo } };
+    }),
+  };
+}
+
+function liveDeps(over: { log?: unknown; jobber?: ReturnType<typeof jobber> } = {}) {
+  return {
+    jobber: (over.jobber ?? jobber()) as never,
+    target: { bucket: {} as never, origin: 'https://cotiza.test' },
+    userId: 'invoice-inbox',
+    log: (over.log ?? vi.fn()) as never,
   };
 }
 
@@ -263,5 +320,159 @@ describe('invoice inbox scan', () => {
     expect(lines).toEqual([
       '[invoice-inbox] dry-run scanned=1 would_log=1 uncertain=0 skipped=0 mailbox=ben@gmail.com',
     ]);
+  });
+
+  it('go-live off leaves the would_log row alone and never calls Jobber', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const j = jobber();
+    await runInvoiceInboxScan(
+      {
+        fetchMailboxAddress: () => Promise.resolve('ben@gmail.com'),
+        fetchInvoiceMessages: () => Promise.resolve([msg({ receiptUrl: SQUARE_LINK })]),
+      },
+      store as unknown as D1Database,
+      liveDeps({ jobber: j, log: vi.fn() }),
+      false,
+    );
+    vi.restoreAllMocks();
+    expect(j.graphqlRequest).not.toHaveBeenCalled();
+    expect(store.rows[0]).toMatchObject({ status: 'would_log', jobber_expense_id: null });
+  });
+
+  it('finds a hand-entered expense on a later expenses page', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const j = jobber([
+      [{ id: 'exp-other', title: 'Unrelated', total: 10, date: '2026-10-29T12:00:00Z' }],
+      [{ id: 'exp-late', title: 'Garlien Weekly 20Four7 VA', total: 216.2, date: '2026-10-29T12:00:00Z' }],
+    ]);
+    const log = vi.fn();
+    await runInvoiceInboxScan(
+      {
+        fetchMailboxAddress: () => Promise.resolve('ben@gmail.com'),
+        fetchInvoiceMessages: () => Promise.resolve([msg({ receiptUrl: SQUARE_LINK })]),
+      },
+      store as unknown as D1Database,
+      liveDeps({ log, jobber: j }),
+    );
+    expect(j.graphqlRequest).toHaveBeenCalledTimes(2);
+    expect(log).not.toHaveBeenCalled();
+    expect(store.rows[0]).toMatchObject({ status: 'skipped', jobber_expense_id: 'exp-late' });
+    vi.restoreAllMocks();
+  });
+
+  it('marks the row uncertain when the expenses pages are unfinished', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const j = jobber(Array.from({ length: 10 }, () => []));
+    const log = vi.fn();
+    await runInvoiceInboxScan(
+      {
+        fetchMailboxAddress: () => Promise.resolve('ben@gmail.com'),
+        fetchInvoiceMessages: () => Promise.resolve([msg({ receiptUrl: SQUARE_LINK })]),
+      },
+      store as unknown as D1Database,
+      liveDeps({ log, jobber: j }),
+    );
+    expect(j.graphqlRequest).toHaveBeenCalledTimes(10);
+    expect(log).not.toHaveBeenCalled();
+    expect(store.rows[0]).toMatchObject({ status: 'uncertain', reason: 'existing-expense check incomplete' });
+    vi.restoreAllMocks();
+  });
+
+  it('matches a prior-day expense by calendar day', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const j = jobber([[{ id: 'exp-prior', title: 'Garlien Weekly 20Four7 VA', total: 216.2, date: '2026-10-28T00:00:00Z' }]]);
+    const log = vi.fn();
+    await runInvoiceInboxScan(
+      {
+        fetchMailboxAddress: () => Promise.resolve('ben@gmail.com'),
+        fetchInvoiceMessages: () => Promise.resolve([msg({ receiptUrl: SQUARE_LINK })]),
+      },
+      store as unknown as D1Database,
+      liveDeps({ log, jobber: j }),
+    );
+    vi.restoreAllMocks();
+    expect(log).not.toHaveBeenCalled();
+    expect(store.rows[0]).toMatchObject({ status: 'skipped', jobber_expense_id: 'exp-prior' });
+  });
+
+  it('marks the row uncertain when log throws and continues', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const log = vi.fn()
+      .mockRejectedValueOnce(new Error('jobber exploded'))
+      .mockResolvedValueOnce({ outcome: 'created' as const, expenseId: 'exp-2', verified: true });
+    await runInvoiceInboxScan(
+      {
+        fetchMailboxAddress: () => Promise.resolve('ben@gmail.com'),
+        fetchInvoiceMessages: () => Promise.resolve([
+          msg({ id: 'm1', receiptUrl: SQUARE_LINK }),
+          msg({ id: 'm2', subject: 'Invoice #5511-R-0025', receiptUrl: SQUARE_LINK }),
+        ]),
+      },
+      store as unknown as D1Database,
+      liveDeps({ log }),
+    );
+    vi.restoreAllMocks();
+    expect(store.rows[0]).toMatchObject({ status: 'uncertain', reason: 'jobber exploded' });
+    expect(store.rows[1]).toMatchObject({ status: 'logged', jobber_expense_id: 'exp-2' });
+  });
+
+  it('marks a hand-entered Jobber expense skipped instead of creating a duplicate', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const j = jobber([[{ id: 'exp-old', title: 'Garlien Weekly 20Four7 VA', total: 216.2, date: '2026-10-30T12:00:00Z' }]]);
+    const log = vi.fn();
+    await runInvoiceInboxScan(
+      {
+        fetchMailboxAddress: () => Promise.resolve('ben@gmail.com'),
+        fetchInvoiceMessages: () => Promise.resolve([msg({ receiptUrl: SQUARE_LINK })]),
+      },
+      store as unknown as D1Database,
+      liveDeps({ log, jobber: j }),
+    );
+    vi.restoreAllMocks();
+    expect(log).not.toHaveBeenCalled();
+    expect(store.rows[0]).toMatchObject({ status: 'skipped', jobber_expense_id: 'exp-old' });
+  });
+
+  it('logs a new invoice with one logExpense call and records the expense id', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const log = vi.fn(async (..._args: unknown[]) => ({ outcome: 'created' as const, expenseId: 'exp-new', verified: true }));
+    await runInvoiceInboxScan(
+      {
+        fetchMailboxAddress: () => Promise.resolve('ben@gmail.com'),
+        fetchInvoiceMessages: () => Promise.resolve([msg({ receiptUrl: SQUARE_LINK })]),
+      },
+      store as unknown as D1Database,
+      liveDeps({ log }),
+    );
+    expect(log).toHaveBeenCalledTimes(1);
+    const args = log.mock.calls[0][4] as { sourceKey: string; description: string; total: number };
+    expect(args.sourceKey).toBe('20four7va|5511-r-0024');
+    expect(args.description).toContain('5511-R-0024');
+    expect(args.total).toBe(216.2);
+    expect(store.rows[0]).toMatchObject({ status: 'logged', jobber_expense_id: 'exp-new' });
+    vi.restoreAllMocks();
+  });
+
+  it('marks the row uncertain on an unknown Jobber reply and never retries', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const log = vi.fn(async () => ({ outcome: 'unknown' as const, message: 'Jobber did not confirm the expense' }));
+    const deps = liveDeps({ log });
+    const service = {
+      fetchMailboxAddress: () => Promise.resolve('ben@gmail.com'),
+      fetchInvoiceMessages: () => Promise.resolve([msg({ receiptUrl: SQUARE_LINK })]),
+    };
+    await runInvoiceInboxScan(service, store as unknown as D1Database, deps);
+    await runInvoiceInboxScan(service, store as unknown as D1Database, deps);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(store.rows[0]).toMatchObject({ status: 'uncertain', reason: 'Jobber did not confirm the expense' });
+    vi.restoreAllMocks();
   });
 });

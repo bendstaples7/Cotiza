@@ -1,3 +1,6 @@
+import { logExpense, type ReceiptFetcher } from './jobber-expense-create.js';
+import type { JobberReadClient, ReceiptTarget } from './ops-assistant-read.js';
+
 const SENDER_HINTS = [/20four7/i, /four7\s*va/i];
 const SQUARE_SENDER = /<[^>]*@messaging\.squareup\.com>|^[^<]*@messaging\.squareup\.com$/i;
 const SQUARE_SUBJECT = /you paid an invoice/i;
@@ -13,6 +16,8 @@ export interface GmailInvoiceMessage {
   bodyText: string;
   snippet?: string;
   attachmentNames: string[];
+  /** The Square invoice link from the email HTML; the only route to the receipt PDF. */
+  receiptUrl?: string | null;
 }
 
 export interface InvoiceScanResult {
@@ -163,19 +168,165 @@ export async function scanInvoiceInbox(deps: {
   return result;
 }
 
+interface WouldLogRow { status: string; dedupe_key: string | null; vendor: string | null; invoice_number: string | null; amount: number | null; expense_date: string | null }
+interface ExpenseNode { id?: string; title?: string | null; description?: string | null; total?: number | null; date?: string | null }
+interface ExistingExpense { found: ExpenseNode | null; complete: boolean }
+export interface InvoiceLiveDeps { jobber: JobberReadClient; target: ReceiptTarget; userId: string; log?: typeof logExpense; fetchReceipt?: ReceiptFetcher }
+
+const DAY_MS = 86_400_000;
+const EXPENSE_PAGE_SIZE = 100;
+const MAX_EXPENSE_PAGES = 10;
+const squashed = (v: string) => v.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+// The shared AssistantExpenseDupes query takes no cursor, so page the expenses by hand.
+const EXPENSE_PAGES_QUERY = `query InvoiceInboxExpenses($first: Int!, $after: String) {
+  expenses(first: $first, after: $after) { edges { node { id title description total date } } pageInfo { hasNextPage endCursor } }
+}`;
+
+/** Whole calendar days between two YYYY-MM-DD dates, or null when either is unparseable. */
+function dayGap(a: string, b: string): number | null {
+  const da = Date.parse(`${a}T00:00:00Z`);
+  const db = Date.parse(`${b}T00:00:00Z`);
+  if (Number.isNaN(da) || Number.isNaN(db)) return null;
+  return Math.abs(da - db) / DAY_MS;
+}
+
+/** The hand-entered Jobber expense that would duplicate this invoice, if any. */
+async function findExistingExpense(
+  jobber: JobberReadClient,
+  vendor: string,
+  amount: number,
+  expenseDate: string,
+): Promise<ExistingExpense> {
+  type ExpensePage = {
+    expenses?: {
+      edges?: Array<{ node: ExpenseNode }>;
+      pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+    } | null;
+  };
+  const needle = squashed(vendor);
+  if (!needle) return { found: null, complete: true };
+  let after: string | null = null;
+  for (let page = 0; page < MAX_EXPENSE_PAGES; page++) {
+    const reply: ExpensePage = await jobber.graphqlRequest<ExpensePage>(EXPENSE_PAGES_QUERY, { first: EXPENSE_PAGE_SIZE, after });
+    const found = (reply.expenses?.edges ?? []).map((edge) => edge.node).find((node) => {
+      if (!node.id) return false;
+      if (Math.round(Number(node.total) * 100) !== Math.round(amount * 100)) return false;
+      const gap = dayGap(String(node.date ?? '').slice(0, 10), expenseDate);
+      if (gap === null || gap > 1) return false;
+      return squashed(`${node.title ?? ''}\n${node.description ?? ''}`).includes(needle);
+    });
+    if (found) return { found, complete: true };
+    const pageInfo = reply.expenses?.pageInfo;
+    if (!pageInfo?.hasNextPage) return { found: null, complete: true };
+    if (!pageInfo.endCursor) break;
+    after = pageInfo.endCursor;
+  }
+  return { found: null, complete: false };
+}
+
+async function setItem(db: D1Database, id: string, status: string, reason: string | null, expenseId: string | null = null): Promise<void> {
+  await db
+    .prepare('UPDATE invoice_inbox_items SET status = ?, reason = ?, jobber_expense_id = ? WHERE message_id = ?')
+    .bind(status, reason, expenseId, id)
+    .run();
+}
+
+/** Create the would_log rows in Jobber once each; never retries an unknown reply. */
+async function logWouldLogRows(
+  messages: GmailInvoiceMessage[],
+  db: D1Database,
+  live: InvoiceLiveDeps,
+): Promise<{ logged: number; skipped: number; uncertain: number }> {
+  const log = live.log ?? logExpense;
+  const result = { logged: 0, skipped: 0, uncertain: 0 };
+  for (const message of messages.slice(0, MAX_PER_RUN)) {
+    const row = await db
+      .prepare('SELECT status, dedupe_key, vendor, invoice_number, amount, expense_date FROM invoice_inbox_items WHERE message_id = ?')
+      .bind(message.id)
+      .first<WouldLogRow>();
+    if (!row || row.status !== 'would_log' || !row.dedupe_key || row.amount === null || !row.expense_date) continue;
+    if (!message.receiptUrl) {
+      await setItem(db, message.id, 'uncertain', 'no receipt link in the email');
+      result.uncertain++;
+      continue;
+    }
+    let existing: ExistingExpense;
+    try {
+      existing = await findExistingExpense(live.jobber, row.vendor ?? '', row.amount, row.expense_date);
+    } catch {
+      await setItem(db, message.id, 'uncertain', 'existing-expense check failed');
+      result.uncertain++;
+      continue;
+    }
+    if (!existing.complete) {
+      await setItem(db, message.id, 'uncertain', 'existing-expense check incomplete');
+      result.uncertain++;
+      continue;
+    }
+    if (existing.found) {
+      await setItem(db, message.id, 'skipped', 'already in Jobber', existing.found.id ?? null);
+      result.skipped++;
+      continue;
+    }
+    const vendor = row.vendor ?? '';
+    let outcome: Awaited<ReturnType<typeof log>>;
+    try {
+      outcome = await log(
+        live.jobber,
+        db,
+        live.target,
+        live.userId,
+        {
+          sourceKey: row.dedupe_key,
+          title: `${vendor} ${row.invoice_number ?? ''}`.trim().slice(0, 120),
+          description: `${vendor} invoice #${row.invoice_number ?? ''} (${row.dedupe_key})`,
+          date: row.expense_date,
+          total: row.amount,
+          receiptUrl: message.receiptUrl,
+        },
+        live.fetchReceipt,
+      );
+    } catch (err) {
+      await setItem(db, message.id, 'uncertain', err instanceof Error ? err.message : 'log_expense threw');
+      result.uncertain++;
+      continue;
+    }
+    const expenseId = 'expenseId' in outcome ? outcome.expenseId : null;
+    if ((outcome.outcome === 'created' || outcome.outcome === 'duplicate') && expenseId) {
+      await setItem(db, message.id, 'logged', null, expenseId);
+      result.logged++;
+    } else {
+      const reason = 'message' in outcome && typeof outcome.message === 'string'
+        ? outcome.message
+        : 'failure' in outcome ? outcome.failure.message : 'log_expense did not confirm the expense';
+      await setItem(db, message.id, 'uncertain', reason);
+      result.uncertain++;
+    }
+  }
+  return result;
+}
+
 export async function runInvoiceInboxScan(
   service: {
     fetchInvoiceMessages(limit?: number): Promise<GmailInvoiceMessage[]>;
     fetchMailboxAddress(): Promise<string | null>;
   },
   db: D1Database,
+  live?: InvoiceLiveDeps | null,
+  goLive = live != null,
 ): Promise<void> {
   try {
     const mailbox = await service.fetchMailboxAddress();
-    const result = await scanInvoiceInbox({ messages: await service.fetchInvoiceMessages(), db });
+    const messages = await service.fetchInvoiceMessages();
+    const result = await scanInvoiceInbox({ messages, db });
     console.log(
-      `[invoice-inbox] dry-run scanned=${result.scanned} would_log=${result.wouldLog} uncertain=${result.uncertain} skipped=${result.skipped} mailbox=${mailbox ?? 'unknown'}`,
+      `[invoice-inbox] ${goLive ? 'live' : 'dry-run'} scanned=${result.scanned} would_log=${result.wouldLog} uncertain=${result.uncertain} skipped=${result.skipped} mailbox=${mailbox ?? 'unknown'}`,
     );
+    if (goLive && live) {
+      const pass = await logWouldLogRows(messages, db, live);
+      console.log(`[invoice-inbox] logged=${pass.logged} skipped=${pass.skipped} uncertain=${pass.uncertain}`);
+    }
   } catch (err) {
     console.error('[invoice-inbox] scan failed', err);
   }
