@@ -475,4 +475,40 @@ describe('invoice inbox scan', () => {
     expect(store.rows[0]).toMatchObject({ status: 'uncertain', reason: 'Jobber did not confirm the expense' });
     vi.restoreAllMocks();
   });
+
+  it('marks the row uncertain and does not log when the vendor needle is empty', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const log = vi.fn();
+    await runInvoiceInboxScan(
+      {
+        fetchMailboxAddress: () => Promise.resolve('ben@gmail.com'),
+        fetchInvoiceMessages: () => Promise.resolve([msg({ from: '& <billing@20four7va.com>', receiptUrl: SQUARE_LINK })]),
+      },
+      store as unknown as D1Database,
+      liveDeps({ log }),
+    );
+    vi.restoreAllMocks();
+    expect(log).not.toHaveBeenCalled();
+    expect(store.rows[0]).toMatchObject({ status: 'uncertain', reason: 'existing-expense check incomplete' });
+  });
+
+  it("records 'receipt is not a PDF' when logExpense refuses the receipt", async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const log = vi.fn(async () => ({
+      outcome: 'failed' as const,
+      failure: { code: 'receipt_unavailable', message: 'receipt unavailable (not_a_pdf)' },
+    }));
+    await runInvoiceInboxScan(
+      {
+        fetchMailboxAddress: () => Promise.resolve('ben@gmail.com'),
+        fetchInvoiceMessages: () => Promise.resolve([msg({ receiptUrl: SQUARE_LINK })]),
+      },
+      store as unknown as D1Database,
+      liveDeps({ log }),
+    );
+    vi.restoreAllMocks();
+    expect(store.rows[0]).toMatchObject({ status: 'uncertain', reason: 'receipt is not a PDF' });
+  });
 });
