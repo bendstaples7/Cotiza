@@ -281,10 +281,12 @@ export function findAssumptionConflicts(assumptions: string[], texts: string[]):
     for (const text of texts) {
       if (!text.trim()) continue;
       // The lead context (Assumed: lines) is appended to the draft's request
-      // text, so the assumption's own wording appears here. Strip it: otherwise
-      // its own measurement counts as agreement and masks a different one in
-      // the request or email.
-      const source = assumption ? text.split(assumption).join(' ') : text;
+      // text; strip every assumption's wording, or one assumption's measurement
+      // reads as an external agreement/conflict for another.
+      const source = assumptions.reduce(
+        (acc, other) => (other ? acc.split(other).join(' ') : acc),
+        text,
+      );
       const lower = source.toLowerCase();
       const sharedKeyword = keywords.find((keyword) =>
         new RegExp(`\\b${escapeRegExp(keyword)}\\b`).test(lower),

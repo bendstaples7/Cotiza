@@ -183,4 +183,24 @@ describe('LeadQuoteDraftService.generate', () => {
     expect(conflict).toBeDefined();
     expect(conflict?.detail).toMatch(/90|43/);
   });
+
+  it('does not read one assumption as another measurement but keeps the email conflict', () => {
+    const twoAssumptions = [
+      'Assumed: hallway drywall cut out about 2 ft high for about 40 ft.',
+      'Assumed: ceiling drywall patch about 12 ft wide.',
+    ];
+    const noEmail = [requestText, twoAssumptions.join('\n')].join('\n\n');
+    expect(
+      findAssumptionConflicts(twoAssumptions, [noEmail]).filter(
+        (risk) => risk.kind === 'assumption_conflict',
+      ),
+    ).toHaveLength(0);
+
+    const withEmail = [noEmail, emailText].join('\n\n');
+    const conflict = findAssumptionConflicts(twoAssumptions, [withEmail]).find(
+      (risk) => risk.kind === 'assumption_conflict' && risk.detail.includes('40'),
+    );
+    expect(conflict).toBeDefined();
+    expect(conflict?.detail).toMatch(/90|43/);
+  });
 });
