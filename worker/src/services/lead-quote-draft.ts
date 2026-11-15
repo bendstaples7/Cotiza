@@ -280,13 +280,20 @@ export function findAssumptionConflicts(assumptions: string[], texts: string[]):
 
     for (const text of texts) {
       if (!text.trim()) continue;
-      const lower = text.toLowerCase();
+      // The lead context (Assumed: lines) is appended to the draft's request
+      // text; strip every assumption's wording, or one assumption's measurement
+      // reads as an external agreement/conflict for another.
+      const source = assumptions.reduce(
+        (acc, other) => (other ? acc.split(other).join(' ') : acc),
+        text,
+      );
+      const lower = source.toLowerCase();
       const sharedKeyword = keywords.find((keyword) =>
         new RegExp(`\\b${escapeRegExp(keyword)}\\b`).test(lower),
       );
       if (!sharedKeyword) continue;
 
-      const externalNumbers = extractMeasures(text);
+      const externalNumbers = extractMeasures(source);
       if (!externalNumbers.length) continue;
       if (assumptionNumbers.some((value) => externalNumbers.includes(value))) continue;
 
