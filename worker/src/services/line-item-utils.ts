@@ -126,7 +126,55 @@ export function deduplicateLineItems<
   }
 
   // Preserve original insertion order
-  return order.map((key) => seen.get(key)!);
+  return collapseNearDuplicates(order.map((key) => seen.get(key)!));
+}
+
+const QUALIFIER_JOINERS = [' and ', ' & ', ' with '];
+
+/**
+ * Collapse a line whose name is another line's name plus a trailing qualifier
+ * ("Install Baseboard Trim" vs "Install Baseboard Trim and Shoe") into the more
+ * complete line. Same scope, so the larger quantity is kept, not the sum.
+ * Lines in different spaces are never collapsed.
+ */
+function collapseNearDuplicates<
+  T extends {
+    productName: string;
+    description?: string;
+    quantity: number;
+    confidenceScore: number;
+    originalText: string;
+    ruleIdsApplied?: string[];
+  },
+>(items: T[]): T[] {
+  const result = items.map((item) => ({ ...item }));
+  const dropped = new Set<number>();
+  const name = (item: T) => String(item.productName ?? '').trim().toLowerCase();
+  const space = (item: T) => extractSpacePrefix(item.description ?? '') ?? '';
+
+  for (let i = 0; i < result.length; i++) {
+    const short = name(result[i]);
+    if (!short) continue;
+    for (let j = 0; j < result.length; j++) {
+      if (i === j || dropped.has(j)) continue;
+      const long = name(result[j]);
+      if (space(result[i]) !== space(result[j])) continue;
+      if (!QUALIFIER_JOINERS.some((joiner) => long.startsWith(short + joiner))) continue;
+
+      const keep = result[j];
+      const drop = result[i];
+      keep.quantity = Math.max(keep.quantity, drop.quantity);
+      keep.confidenceScore = Math.max(keep.confidenceScore, drop.confidenceScore);
+      if (drop.originalText && drop.originalText !== keep.originalText) {
+        keep.originalText = keep.originalText ? `${keep.originalText}; ${drop.originalText}` : drop.originalText;
+      }
+      const rules = [...(keep.ruleIdsApplied ?? []), ...(drop.ruleIdsApplied ?? [])];
+      if (rules.length > 0) keep.ruleIdsApplied = [...new Set(rules)];
+      dropped.add(i);
+      break;
+    }
+  }
+  return result.filter((_, index) => !dropped.has(index));
 }
 
 /**
