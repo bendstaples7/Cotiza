@@ -38,6 +38,10 @@ export function extractSpacePrefix(description: string): string | null {
  * rule IDs the first occurrence wins. Quantities are summed, the higher
  * confidence score is kept, and rule IDs are merged.
  *
+ * A second pass folds "<name> and/&/with ..." near-duplicates in the same
+ * space into one line, keeping the larger quantity (not the sum) and the
+ * rule-priced line when only one has rules.
+ *
  * Items with blank/empty productName are always treated as distinct and never
  * merged, since they represent unmatched or incomplete entries.
  *
@@ -142,6 +146,7 @@ function collapseNearDuplicates<
     productName: string;
     description?: string;
     quantity: number;
+    unitPrice: number;
     confidenceScore: number;
     originalText: string;
     ruleIdsApplied?: string[];
@@ -161,8 +166,21 @@ function collapseNearDuplicates<
       if (space(result[i]) !== space(result[j])) continue;
       if (!QUALIFIER_JOINERS.some((joiner) => long.startsWith(short + joiner))) continue;
 
-      const keep = result[j];
-      const drop = result[i];
+      // Same authority order as the exact-name merge: the rule-priced line wins.
+      const shortHasRules = (result[i].ruleIdsApplied ?? []).length > 0;
+      const longHasRules = (result[j].ruleIdsApplied ?? []).length > 0;
+      const keepShort = shortHasRules && !longHasRules;
+      const keep = keepShort ? result[i] : result[j];
+      const drop = keepShort ? result[j] : result[i];
+
+      if (keep.unitPrice !== drop.unitPrice) {
+        console.warn(
+          `[deduplicateLineItems] Price divergence on "${name(keep)}": ` +
+          `keeping ${keep.unitPrice} (${(keep.ruleIdsApplied ?? []).length > 0 ? 'rule' : 'AI'}), ` +
+          `dropping ${drop.unitPrice} (${(drop.ruleIdsApplied ?? []).length > 0 ? 'rule' : 'AI'})`
+        );
+      }
+
       keep.quantity = Math.max(keep.quantity, drop.quantity);
       keep.confidenceScore = Math.max(keep.confidenceScore, drop.confidenceScore);
       if (drop.originalText && drop.originalText !== keep.originalText) {
@@ -170,7 +188,7 @@ function collapseNearDuplicates<
       }
       const rules = [...(keep.ruleIdsApplied ?? []), ...(drop.ruleIdsApplied ?? [])];
       if (rules.length > 0) keep.ruleIdsApplied = [...new Set(rules)];
-      dropped.add(i);
+      dropped.add(keepShort ? j : i);
       break;
     }
   }
