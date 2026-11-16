@@ -71,6 +71,7 @@ export const OPTIONAL_SECRETS = [
   'GMAIL_CLIENT_SECRET',
   'GMAIL_REFRESH_TOKEN',
   'HEALTHCHECK_KEY',
+  'EMAIL_ASKS_KEY',
   'JOBBER_WEB_EMAIL',
   'JOBBER_WEB_PASSWORD',
 ] as const satisfies readonly (keyof Bindings)[];
