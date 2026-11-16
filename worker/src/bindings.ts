@@ -48,6 +48,8 @@ export interface Bindings {
   GMAIL_REFRESH_TOKEN: string;
   /** Invoice-inbox poller: "true" turns the live Jobber write on; unset or anything else stays dry-run. */
   INVOICE_INBOX_GO_LIVE?: string;
+  /** Email-ask watcher: "on" starts the shadow poller that records document asks; unset keeps it off. */
+  EMAIL_ASK_WATCHER?: string;
   /** Public origin the private receipt route is published under when logging an invoice expense. */
   INVOICE_INBOX_ORIGIN?: string;
   /** Quo (OpenPhone) API key for call and text history on the lead page. Optional: the page says Quo isn't connected without it. */

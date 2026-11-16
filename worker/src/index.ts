@@ -11,6 +11,7 @@ import { handleScheduledSync } from './scheduled/corpus-sync.js';
 import { handleJobberSessionKeepAlive, JOBBER_SESSION_KEEPALIVE_CRON } from './scheduled/jobber-session-keepalive.js';
 import { EmailContextService } from './services/email-context-service.js';
 import { runInvoiceInboxScan } from './services/invoice-inbox-scan.js';
+import { runEmailAskScan } from './services/email-ask-scan.js';
 import invoiceInboxRoutes from './routes/invoice-inbox.js';
 import authRoutes from './routes/auth.js';
 import mediaRoutes from './routes/media.js';
@@ -202,6 +203,17 @@ export default {
   },
   async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(sweepExpiredReceipts(env.R2_BUCKET));
+    // Document-ask watcher (card bda3a26d): shadow only; no draft or send in this slice.
+    if (
+      event.cron === JOBBER_SESSION_KEEPALIVE_CRON &&
+      env.EMAIL_ASK_WATCHER === 'on' &&
+      env.GMAIL_CLIENT_ID?.trim() &&
+      env.GMAIL_CLIENT_SECRET?.trim() &&
+      env.GMAIL_REFRESH_TOKEN?.trim()
+    ) {
+      const service = new EmailContextService(env.GMAIL_CLIENT_ID, env.GMAIL_CLIENT_SECRET, env.GMAIL_REFRESH_TOKEN);
+      ctx.waitUntil(runEmailAskScan(service, env.DB, { apiKey: env.AI_TEXT_API_KEY, apiUrl: env.AI_TEXT_API_URL }));
+    }
     // Dry-run invoice detector (card fae9e3e9): record would-log rows, never touches Jobber.
     if (
       event.cron === JOBBER_SESSION_KEEPALIVE_CRON &&

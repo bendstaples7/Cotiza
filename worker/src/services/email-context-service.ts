@@ -434,6 +434,38 @@ export class EmailContextService {
     return messages;
   }
 
+  /** Recent inbox messages to scan for document asks (card bda3a26d). Throws when Gmail cannot be read. */
+  async fetchAskCandidates(limit = 25): Promise<import('./email-ask-scan.js').GmailAskMessage[]> {
+    if (!this.isAvailable()) return [];
+    this.lastReadFailed = false;
+    const accessToken = await this.getAccessToken();
+    if (!accessToken) throw new Error('Gmail token refresh failed');
+    const list = await this.apiFetch<GmailListResponse>(
+      accessToken,
+      '/messages?q=' + encodeURIComponent('in:inbox newer_than:2d') + '&maxResults=' + limit,
+    );
+    if (this.lastReadFailed) throw new Error('Gmail ask list read failed');
+    const messages: import('./email-ask-scan.js').GmailAskMessage[] = [];
+    for (const ref of (list?.messages ?? []).slice(0, limit)) {
+      const msg = await this.apiFetch<GmailMessage>(accessToken, `/messages/${ref.id}?format=full`);
+      if (this.lastReadFailed || !msg) throw new Error('Gmail ask message read failed');
+      const collected = { texts: [] as string[], names: [] as string[], htmls: [] as string[] };
+      collectMimeParts(msg.payload, collected);
+      const ms = Number(msg.internalDate);
+      messages.push({
+        id: ref.id,
+        threadId: msg.threadId,
+        from: this.getHeader(msg.payload?.headers ?? [], 'From'),
+        subject: this.getHeader(msg.payload?.headers ?? [], 'Subject'),
+        bodyText: collected.texts.map((data) => this.decodeBase64(data, Infinity)).filter(Boolean).join('\n').slice(0, INVOICE_BODY_MAX_CHARS),
+        snippet: msg.snippet,
+        attachmentNames: collected.names,
+        receivedAt: Number.isFinite(ms) ? new Date(ms).toISOString() : null,
+      });
+    }
+    return messages;
+  }
+
   /** Mailbox the Gmail token reads, for the invoice poller log line (card fae9e3e9). Never throws. */
   async fetchMailboxAddress(): Promise<string | null> {
     if (!this.isAvailable()) return null;
