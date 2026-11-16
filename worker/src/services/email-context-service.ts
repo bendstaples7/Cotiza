@@ -1,4 +1,5 @@
 import type { ActivityLogService } from './activity-log-service.js';
+import { buildMimeReply } from './email-ask-draft.js';
 
 const GMAIL_API_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
 /** Invoice bodies are capped so one huge email cannot exhaust Worker memory (card fae9e3e9). */
@@ -40,6 +41,15 @@ interface TokenResponse {
   access_token: string;
   expires_in: number;
   token_type: string;
+}
+
+/** One Gmail attachment found while searching for a stored ask (card bda3a26d S2). */
+export interface AttachmentCandidate {
+  filename: string;
+  attachmentId: string;
+  messageId: string;
+  from: string;
+  date: string | null;
 }
 
 // ── Service ──────────────────────────────────────────────────────
@@ -493,6 +503,69 @@ export class EmailContextService {
     return res.ok ? { ok: true } : { ok: false, reason: res.status === 403 ? 'needs gmail.modify' : `Gmail ${res.status}` };
   }
 
+  /** Create a Gmail draft reply with one attachment in the source thread. Never sends. */
+  async createDraft(input: {
+    threadId: string;
+    to: string;
+    subject: string;
+    body: string;
+    attachment: { filename: string; attachmentId: string; messageId: string; source: string };
+  }): Promise<{ ok: true; draftId: string; draftUrl: string } | { ok: false; reason: string }> {
+    if (!this.isAvailable()) return { ok: false, reason: 'not configured' };
+    const token = await this.getAccessToken();
+    if (!token) return { ok: false, reason: 'no access token' };
+    const file = await this.fetchAttachment(input.attachment.messageId, input.attachment.attachmentId);
+    if (!file.ok) return { ok: false, reason: file.reason };
+    const raw = buildMimeReply({
+      to: input.to,
+      subject: input.subject,
+      body: input.body,
+      attachment: { filename: input.attachment.filename, data: file.data },
+    });
+    const res = await this.gmailPost<{ id?: string }>(token, '/drafts', { message: { threadId: input.threadId, raw } });
+    if (!res.ok) return { ok: false, reason: res.status === 403 ? 'needs gmail.compose' : `Gmail ${res.status}` };
+    const draftId = res.data?.id;
+    if (!draftId) return { ok: false, reason: 'Gmail draft create returned no id' };
+    return { ok: true, draftId, draftUrl: 'https://mail.google.com/mail/u/0/#drafts?compose=' + draftId };
+  }
+
+  /** Search Gmail for attachment candidates matching a query. Throws when Gmail cannot be read. */
+  async findAttachmentCandidates(query: string, limit = 10): Promise<AttachmentCandidate[]> {
+    if (!this.isAvailable()) return [];
+    this.lastReadFailed = false;
+    const accessToken = await this.getAccessToken();
+    if (!accessToken) throw new Error('Gmail token refresh failed');
+    const list = await this.apiFetch<GmailListResponse>(
+      accessToken,
+      `/messages?q=${encodeURIComponent(query)}&maxResults=${limit}`,
+    );
+    if (this.lastReadFailed) throw new Error('Gmail attachment list read failed');
+    const candidates: AttachmentCandidate[] = [];
+    for (const ref of (list?.messages ?? []).slice(0, limit)) {
+      const msg = await this.apiFetch<GmailMessage>(accessToken, `/messages/${ref.id}?format=full`);
+      if (this.lastReadFailed || !msg) throw new Error('Gmail attachment message read failed');
+      const collected = { texts: [] as string[], names: [] as string[], htmls: [] as string[], attachments: [] as Array<{ filename: string; attachmentId: string }> };
+      collectMimeParts(msg.payload, collected);
+      const from = this.getHeader(msg.payload?.headers ?? [], 'From');
+      const ms = Number(msg.internalDate);
+      const date = Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+      for (const attachment of collected.attachments) {
+        candidates.push({ filename: attachment.filename, attachmentId: attachment.attachmentId, messageId: ref.id, from, date });
+      }
+    }
+    return candidates;
+  }
+
+  /** Download one Gmail attachment's base64url content. */
+  async fetchAttachment(messageId: string, attachmentId: string): Promise<{ ok: true; data: string } | { ok: false; reason: string }> {
+    if (!this.isAvailable()) return { ok: false, reason: 'not configured' };
+    const token = await this.getAccessToken();
+    if (!token) return { ok: false, reason: 'no access token' };
+    const res = await this.apiFetch<{ data?: string }>(token, '/messages/' + messageId + '/attachments/' + attachmentId);
+    if (!res?.data) return { ok: false, reason: 'Gmail attachment read failed' };
+    return { ok: true, data: res.data };
+  }
+
   /** POST one JSON body; status is returned so 403 is told apart from a 5xx. */
   private async gmailPost<T>(token: string, path: string, body: unknown): Promise<{ ok: boolean; status: number; data: T | null }> {
     const ctl = new AbortController();
@@ -517,14 +590,17 @@ export class EmailContextService {
 interface MimePartLike {
   mimeType?: string;
   filename?: string;
-  body?: { data?: string };
+  body?: { data?: string; attachmentId?: string };
   parts?: MimePartLike[];
 }
 
-/** Depth-first walk of a Gmail MIME tree: every text body and every attachment filename. */
-function collectMimeParts(part: MimePartLike | undefined, acc: { texts: string[]; names: string[]; htmls: string[] }): void {
+/** Depth-first walk of a Gmail MIME tree: every text body, every attachment filename and id. */
+function collectMimeParts(part: MimePartLike | undefined, acc: { texts: string[]; names: string[]; htmls: string[]; attachments?: Array<{ filename: string; attachmentId: string }> }): void {
   if (!part) return;
-  if (part.filename) acc.names.push(part.filename);
+  if (part.filename) {
+    acc.names.push(part.filename);
+    if (part.body?.attachmentId) (acc.attachments ??= []).push({ filename: part.filename, attachmentId: part.body.attachmentId });
+  }
   if (part.mimeType === 'text/plain' && part.body?.data) acc.texts.push(part.body.data);
   if (part.mimeType === 'text/html' && part.body?.data) acc.htmls.push(part.body.data);
   for (const child of part.parts ?? []) collectMimeParts(child, acc);
