@@ -52,6 +52,8 @@ export interface Bindings {
   EMAIL_ASK_WATCHER?: string;
   /** Email-ask drafts: "true" creates Gmail drafts for stored asks; unset keeps it off. Never sends. */
   EMAIL_ASK_DRAFTS?: string;
+  /** Key guarding the Shinko email-asks API (Authorization: Bearer). Route returns 404 when unset. */
+  EMAIL_ASKS_KEY?: string;
   /** Public origin the private receipt route is published under when logging an invoice expense. */
   INVOICE_INBOX_ORIGIN?: string;
   /** Quo (OpenPhone) API key for call and text history on the lead page. Optional: the page says Quo isn't connected without it. */

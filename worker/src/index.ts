@@ -33,6 +33,7 @@ import assistantReceiptRoutes, { sweepExpiredReceipts } from './routes/assistant
 import reportRoutes from './routes/reports.js';
 import opsAssistantRoutes from './routes/ops-assistant.js';
 import leadRoutes from './routes/leads.js';
+import emailAsksRoutes from './routes/email-asks.js';
 
 const app = new Hono<{ Bindings: Bindings }>();
 
@@ -193,6 +194,7 @@ app.route('/api/systems', systemsRoutes);
 app.route('/api', reviewRoutes);
 app.route('/api/dashboard', dashboardRoutes);
 app.route('/api/invoice-inbox', invoiceInboxRoutes);
+app.route('/api/email-asks', emailAsksRoutes);
 
 // Error handler (must be registered after routes)
 app.onError(errorHandler);
