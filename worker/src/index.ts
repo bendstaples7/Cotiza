@@ -12,6 +12,7 @@ import { handleJobberSessionKeepAlive, JOBBER_SESSION_KEEPALIVE_CRON } from './s
 import { EmailContextService } from './services/email-context-service.js';
 import { runInvoiceInboxScan } from './services/invoice-inbox-scan.js';
 import { runEmailAskScan } from './services/email-ask-scan.js';
+import { runEmailAskDraft } from './services/email-ask-draft.js';
 import invoiceInboxRoutes from './routes/invoice-inbox.js';
 import authRoutes from './routes/auth.js';
 import mediaRoutes from './routes/media.js';
@@ -213,6 +214,17 @@ export default {
     ) {
       const service = new EmailContextService(env.GMAIL_CLIENT_ID, env.GMAIL_CLIENT_SECRET, env.GMAIL_REFRESH_TOKEN);
       ctx.waitUntil(runEmailAskScan(service, env.DB, { apiKey: env.AI_TEXT_API_KEY, apiUrl: env.AI_TEXT_API_URL }));
+    }
+    // Draft replies for stored asks (card bda3a26d S2): off unless EMAIL_ASK_DRAFTS === 'true'. Never sends.
+    if (
+      event.cron === JOBBER_SESSION_KEEPALIVE_CRON &&
+      env.EMAIL_ASK_DRAFTS === 'true' &&
+      env.GMAIL_CLIENT_ID?.trim() &&
+      env.GMAIL_CLIENT_SECRET?.trim() &&
+      env.GMAIL_REFRESH_TOKEN?.trim()
+    ) {
+      const service = new EmailContextService(env.GMAIL_CLIENT_ID, env.GMAIL_CLIENT_SECRET, env.GMAIL_REFRESH_TOKEN);
+      ctx.waitUntil(runEmailAskDraft(service, env.DB));
     }
     // Dry-run invoice detector (card fae9e3e9): record would-log rows, never touches Jobber.
     if (

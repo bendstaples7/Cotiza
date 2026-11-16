@@ -50,6 +50,8 @@ export interface Bindings {
   INVOICE_INBOX_GO_LIVE?: string;
   /** Email-ask watcher: "on" starts the shadow poller that records document asks; unset keeps it off. */
   EMAIL_ASK_WATCHER?: string;
+  /** Email-ask drafts: "true" creates Gmail drafts for stored asks; unset keeps it off. Never sends. */
+  EMAIL_ASK_DRAFTS?: string;
   /** Public origin the private receipt route is published under when logging an invoice expense. */
   INVOICE_INBOX_ORIGIN?: string;
   /** Quo (OpenPhone) API key for call and text history on the lead page. Optional: the page says Quo isn't connected without it. */
