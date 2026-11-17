@@ -113,8 +113,8 @@ describe('QuoteDraftService — mapDraftRow deposit_schedule deserialization', (
       label: 'High-Value Payment Schedule',
       milestones: [
         { description: 'Deposit due at signing', percentage: 30 },
-        { description: 'Due at completion of rough plumbing and electric', percentage: 30 },
-        { description: 'Due at completion of tile and flooring', percentage: 30 },
+        { description: 'Due at completion of drywall', percentage: 30 },
+        { description: 'Due at completion of flooring', percentage: 30 },
         { description: 'Due at customer sign-off of punch list', percentage: 10 },
       ],
     };

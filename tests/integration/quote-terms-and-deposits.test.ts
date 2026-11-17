@@ -51,8 +51,8 @@ const HIGH_VALUE_DEPOSIT_RULE: StructuredRule = {
         label: 'High-Value Payment Schedule',
         milestones: [
           { percentage: 30, description: 'Deposit due at signing' },
-          { percentage: 30, description: 'Due at completion of rough plumbing and electric' },
-          { percentage: 30, description: 'Due at completion of tile and flooring' },
+          { percentage: 30, description: '{{early}}' },
+          { percentage: 30, description: '{{late}}' },
           { percentage: 10, description: 'Due at customer sign-off of punch list' },
         ],
       },
@@ -216,10 +216,9 @@ describe('Quote over $10,000 with all three built-in rules seeded', () => {
     expect(milestones).toHaveLength(4);
     expect(milestones[0].percentage).toBe(30);
     expect(milestones[0].description).toBe('Deposit due at signing');
-    expect(milestones[1].percentage).toBe(30);
-    expect(milestones[1].description).toBe('Due at completion of rough plumbing and electric');
-    expect(milestones[2].percentage).toBe(30);
-    expect(milestones[2].description).toBe('Due at completion of tile and flooring');
+    expect(milestones[1].description).toBe('Due at start of work');
+    expect(milestones[2].description).toBe('Due at substantial completion of work');
+    expect(milestones.map((m) => m.percentage)).toEqual([30, 30, 30, 10]);
     expect(milestones[3].percentage).toBe(10);
     expect(milestones[3].description).toBe('Due at customer sign-off of punch list');
   });
@@ -648,5 +647,42 @@ describe('Migration safety — 0045_deposit_schedule.sql content validation', ()
   it('does not contain CREATE TABLE (migration only adds a column, not a new table)', () => {
     // Sanity check: this migration should only alter an existing table
     expect(migrationSql).not.toMatch(/CREATE\s+TABLE/i);
+  });
+});
+
+describe('High-Value milestones name the quote\'s actual trades', () => {
+  function milestonesFor(items: EngineLineItem[]) {
+    return executeRules({ lineItems: items, rules: ALL_SEEDED_RULES, catalog: [] })
+      .depositSchedule!.milestones;
+  }
+
+  it('(a) flooring + drywall: names drywall then flooring; no plumbing, electric or tile', () => {
+    const milestones = milestonesFor([
+      makeLineItem('Flooring: Install Vinyl Plank', 1, 7000),
+      makeLineItem('Drywall: Installation of New Drywall', 1, 5000),
+    ]);
+    const text = milestones.map((m) => m.description).join(' | ').toLowerCase();
+    expect(text).not.toMatch(/plumbing|electric|tile/);
+    expect(milestones[1].description.toLowerCase()).toContain('drywall');
+    expect(milestones[2].description.toLowerCase()).toContain('flooring');
+  });
+
+  it('(b) plumbing + electrical + tile: rough plumbing/electrical then tile', () => {
+    const milestones = milestonesFor([
+      makeLineItem('Plumbing: Rough Plumbing', 1, 8000),
+      makeLineItem('Electrical: Rough Electrical', 1, 7000),
+      makeLineItem('Tile: Shower Surround Tile', 1, 10000),
+    ]);
+    expect(milestones[1].description.toLowerCase()).toContain('plumbing');
+    expect(milestones[1].description.toLowerCase()).toContain('electric');
+    expect(milestones[2].description.toLowerCase()).toContain('tile');
+    expect(milestones[2].description.toLowerCase()).not.toContain('flooring');
+  });
+
+  it('(c) flooring-only: start/completion wording, percentages still 30/30/30/10', () => {
+    const milestones = milestonesFor([makeLineItem('Flooring: Install Hardwood', 1, 15000)]);
+    expect(milestones[1].description).toBe('Due at start of flooring installation');
+    expect(milestones[2].description).toBe('Due at completion of flooring installation');
+    expect(milestones.map((m) => m.percentage)).toEqual([30, 30, 30, 10]);
   });
 });
