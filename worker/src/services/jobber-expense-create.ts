@@ -147,6 +147,8 @@ async function downloadReceipt(fetcher: ReceiptFetcher, url: string): Promise<{ 
   return { ok: false, reason: 'too_many_redirects' };
 }
 
+export { defaultFetcher, downloadReceipt };
+
 /** True when `haystack` contains `key` not run into further letters or digits on either side. */
 export function mentionsSource(haystack: string, key: string): boolean {
   const h = haystack.toLowerCase();
