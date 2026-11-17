@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { executeRules } from '../../worker/src/services/rules-engine.js';
+import { executeRules, executeAction } from '../../worker/src/services/rules-engine.js';
 import type { StructuredRule, EngineLineItem } from '../../shared/src/types/quote.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -684,5 +684,29 @@ describe('High-Value milestones name the quote\'s actual trades', () => {
     expect(milestones[1].description).toBe('Due at start of flooring installation');
     expect(milestones[2].description).toBe('Due at completion of flooring installation');
     expect(milestones.map((m) => m.percentage)).toEqual([30, 30, 30, 10]);
+  });
+
+  it('only exact {{early}}/{{late}} placeholders are filled; other text with braces is kept', () => {
+    const result = executeAction(
+      {
+        type: 'set_deposit_schedule',
+        schedule: {
+          label: 'Custom',
+          milestones: [
+            { percentage: 30, description: 'Deposit due at signing' },
+            { percentage: 30, description: 'Pay {{soon}}' },
+            { percentage: 30, description: '{{late}}' },
+            { percentage: 10, description: 'Punch list' },
+          ],
+        },
+      } as any,
+      [makeLineItem('Flooring: Install Hardwood', 1, 15000)],
+      [],
+      'rule-test',
+      null,
+    );
+    const milestones = result.depositScheduleValue!.milestones;
+    expect(milestones[1].description).toBe('Pay {{soon}}');
+    expect(milestones[2].description).toBe('Due at completion of flooring installation');
   });
 });

@@ -1290,8 +1290,8 @@ export function executeAction(
       const newSchedule: DepositSchedule = {
         ...action.schedule,
         milestones: action.schedule.milestones.map((milestone) => {
-          if (!milestone.description.includes('{{')) return milestone;
-          const isEarly = milestone.description.includes('{{early}}');
+          const isEarly = milestone.description === '{{early}}';
+          if (!isEarly && milestone.description !== '{{late}}') return milestone;
           if (trades.length === 0) {
             return { ...milestone, description: isEarly ? 'Due at start of work' : 'Due at substantial completion of work' };
           }
