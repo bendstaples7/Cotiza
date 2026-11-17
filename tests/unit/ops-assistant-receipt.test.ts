@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { handleMcpPost, readMcpJsonBody } from '../../worker/src/routes/ops-assistant.js';
 import assistantReceiptRoutes, { sweepExpiredReceipts } from '../../worker/src/routes/assistant-receipt.js';
 import { CallBudget } from '../../worker/src/services/assistant-access.js';
-import { OpsAssistantRead } from '../../worker/src/services/ops-assistant-read.js';
+import { OpsAssistantRead, callExpenseWriteTool } from '../../worker/src/services/ops-assistant-read.js';
 import { createMockD1, configurePrepareResults } from './helpers/mock-d1.js';
 import { createMockR2 } from './helpers/mock-r2.js';
 
@@ -134,5 +134,61 @@ describe('assistant-receipt route', () => {
     await sweepExpiredReceipts(bucket as never);
     expect(bucket._store.has(`assistant-receipts/${expiredName}`)).toBe(false);
     expect(bucket._store.has(`assistant-receipts/${freshName}`)).toBe(true);
+  });
+});
+
+describe('attach_expense_receipt via receiptUrl', () => {
+  const squareLink = 'https://squareup.com/receipt/preview/abc123';
+  const pdfResponse = () => new Response(new TextEncoder().encode('%PDF-1.4 test'));
+
+  it('downloads a Square link and attaches the PDF', async () => {
+    const before = { id: 'exp-1', title: 'x', description: null, date: '2026-10-29', total: 10, updatedAt: '2026-10-29T16:00:00Z' };
+    const graphqlRequest = vi.fn()
+      .mockResolvedValueOnce({ expense: before })
+      .mockResolvedValueOnce({ expenseEdit: { expense: { id: 'exp-1' }, userErrors: [] } })
+      .mockResolvedValueOnce({ expense: before });
+    const bucket = createMockR2();
+    const fetcher = vi.fn().mockResolvedValue(pdfResponse());
+    const result = await callExpenseWriteTool({ graphqlRequest } as never, { bucket, origin: 'https://worker.test' } as never, 'attach_expense_receipt', { expenseId: 'exp-1', receiptUrl: squareLink }, fetcher);
+    expect(result).toMatchObject({ outcome: 'ok', changed: true });
+    expect(fetcher).toHaveBeenCalledWith(squareLink);
+  });
+
+  it('refuses a non-Square host before R2 or Jobber', async () => {
+    const graphqlRequest = vi.fn();
+    const bucket = createMockR2();
+    const fetcher = vi.fn().mockResolvedValue(pdfResponse());
+    await expect(callExpenseWriteTool({ graphqlRequest } as never, { bucket, origin: 'https://worker.test' } as never, 'attach_expense_receipt', { expenseId: 'exp-1', receiptUrl: 'https://evil.example.com/x.pdf' }, fetcher)).rejects.toThrow(/must be an https link/);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(bucket.put).not.toHaveBeenCalled();
+    expect(graphqlRequest).not.toHaveBeenCalled();
+  });
+
+  it('refuses a non-PDF download before R2 or Jobber', async () => {
+    const graphqlRequest = vi.fn();
+    const bucket = createMockR2();
+    const fetcher = vi.fn().mockResolvedValue(new Response(new TextEncoder().encode('hello')));
+    const result = await callExpenseWriteTool({ graphqlRequest } as never, { bucket, origin: 'https://worker.test' } as never, 'attach_expense_receipt', { expenseId: 'exp-1', receiptUrl: squareLink }, fetcher);
+    expect(result).toMatchObject({ outcome: 'refused', changed: false });
+    expect(bucket.put).not.toHaveBeenCalled();
+    expect(graphqlRequest).not.toHaveBeenCalled();
+  });
+
+  it('requires exactly one of pdfBase64 or receiptUrl', async () => {
+    const graphqlRequest = vi.fn();
+    const bucket = createMockR2();
+    const fetcher = vi.fn().mockResolvedValue(pdfResponse());
+    const target = { bucket, origin: 'https://worker.test' } as never;
+    await expect(callExpenseWriteTool({ graphqlRequest } as never, target, 'attach_expense_receipt', { expenseId: 'exp-1' }, fetcher)).rejects.toThrow(/exactly one of/);
+    await expect(callExpenseWriteTool({ graphqlRequest } as never, target, 'attach_expense_receipt', { expenseId: 'exp-1', pdfBase64: btoa('%PDF-1.4 test'), receiptUrl: squareLink }, fetcher)).rejects.toThrow(/exactly one of/);
+  });
+
+  it('rejects a sha256 mismatch before R2 or Jobber', async () => {
+    const graphqlRequest = vi.fn();
+    const bucket = createMockR2();
+    const fetcher = vi.fn().mockResolvedValue(pdfResponse());
+    await expect(callExpenseWriteTool({ graphqlRequest } as never, { bucket, origin: 'https://worker.test' } as never, 'attach_expense_receipt', { expenseId: 'exp-1', receiptUrl: squareLink, sha256: '0'.repeat(64) }, fetcher)).rejects.toThrow(/does not match/);
+    expect(bucket.put).not.toHaveBeenCalled();
+    expect(graphqlRequest).not.toHaveBeenCalled();
   });
 });

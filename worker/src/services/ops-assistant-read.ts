@@ -13,6 +13,7 @@ import { DETAIL_VISITS_PER_PAGE, JOB_QUERIES, JOB_STATUSES, mapVisit, summarizeV
 import { EXPENSE_ACCOUNT, EXPENSE_QUERIES, expenseDateFilter, isCalendarDate } from './ops-assistant-expenses.js';
 import { reportDate } from './weekly-payout-reports.js';
 import { PRODUCTS_MAX_RESULTS, PRODUCTS_TOOL, loadCatalog, matchCatalog } from './ops-assistant-products.js';
+import { defaultFetcher, downloadReceipt, normalizeReceiptUrl, type ReceiptFetcher } from './jobber-expense-create.js';
 
 /** One Jobber page per call. Text filters apply only to that page. */
 export const SEARCH_LIMITATIONS = {
@@ -1049,11 +1050,20 @@ async function readExpense(jobber: JobberReadClient, id: string): Promise<Expens
   try { return (await jobber.graphqlRequest<{ expense?: ExpenseOne | null }>(EXPENSE_ONE_QUERY, { id })).expense ?? null; }
   catch { return null; }
 }
-async function attachExpenseReceipt(jobber: JobberReadClient, target: ReceiptTarget, raw: Record<string, unknown>) {
-  onlyKeys(raw, ['expenseId', 'pdfBase64', 'fileName', 'sha256']);
+async function attachExpenseReceipt(jobber: JobberReadClient, target: ReceiptTarget, raw: Record<string, unknown>, fetchReceipt: ReceiptFetcher = defaultFetcher) {
+  onlyKeys(raw, ['expenseId', 'pdfBase64', 'receiptUrl', 'fileName', 'sha256']);
   const expenseId = requireId(raw, 'expenseId');
+  const url = raw.receiptUrl;
+  if ((url === undefined) === (raw.pdfBase64 === undefined)) throw new InvalidAssistantArgs('Provide exactly one of pdfBase64 or receiptUrl.');
+  let pdf: Uint8Array;
+  if (url === undefined) pdf = receiptPdf(raw.pdfBase64);
+  else {
+    if (typeof url !== 'string') throw new InvalidAssistantArgs('receiptUrl must be text.');
+    const got = await downloadReceipt(fetchReceipt, normalizeReceiptUrl(url));
+    if (!got.ok) return { outcome: 'refused' as const, changed: false, reason: `Could not download the receipt as a PDF (${got.reason}). Nothing was attached.` };
+    pdf = got.pdf;
+  }
   const expected = raw.sha256 === undefined ? undefined : receiptSha256(raw.sha256);
-  const pdf = receiptPdf(raw.pdfBase64);
   if (expected && (await pdfSha256(pdf)) !== expected) throw new InvalidAssistantArgs('sha256 does not match the PDF bytes; nothing was attached.');
   const before = await readExpense(jobber, expenseId);
   if (!before) return { outcome: 'refused' as const, changed: false, reason: 'That expense was not found. Nothing was attached.' };
@@ -1075,11 +1085,11 @@ async function attachExpenseReceipt(jobber: JobberReadClient, target: ReceiptTar
 }
 export const EXPENSE_WRITE_TOOLS = [{
   name: 'attach_expense_receipt',
-  description: 'Attach one PDF receipt (max 5 MB) to an existing Jobber expense through a short-lived private URL. Changes only the receipt. Confirm the PDF in Jobber\'s web UI; the API cannot show it back. Office account only. If uncertain, check Jobber before retrying. Pass sha256 (64 lowercase hex, e.g. from sha256sum) of the decoded PDF; a mismatch is rejected before anything is attached.',
+  description: 'Attach one PDF receipt (max 5 MB) to an existing Jobber expense through a short-lived private URL. Changes only the receipt. Confirm the PDF in Jobber\'s web UI; the API cannot show it back. Office account only. If uncertain, check Jobber before retrying. Pass the Square invoice link from the "You paid an invoice" email as receiptUrl (preferred), or pdfBase64 for other PDFs; pass exactly one. Pass sha256 (64 lowercase hex, e.g. from sha256sum) of the PDF bytes; a mismatch is rejected before anything is attached.',
   annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-  inputSchema: { type: 'object', additionalProperties: false, required: ['expenseId', 'pdfBase64'], properties: { expenseId: { type: 'string' }, pdfBase64: { type: 'string' }, fileName: { type: 'string' }, sha256: { type: 'string', pattern: '^[0-9a-f]{64}$' } } },
+  inputSchema: { type: 'object', additionalProperties: false, required: ['expenseId'], properties: { expenseId: { type: 'string' }, receiptUrl: { type: 'string', description: 'Square invoice PDF link (imported by the server).' }, pdfBase64: { type: 'string' }, fileName: { type: 'string' }, sha256: { type: 'string', pattern: '^[0-9a-f]{64}$' } } },
 }] as const;
 export const EXPENSE_WRITE_TOOL_NAMES = new Set<string>(EXPENSE_WRITE_TOOLS.map((t) => t.name));
-export async function callExpenseWriteTool(jobber: JobberReadClient, target: ReceiptTarget, name: string, args: unknown) {
-  return name === 'attach_expense_receipt' ? attachExpenseReceipt(jobber, target, objectArgs(args)) : null;
+export async function callExpenseWriteTool(jobber: JobberReadClient, target: ReceiptTarget, name: string, args: unknown, fetchReceipt: ReceiptFetcher = defaultFetcher) {
+  return name === 'attach_expense_receipt' ? attachExpenseReceipt(jobber, target, objectArgs(args), fetchReceipt) : null;
 }
