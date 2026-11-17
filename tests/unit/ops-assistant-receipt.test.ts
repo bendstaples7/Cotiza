@@ -152,6 +152,18 @@ describe('attach_expense_receipt via receiptUrl', () => {
     const result = await callExpenseWriteTool({ graphqlRequest } as never, { bucket, origin: 'https://worker.test' } as never, 'attach_expense_receipt', { expenseId: 'exp-1', receiptUrl: squareLink }, fetcher);
     expect(result).toMatchObject({ outcome: 'ok', changed: true });
     expect(fetcher).toHaveBeenCalledWith(squareLink);
+    const stored = [...bucket._store.values()][0].body;
+    expect(Array.from(new Uint8Array(stored))).toEqual(Array.from(new TextEncoder().encode('%PDF-1.4 test')));
+  });
+
+  it('rejects an over-long Square link before fetching', async () => {
+    const graphqlRequest = vi.fn();
+    const bucket = createMockR2();
+    const fetcher = vi.fn().mockResolvedValue(pdfResponse());
+    const longLink = 'https://squareup.com/receipt/preview/'.padEnd(2049, 'a');
+    await expect(callExpenseWriteTool({ graphqlRequest } as never, { bucket, origin: 'https://worker.test' } as never, 'attach_expense_receipt', { expenseId: 'exp-1', receiptUrl: longLink }, fetcher)).rejects.toThrow(/too long/);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(bucket.put).not.toHaveBeenCalled();
   });
 
   it('refuses a non-Square host before R2 or Jobber', async () => {
