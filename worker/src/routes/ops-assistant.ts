@@ -771,7 +771,7 @@ export function createOpsAssistantApp(directoryFor?: (db: D1Database) => Assista
     const { jobberIntegration } = await openJobberIntegration(c.env.DB, c.env);
     const read = new OpsAssistantRead(jobberIntegration, c.env.DB, c.env.IMAGES);
     const reviews = new ReviewFeedbackStore(c.env.DB);
-    const skills = new SkillSource({ token: (c.env.STAPLE_STACK_PAT || c.env.GITHUB_PAT || '').trim() || undefined, repo: getStapleStackRepo(c.env) });
+    const skills = new SkillSource({ token: (c.env.STAPLE_STACK_PAT || '').trim() || (c.env.GITHUB_PAT || '').trim() || undefined, repo: getStapleStackRepo(c.env) });
     return handleMcpPost(c.req.raw, { directory: directoryOf(c.env.DB), read, db: c.env.DB, budget, reviews, jobber: jobberIntegration, bucket: c.env.R2_BUCKET, skills });
   });
   app.get('/mcp', () => new Response(null, { status: 405, headers: { Allow: 'POST' } }));

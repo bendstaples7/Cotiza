@@ -8,6 +8,8 @@ const TREE = {
     { path: 'skills/chicago-reno-review-quotes/review-page/template.html', type: 'blob', size: 10 },
     { path: 'skills/chicago-reno-review-quotes/review-page', type: 'tree' },
     { path: 'skills/prepare-strength-workout/SKILL.md', type: 'blob', size: 10 },
+    { path: 'skills/prepare-strength-workout/secrets', type: 'blob', mode: '120000', size: 10 },
+    { path: 'skills/big/SKILL.md', type: 'blob', size: 3_000_000 },
     { path: 'README.md', type: 'blob', size: 10 },
   ],
 };
@@ -27,7 +29,7 @@ describe('read_skill', () => {
   it('lists skill names', async () => {
     const src = new SkillSource({ token: 't', repo: 'o/r', fetchImpl: fakeFetch({}) });
     const res = await src.read({});
-    expect(res).toMatchObject({ outcome: 'ok', skills: ['chicago-reno-review-quotes', 'prepare-strength-workout'] });
+    expect(res).toMatchObject({ outcome: 'ok', skills: ['big', 'chicago-reno-review-quotes', 'prepare-strength-workout'] });
   });
 
   it('returns SKILL.md with the file list', async () => {
@@ -64,6 +66,19 @@ describe('read_skill', () => {
     expect(await src.read({})).toMatchObject({ outcome: 'failed', failure: { code: 'github_read_failed' } });
     const none = new SkillSource({ repo: 'o/r', fetchImpl: fakeFetch({}) });
     expect(await none.read({})).toMatchObject({ outcome: 'failed', failure: { code: 'not_configured' } });
+  });
+
+  it('skips symlinks, refuses huge files and reports failed file reads', async () => {
+    const src = new SkillSource({ token: 't', repo: 'o/r', fetchImpl: fakeFetch({}) });
+    expect(await src.read({ name: 'prepare-strength-workout', file: 'secrets' })).toMatchObject({ outcome: 'not_found' });
+    expect(await src.read({ name: 'big' })).toMatchObject({ outcome: 'failed', failure: { code: 'too_large' } });
+    expect(await src.read({ name: 'prepare-strength-workout' })).toMatchObject({ outcome: 'failed', failure: { code: 'github_read_failed' } });
+  });
+
+  it('fails when GitHub truncates the file list', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ ...TREE, truncated: true }))) as unknown as typeof fetch;
+    const src = new SkillSource({ token: 't', repo: 'o/r', fetchImpl });
+    expect(await src.read({})).toMatchObject({ outcome: 'failed', failure: { code: 'github_read_failed' } });
   });
 
   it('rejects path traversal and bad names', () => {

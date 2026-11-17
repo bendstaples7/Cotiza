@@ -47,7 +47,9 @@ export interface SkillSourceOptions {
   fetchImpl?: Fetch;
 }
 
-interface TreeEntry { path: string; type: string; size?: number }
+interface TreeEntry { path: string; type: string; mode?: string; size?: number }
+
+const FETCH_TIMEOUT_MS = 10_000;
 
 function failed(code: string, message: string) {
   return { outcome: 'failed' as const, failure: { code, message } };
@@ -74,7 +76,7 @@ export class SkillSource {
   private tree?: Promise<TreeEntry[]>;
 
   constructor(private readonly opts: SkillSourceOptions) {
-    this.fetchImpl = opts.fetchImpl ?? ((input, init) => fetch(input, init));
+    this.fetchImpl = opts.fetchImpl ?? ((input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }));
     this.apiBase = opts.apiBase ?? 'https://api.github.com';
     this.ref = opts.ref ?? 'main';
   }
@@ -96,7 +98,10 @@ export class SkillSource {
       );
       if (!res.ok) throw new Error(`tree ${res.status}`);
       const body = (await res.json()) as { tree?: TreeEntry[]; truncated?: boolean };
-      return (body.tree ?? []).filter((e) => e.path.startsWith(`${SKILLS_DIR}/`));
+      // A truncated tree would make skills look missing; fail instead of guessing.
+      if (body.truncated) throw new Error('tree truncated');
+      // Symlinks (mode 120000) are skipped: the Contents API follows them to files outside the skill.
+      return (body.tree ?? []).filter((e) => e.path.startsWith(`${SKILLS_DIR}/`) && e.mode !== '120000');
     })();
     return this.tree;
   }
@@ -115,7 +120,8 @@ export class SkillSource {
       tree = await this.loadTree();
     } catch (err) {
       const status = String(err).match(/tree (\d+)/)?.[1];
-      return failed('github_read_failed', `Could not read the Staple Stack repository${status ? ` (GitHub ${status})` : ''}. Nothing was read. This is not a missing skill.`);
+      const why = status ? ` (GitHub ${status})` : /truncated/.test(String(err)) ? ' (file list too long to read in one call)' : '';
+      return failed('github_read_failed', `Could not read the Staple Stack repository${why}. Nothing was read. This is not a missing skill.`);
     }
 
     if (name === undefined) {
@@ -137,10 +143,15 @@ export class SkillSource {
     if ((entry.size ?? 0) > SKILL_SOURCE_LIMITS.maxFileBytes) {
       return failed('too_large', `"${rel}" is larger than ${SKILL_SOURCE_LIMITS.maxFileBytes} bytes.`);
     }
-    const res = await this.fetchImpl(
+    let res: Response;
+    try {
+      res = await this.fetchImpl(
       `${this.apiBase}/repos/${this.opts.repo}/contents/${entry.path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(this.ref)}`,
       { headers: this.headers('application/vnd.github.raw') },
-    );
+      );
+    } catch {
+      return failed('github_read_failed', `Could not read "${rel}" (GitHub did not answer). Nothing was read.`);
+    }
     if (!res.ok) return failed('github_read_failed', `Could not read "${rel}" (GitHub ${res.status}). Nothing was read.`);
     const text = await res.text();
     const end = Math.min(text.length, offset + SKILL_SOURCE_LIMITS.pageChars);
