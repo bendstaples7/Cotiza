@@ -63,6 +63,8 @@ import { EXPENSE_CREATE_TOOL, logExpense } from '../services/jobber-expense-crea
 /** Tools that write to draft Jobber quotes. Listed and callable only with quote:write. */
 const QUOTE_WRITE_TOOLS = [...QUOTE_LINE_TOOLS, QUOTE_MESSAGE_TOOL, QUOTE_CREATE_TOOL];
 const QUOTE_WRITE_TOOL_NAMES = new Set<string>(QUOTE_WRITE_TOOLS.map((t) => t.name));
+import { callSkillTool, SkillArgsError, SkillSource, SKILL_READ_TOOLS, SKILL_TOOL_NAMES } from '../services/skill-source.js';
+import { getStapleStackRepo } from '../config.js';
 import { callLeadTool, LeadToolArgsError, LEAD_READ_TOOLS, LEAD_READ_TOOL_NAMES, LEAD_WRITE_TOOLS, LEAD_WRITE_TOOL_NAMES } from '../services/lead-info-tools.js';
 
 const PROTOCOL = '2025-06-18';
@@ -130,7 +132,7 @@ function mcpEvent(body: unknown, status = 200, extra?: HeadersInit): Response {
 }
 
 function toolsFor(principal: AssistantPrincipal, canReadFinance: boolean, canEditExpenses: boolean, canCreateExpenses = false) {
-  const tools: Array<{ name: string }> = [...TOOL_DEFINITIONS, ...REVIEW_READ_TOOLS, ...LEAD_READ_TOOLS];
+  const tools: Array<{ name: string }> = [...TOOL_DEFINITIONS, ...REVIEW_READ_TOOLS, ...LEAD_READ_TOOLS, ...SKILL_READ_TOOLS];
   if (hasScope(principal.scope, REVIEW_WRITE_SCOPE)) tools.push(...REVIEW_WRITE_TOOLS);
   if (hasScope(principal.scope, LEAD_WRITE_SCOPE)) tools.push(...LEAD_WRITE_TOOLS);
   if (canReadFinance) tools.push(...FINANCE_READ_TOOLS);
@@ -180,6 +182,8 @@ export async function handleMcpPost(request: Request, deps: {
   /** Jobber client for the payout report tool; only used for finance:read office tokens. */
   jobber?: JobberReadClient;
   bucket?: R2Bucket;
+  /** Staple Stack skill reader for read_skill. */
+  skills?: SkillSource;
 }): Promise<Response> {
   const origin = request.headers.get('origin');
   if (origin && !ALLOWED_ORIGINS.has(origin)) return new Response('Forbidden origin', { status: 403 });
@@ -280,7 +284,7 @@ export async function handleMcpPost(request: Request, deps: {
   if (message.method === 'tools/call') {
     const name = String(message.params?.name || '');
     const args = message.params?.arguments ?? {};
-    if (!TOOL_DEFINITIONS.some((tool) => tool.name === name) && !REVIEW_TOOL_NAMES.has(name) && !FINANCE_READ_TOOL_NAMES.has(name) && !QUOTE_WRITE_TOOL_NAMES.has(name) && !EXPENSE_WRITE_TOOL_NAMES.has(name) && !LEAD_READ_TOOL_NAMES.has(name) && !LEAD_WRITE_TOOL_NAMES.has(name) && name !== EXPENSE_CREATE_TOOL.name) {
+    if (!TOOL_DEFINITIONS.some((tool) => tool.name === name) && !REVIEW_TOOL_NAMES.has(name) && !FINANCE_READ_TOOL_NAMES.has(name) && !QUOTE_WRITE_TOOL_NAMES.has(name) && !EXPENSE_WRITE_TOOL_NAMES.has(name) && !LEAD_READ_TOOL_NAMES.has(name) && !LEAD_WRITE_TOOL_NAMES.has(name) && !SKILL_TOOL_NAMES.has(name) && name !== EXPENSE_CREATE_TOOL.name) {
       return mcpEvent({ jsonrpc: '2.0', id, error: { code: -32602, message: 'Unknown tool' } }, 200, headers);
     }
     if (REVIEW_WRITE_TOOL_NAMES.has(name) && !canRecordReviews) {
@@ -372,6 +376,10 @@ export async function handleMcpPost(request: Request, deps: {
         ? await callLeadTool(deps.db, principal, name, args, deps.jobber)
         : name === 'weekly_payout_report'
         ? await callFinanceTool(deps.jobber, name, args)
+        : SKILL_TOOL_NAMES.has(name)
+        ? (deps.skills
+          ? await callSkillTool(deps.skills, name, args)
+          : { outcome: 'failed', failure: { code: 'not_configured', message: 'Skill reading is not configured on this connector. Nothing was read. This is not a missing skill.' } })
         : REVIEW_TOOL_NAMES.has(name)
           ? await callReviewTool(deps.reviews ?? new ReviewFeedbackStore(deps.db), principal, name, args)
           : await callAssistantTool(deps.read, principal.userId, name, args);
@@ -396,7 +404,7 @@ export async function handleMcpPost(request: Request, deps: {
         },
       }, 200, headers);
     } catch (err) {
-      if (err instanceof InvalidAssistantArgs || err instanceof QuoteEditArgsError || err instanceof LeadToolArgsError) {
+      if (err instanceof InvalidAssistantArgs || err instanceof QuoteEditArgsError || err instanceof LeadToolArgsError || err instanceof SkillArgsError) {
         await audit(deps.db, principal.userId, name, audited ? `tool=${name} outcome=invalid_request token=${principal.tokenId}` : `tool=${name} outcome=invalid_request`, 'info');
         return mcpEvent({
           jsonrpc: '2.0',
@@ -763,7 +771,8 @@ export function createOpsAssistantApp(directoryFor?: (db: D1Database) => Assista
     const { jobberIntegration } = await openJobberIntegration(c.env.DB, c.env);
     const read = new OpsAssistantRead(jobberIntegration, c.env.DB, c.env.IMAGES);
     const reviews = new ReviewFeedbackStore(c.env.DB);
-    return handleMcpPost(c.req.raw, { directory: directoryOf(c.env.DB), read, db: c.env.DB, budget, reviews, jobber: jobberIntegration, bucket: c.env.R2_BUCKET });
+    const skills = new SkillSource({ token: (c.env.STAPLE_STACK_PAT || c.env.GITHUB_PAT || '').trim() || undefined, repo: getStapleStackRepo(c.env) });
+    return handleMcpPost(c.req.raw, { directory: directoryOf(c.env.DB), read, db: c.env.DB, budget, reviews, jobber: jobberIntegration, bucket: c.env.R2_BUCKET, skills });
   });
   app.get('/mcp', () => new Response(null, { status: 405, headers: { Allow: 'POST' } }));
   app.delete('/mcp', () => new Response(null, { status: 405, headers: { Allow: 'POST' } }));

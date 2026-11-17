@@ -26,6 +26,10 @@ export interface Bindings {
   GITHUB_PAT: string;
   /** GitHub repo slug (owner/name) for dispatching the cookie-refresh workflow. Defaults to the canonical repo when unset. */
   GITHUB_REPO?: string;
+  /** Read-only token (Contents: read) for the Staple Stack skills repo; read_skill falls back to GITHUB_PAT. */
+  STAPLE_STACK_PAT?: string;
+  /** Staple Stack repo slug (owner/name) for read_skill. Defaults to bendstaples7/Staple-Stack. */
+  STAPLE_STACK_REPO?: string;
   D1_DATABASE_ID: string;
   ENABLE_LOCAL_SYNC?: string;
   /** Secret key for admin operations (e.g. deathclock backfill). */
