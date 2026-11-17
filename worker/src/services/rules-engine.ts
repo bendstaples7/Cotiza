@@ -1262,7 +1262,45 @@ export function executeAction(
 
     case 'set_deposit_schedule': {
       const previousSchedule = depositSchedule ?? null;
-      const newSchedule = action.schedule;
+      // Migration 0084 leaves {{early}} / {{late}} placeholders in the middle
+      // milestones; fill them from the quote's trades in renovation order
+      // (keywords mirror worker/scripts/reorder-catalog-by-renovation.mjs).
+      const TRADES: Array<[string, RegExp]> = [
+        ['demolition', /\bdemo/i],
+        ['framing', /\bframing|structural/i],
+        ['rough plumbing', /\bplumb/i],
+        ['rough electrical', /\belectric/i],
+        ['HVAC and insulation', /\bhvac|insulation/i],
+        ['drywall', /\bdrywall/i],
+        ['flooring', /\bfloor/i],
+        ['tile', /\btile/i],
+        ['countertops', /\bcountertop/i],
+        ['cabinets and carpentry', /\bcabinet|carpentry|trim|baseboard/i],
+        ['painting', /\bpaint/i],
+      ];
+      const trades = TRADES
+        .filter(([, pattern]) => lineItems.some((li) => pattern.test(li.productName)))
+        .map(([label]) => label);
+      // Milestone 2 names the first half of the trades ("a, b and c"); milestone 3 the last trade.
+      const firstHalf = trades.slice(0, Math.max(1, Math.ceil(trades.length / 2)));
+      const early = firstHalf.length > 1
+        ? `${firstHalf.slice(0, -1).join(', ')} and ${firstHalf[firstHalf.length - 1]}`
+        : firstHalf[0];
+      const late = trades[trades.length - 1];
+      const newSchedule: DepositSchedule = {
+        ...action.schedule,
+        milestones: action.schedule.milestones.map((milestone) => {
+          if (!milestone.description.includes('{{')) return milestone;
+          const isEarly = milestone.description.includes('{{early}}');
+          if (trades.length === 0) {
+            return { ...milestone, description: isEarly ? 'Due at start of work' : 'Due at substantial completion of work' };
+          }
+          if (trades.length === 1) {
+            return { ...milestone, description: isEarly ? `Due at start of ${late} installation` : `Due at completion of ${late} installation` };
+          }
+          return { ...milestone, description: isEarly ? `Due at completion of ${early}` : `Due at completion of ${late}` };
+        }),
+      };
       return {
         modified: true,
         lineItems,
