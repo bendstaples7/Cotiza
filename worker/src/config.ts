@@ -22,6 +22,8 @@ export const EXTERNAL = {
     defaultRepo: 'bendstaples7/chicago-reno-social-generator',
     cookieRefreshWorkflow: 'refresh-jobber-cookies.yml',
     workflowRef: 'main',
+    /** Staple Stack: source of truth for Ben's agent skills (read_skill). */
+    stapleStackRepo: 'bendstaples7/Staple-Stack',
   },
   openai: {
     imageModel: 'gpt-image-1',
@@ -106,6 +108,11 @@ export function getMissingOptionalSecrets(env: Bindings): OptionalSecret[] {
 /** Resolve the GitHub repo slug for workflow dispatch (configurable, defaulted). */
 export function getGithubRepo(env: Bindings): string {
   return (env.GITHUB_REPO || '').trim() || EXTERNAL.github.defaultRepo;
+}
+
+/** Resolve the Staple Stack repo slug for read_skill (configurable, defaulted). */
+export function getStapleStackRepo(env: Bindings): string {
+  return (env.STAPLE_STACK_REPO || '').trim() || EXTERNAL.github.stapleStackRepo;
 }
 
 /** Build the cookie-refresh workflow dispatch URL from config. */
