@@ -1450,12 +1450,23 @@ export interface TrelloResult {
 export type LeadProgress = 'lead_in' | 'getting_info' | 'ready_to_quote' | 'quote_drafted' | 'ben_review' | 'ready_to_send' | 'quote_sent';
 export type LeadPipeline = 'need_info' | 'ready_to_quote' | 'quote_created' | 'closed';
 
+/** Ben's review of a quote, as its newest ledger record carries it (worker: lead-quote-stage.ts). */
+export interface LeadReviewDetail {
+  at: string;
+  decision: 'approved' | 'changes_requested' | 'unclear';
+  summary?: string;
+  requestedEdits?: string[];
+  artifactUrl?: string | null;
+}
+
 /** Where a drafted quote is, so the team knows whose move it is (worker: lead-quote-stage.ts). */
 export interface LeadQuoteStage {
   kind: 'none' | 'drafting' | 'changes' | 'ben_review' | 'ready_to_send' | 'sent' | 'unknown';
   quote: { id: string; number: string | null; webUri: string | null } | null;
   label: string;
   why: string;
+  /** Ben's newest review of this quote, when the ledger has one. */
+  review?: LeadReviewDetail | null;
 }
 
 /** The team sent a draft quote to Ben for review. */

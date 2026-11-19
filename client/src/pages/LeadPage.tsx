@@ -21,7 +21,7 @@ import {
   syncLeadTrello,
   updateLeadInfo,
 } from '../api';
-import type { JobberArchiveOutcome, JobberNoteStatus, TrelloResult, LeadBundle, LeadCloseReason, LeadClosure, LeadContactChannel, LeadContactStatus, LeadInfoItem, LeadInfoStatus, LeadWorkflow } from '../api';
+import type { JobberArchiveOutcome, JobberNoteStatus, TrelloResult, LeadBundle, LeadCloseReason, LeadClosure, LeadContactChannel, LeadContactStatus, LeadInfoItem, LeadInfoStatus, LeadReviewDetail, LeadWorkflow } from '../api';
 import { formatDay, sourceList, timeAgo } from '../components/LeadContactLine';
 import { ASSUMED_PREFIX, buildActionMessage, itemKind, mailtoLink, MAX_TEXT_LENGTH, smsLink, type ItemKind } from '../leadOutreach';
 
@@ -496,6 +496,8 @@ function NextStepPanel({ lead, workflow, onChanged, panelRef, onSwitch }: { lead
         </>
       )}
 
+      {workflow.quoteStage?.review && <BenReview review={workflow.quoteStage.review} />}
+
       {messages && (
         <>
           <label htmlFor="next-step-text" style={fieldLabel}>Proposed text</label>
@@ -553,6 +555,26 @@ function NextStepPanel({ lead, workflow, onChanged, panelRef, onSwitch }: { lead
       {notice && <p role="status" style={{ ...muted, color: notice.warn ? '#92400e' : '#166534', fontWeight: notice.warn ? 600 : 400 }}>{notice.text}</p>}
       {error && <p role="alert" style={inlineError}>{error}</p>}
     </section>
+  );
+}
+
+/** Ben's newest review of the quote, in his words: the decision, the edits he asked for and the full-review link. */
+function BenReview({ review }: { review: LeadReviewDetail }) {
+  const [expanded, setExpanded] = useState(false);
+  const lines = (review.summary ?? '').split('\n');
+  const decision = review.decision === 'approved' ? 'Approved' : review.decision === 'changes_requested' ? 'Changes requested' : 'Open';
+  return (
+    <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: 6 }} aria-label="Ben's review">
+      <span style={fieldLabel}>Ben's review · {decision}</span>
+      {(review.requestedEdits ?? []).length > 0 && (
+        <ul style={{ ...list, gap: '0.25rem' }}>
+          {(review.requestedEdits ?? []).map((edit, i) => <li key={i} style={{ fontSize: 14 }}>{edit}</li>)}
+        </ul>
+      )}
+      {review.summary && <p style={pre}>{(expanded ? lines : lines.slice(0, 6)).join('\n')}</p>}
+      {lines.length > 6 && <button type="button" style={linkBtn} onClick={() => setExpanded((v) => !v)}>{expanded ? 'Show less' : 'Show more'}</button>}
+      {review.artifactUrl && <a href={review.artifactUrl} target="_blank" rel="noopener noreferrer">Open review</a>}
+    </div>
   );
 }
 
