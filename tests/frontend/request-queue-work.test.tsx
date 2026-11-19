@@ -84,14 +84,12 @@ describe('Requests work queue', () => {
     expect(within(needInfo).getByText('Overdue 2 days')).toBeInTheDocument();
     expect(within(needInfo).getByText('Step 1 · reach out on intake')).toBeInTheDocument();
     expect(within(needInfo).getByRole('button', { name: 'Send intro text' })).toBeInTheDocument();
-    expect(within(needInfo).getByText('No outreach yet')).toBeInTheDocument();
-    // John has no checklist: no readiness chip.
-    expect(within(needInfo).queryByText('No checklist yet')).not.toBeInTheDocument();
+    // John has no checklist: the message box carries the placeholder.
+    expect(within(needInfo).getByText('No checklist yet')).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('tab', { name: /Ready to create quote/ }));
     const ready = await screen.findByRole('region', { name: 'Ready to create quote' });
     expect(within(ready).getByText('Anne Brady')).toBeInTheDocument();
-    expect(within(ready).getByText('Outreach (Jobber note)')).toBeInTheDocument();
     expect(within(ready).getByText('Need: a site visit')).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('tab', { name: /Closed/ }));
@@ -134,7 +132,7 @@ describe('Requests work queue', () => {
     expect(api.setLeadNotALead).toHaveBeenCalledWith('K', true);
   });
 
-  it('shows a "Lead received" badge and the secondary action under the main one', async () => {
+  it('mockup row layout', async () => {
     api.fetchLeadContactStatuses.mockResolvedValue({
       statuses: {
         A: status(workflow({ bucket: 'waiting', pipeline: 'ready_to_quote', next: { on: '2099-11-10', source: 'suggested', overdue: false, dueToday: false, daysOverdue: 0 } })),
@@ -149,31 +147,13 @@ describe('Requests work queue', () => {
     renderQueue();
     const needInfo = await screen.findByRole('region', { name: 'Need info' });
     const row = await within(needInfo).findByRole('article', { name: 'Lead: John Oconnell' });
-    expect(within(row).getByTestId('lead-received-badge')).toHaveTextContent('Lead received ·7 days ago');
-    expect(within(within(row).getByTestId('lead-received-badge')).getByText('Nov 2')).toBeInTheDocument();
-    expect(within(row).queryByText(/^Lead in /)).toBeNull();
-    expect(within(row).getByRole('button', { name: /Also: Send “quote in progress” text/ })).toBeInTheDocument();
+    expect(within(row).getByText(/^Received Nov 2 · /)).toBeInTheDocument();
+    expect(within(row).queryByTestId('lead-received-badge')).not.toBeInTheDocument();
+    expect(within(row).getAllByTestId('lead-message-box')).toHaveLength(1);
+    expect(within(row).getAllByRole('button')).toHaveLength(1);
+    expect(within(row).getByRole('link', { name: 'John Oconnell' })).toBeInTheDocument();
     await userEvent.click(within(row).getByRole('button', { name: 'Draft quote' }));
     expect(screen.getByTestId('where')).toHaveTextContent('/quotes/leads/J?action=draft_quote');
-  });
-
-  it('the secondary "Also:" button opens the lead on that action', async () => {
-    api.fetchLeadContactStatuses.mockResolvedValue({
-      statuses: {
-        A: status(workflow({ bucket: 'waiting', pipeline: 'ready_to_quote', next: { on: '2099-11-10', source: 'suggested', overdue: false, dueToday: false, daysOverdue: 0 } })),
-        K: status(workflow({ bucket: 'review', pipeline: 'closed', likelySpam: true })),
-        J: status(workflow({
-          progress: 'ready_to_quote', pipeline: 'need_info',
-          action: { kind: 'draft_quote', label: 'Draft quote', why: 'We have what we need to quote.', step: 'draft_quote', channel: 'other' },
-          secondary: { kind: 'quote_update', label: 'Send “quote in progress” text', why: 'Let them know it’s coming.', step: 'quote_update', channel: 'text' },
-        })),
-      },
-    });
-    renderQueue();
-    const needInfo = await screen.findByRole('region', { name: 'Need info' });
-    const row = await within(needInfo).findByRole('article', { name: 'Lead: John Oconnell' });
-    await userEvent.click(within(row).getByRole('button', { name: /Also: Send “quote in progress” text/ }));
-    expect(screen.getByTestId('where')).toHaveTextContent('/quotes/leads/J?action=quote_update');
   });
 
   it('a lead lost in Trello sits in Review with "Close in Cotiza too"', async () => {
@@ -190,7 +170,6 @@ describe('Requests work queue', () => {
     await userEvent.click(screen.getByRole('tab', { name: /Closed/ }));
     const closed = await screen.findByRole('region', { name: 'Closed' });
     const row = await within(closed).findByRole('article', { name: 'Lead: Katherine Harris' });
-    expect(within(row).getByText('Lost in Trello: the card is in Bid Lost.')).toBeInTheDocument();
     expect(within(row).queryByRole('button', { name: 'Not a lead' })).not.toBeInTheDocument();
     await userEvent.click(within(row).getByRole('button', { name: 'Close in Cotiza too' }));
     expect(api.closeLead).toHaveBeenCalledWith('K', { reason: 'other', note: 'Already in Bid Lost in Trello' });

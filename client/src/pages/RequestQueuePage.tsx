@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import DeathclockBadge from '../components/DeathclockBadge';
-import LeadReceivedBadge from '../components/LeadReceivedBadge';
+import { chicagoDaysAgo } from '../components/LeadReceivedBadge';
 import RequestJobberQuoteModal from '../components/RequestJobberQuoteModal';
-import { formatDay, sourceList, timeAgo } from '../components/LeadContactLine';
+import { formatDay } from '../components/LeadContactLine';
 import type { ErrorResponse } from 'shared';
 import { isPlaceholderJobberClientName } from 'shared';
 import {
@@ -443,9 +443,11 @@ export default function RequestQueuePage() {
     const w = status?.workflow ?? null;
     const summary = leadSummaries[id];
     const linkedQuotes = jobberQuoteBadges[id];
+    const createdAtMs = new Date(req.createdAt).getTime();
+    const receivedDate = new Date(createdAtMs).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Chicago' });
+    const receivedDays = w?.ageDays ?? chicagoDaysAgo(createdAtMs, now);
     return (
-      <article key={id} style={{ ...rowStyle, position: 'relative', paddingTop: 44 }} aria-label={`Lead: ${req.customerName}`}>
-        <div style={receivedBadgeSlot}><LeadReceivedBadge createdAt={new Date(req.createdAt).toISOString()} ageDays={w?.ageDays} now={now} /></div>
+      <article key={id} style={rowStyle} aria-label={`Lead: ${req.customerName}`}>
         <div style={{ ...cellStyle, flex: '1.4 1 220px' }}>
           <a
             href={'/quotes/leads/' + encodeURIComponent(id)}
@@ -455,20 +457,9 @@ export default function RequestQueuePage() {
             {req.customerName}
           </a>
           <span style={projectStyle}>{req.requestTitle?.trim() || req.serviceDescription?.trim() || 'Untitled request'}</span>
+          <span style={mutedSmall}>Received {receivedDate} · {receivedDays} day{receivedDays === 1 ? '' : 's'}</span>
           {linkedQuotes && linkedQuotes.length > 0 && (
             <span style={mutedSmall}>Jobber quote #{linkedQuotes[0].quoteNumber} · {linkedQuotes[0].quoteStatus.replace(/_/g, ' ')}</span>
-          )}
-        </div>
-        <div style={{ ...cellStyle, flex: '1 1 170px' }}>
-          <span style={eyebrowStyle}>Last contact</span>
-          {status === undefined ? <span style={mutedSmall}>Checking…</span> : !status ? <span style={mutedSmall}>Could not be read</span> : (
-            <>
-              <span style={valueStyle}>{status.last && status.last.channel !== 'request' ? status.last.label : 'No outreach yet'}</span>
-              <span style={mutedSmall}>
-                {status.last && status.last.channel !== 'request' ? timeAgo(status.last.at, now) : 'Only the request itself'}
-                {status.unavailable.length > 0 && ` · ${sourceList(status.unavailable)} couldn't be read`}
-              </span>
-            </>
           )}
         </div>
         <div style={{ ...cellStyle, flex: '1 1 170px' }}>
@@ -480,41 +471,24 @@ export default function RequestQueuePage() {
             </>
           ) : <span style={mutedSmall}>{status === undefined ? 'Checking…' : 'Open the lead to see'}</span>}
         </div>
-        <div style={{ ...cellStyle, flex: '1.3 1 240px', alignItems: 'flex-start', gap: 8 }}>
-          {w && <span style={whyStyle}>{w.action.why}</span>}
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            {w?.bucket === 'review' && w.lostInTrello ? (
-              <>
-                <button type="button" style={primaryButtonStyle} disabled={markingId === id} onClick={() => { void closeLostInTrello(id); }}>Close in Cotiza too</button>
-                <button type="button" style={secondaryButtonStyle} onClick={() => openRequest(req)}>Open lead</button>
-              </>
-            ) : w?.bucket === 'review' ? (
-              <>
-                {w.notALead ? (
-                  <button type="button" style={secondaryButtonStyle} disabled={markingId === id} onClick={() => markNotALead(id, false)}>Undo: it is a lead</button>
-                ) : (
-                  <button type="button" style={secondaryButtonStyle} disabled={markingId === id} onClick={() => markNotALead(id, true)}>Not a lead</button>
-                )}
-                {!w.notALead && (
-                  <button type="button" style={secondaryButtonStyle} onClick={() => openRequest(req, 'intro_text')}>Send intro text</button>
-                )}
-              </>
-            ) : (
-              <button type="button" style={primaryButtonStyle} onClick={() => openRequest(req, w?.action.kind)}>
-                {w?.action.label ?? 'Open lead'}
-              </button>
-            )}
-            {w && (w.bucket !== 'review' || w.lostInTrello) && (w.progress === 'ready_to_quote' || quoteChip(w) || (summary?.total ?? 0) > 0) && (
-              <span style={readinessChipStyle(w, summary)}>{readinessText(w, summary)}</span>
-            )}
-            {w?.secondary && w.bucket !== 'review' && (
-              <button type="button" style={secondaryButtonStyle} onClick={() => openRequest(req, w.secondary!.kind)} title={w.secondary.why}>
-                Also: {w.secondary.label}
-              </button>
-            )}
-            <button type="button" style={linkButtonStyle} onClick={() => handleRequestClick(req)}>Quote builder</button>
-            <button type="button" style={linkButtonStyle} onClick={() => openRequest(req, 'close')}>Close lead</button>
-          </div>
+        <div style={{ ...cellStyle, flex: '1.6 1 260px' }}>
+          <span style={eyebrowStyle}>Message to send</span>
+          {w ? (
+            <div style={messageBoxStyle} data-testid="lead-message-box"><span style={readinessChipStyle(w, summary)}>{readinessText(w, summary)}</span></div>
+          ) : <span style={mutedSmall}>{status === undefined ? 'Checking…' : 'Open the lead to see'}</span>}
+        </div>
+        <div style={{ ...cellStyle, flex: '0 0 auto', alignItems: 'flex-start' }}>
+          {w?.bucket === 'review' && w.lostInTrello ? (
+            <button type="button" style={primaryButtonStyle} disabled={markingId === id} onClick={() => { void closeLostInTrello(id); }}>Close in Cotiza too</button>
+          ) : w?.bucket === 'review' ? (
+            w.notALead
+              ? <button type="button" style={secondaryButtonStyle} disabled={markingId === id} onClick={() => markNotALead(id, false)}>Undo: it is a lead</button>
+              : <button type="button" style={secondaryButtonStyle} disabled={markingId === id} onClick={() => markNotALead(id, true)}>Not a lead</button>
+          ) : (
+            <button type="button" style={primaryButtonStyle} onClick={() => openRequest(req, w?.action.kind)}>
+              {w?.action.label ?? 'Open lead'}
+            </button>
+          )}
         </div>
       </article>
     );
@@ -852,7 +826,6 @@ const emptyStyle: React.CSSProperties = {
 const tilesStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 };
 const tileStyle: React.CSSProperties = { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column', gap: 4 };
 
-const receivedBadgeSlot: React.CSSProperties = { position: 'absolute', top: 12, right: 16 };
 const rowStyle: React.CSSProperties = {
   background: '#fff',
   border: '1px solid #e5e7eb',
@@ -869,7 +842,7 @@ const projectStyle: React.CSSProperties = { fontSize: 14, color: '#374151' };
 const mutedSmall: React.CSSProperties = { fontSize: 13, color: '#6b7280' };
 const eyebrowStyle: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em' };
 const valueStyle: React.CSSProperties = { fontSize: 14, color: '#111827' };
-const whyStyle: React.CSSProperties = { fontSize: 13, color: '#374151' };
+const messageBoxStyle: React.CSSProperties = { fontSize: 13, color: '#111827', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px', whiteSpace: 'pre-wrap' };
 
 const primaryButtonStyle: React.CSSProperties = {
   minHeight: 44,
@@ -893,17 +866,6 @@ const secondaryButtonStyle: React.CSSProperties = {
   font: 'inherit',
   fontSize: 14,
   cursor: 'pointer',
-};
-const linkButtonStyle: React.CSSProperties = {
-  border: 0,
-  background: 'none',
-  padding: '0 4px',
-  minHeight: 44,
-  color: '#1d4ed8',
-  font: 'inherit',
-  fontSize: 13,
-  cursor: 'pointer',
-  textDecoration: 'underline',
 };
 
 const manualCardStyle: React.CSSProperties = {
