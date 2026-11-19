@@ -20,7 +20,8 @@ import {
   closeLead,
   warnIfJobberNoteFailed,
 } from '../api';
-import type { JobberQueueStatus, LeadContactStatus, LeadInfoSummary, LeadWorkflow, ManualRequestWithDeathclock, ResolveRequestQuoteResult } from '../api';
+import type { JobberQueueStatus, LeadContactStatus, LeadInfoItem, LeadInfoSummary, LeadWorkflow, ManualRequestWithDeathclock, ResolveRequestQuoteResult } from '../api';
+import { buildOutreach } from '../leadOutreach';
 
 // ---------------------------------------------------------------------------
 // Deathclock color → hex map (mirrors DeathclockBadge component)
@@ -84,6 +85,7 @@ export default function RequestQueuePage() {
     req: ManualRequestWithDeathclock;
     resolution: ResolveRequestQuoteResult;
   } | null>(null);
+  const [copiedLeadId, setCopiedLeadId] = useState<string | null>(null);
 
   // Tick counter to trigger re-renders every second for live deathclock age
   const [tick, setTick] = useState(0);
@@ -275,6 +277,16 @@ export default function RequestQueuePage() {
     };
   }, [loadRequests]);
 
+  const copyBundledMessage = async (id: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedLeadId(id);
+      setTimeout(() => setCopiedLeadId((cur) => (cur === id ? null : cur)), 2000);
+    } catch {
+      setGenerateError('Could not copy. Select the text and copy it by hand.');
+    }
+  };
+
   const handleSortChange = (sort: 'age_asc' | 'age_desc') => {
     const params = new URLSearchParams(searchParams.toString());
     params.set('sort', sort);
@@ -443,6 +455,10 @@ export default function RequestQueuePage() {
     const w = status?.workflow ?? null;
     const summary = leadSummaries[id];
     const linkedQuotes = jobberQuoteBadges[id];
+    const checklist = status?.checklist;
+    const bundled = checklist && (checklist.openQuestions.length > 0 || checklist.assumedLines.length > 0)
+      ? bundledMessage(req.customerName, req.requestTitle ?? null, checklist)
+      : null;
     const createdAtMs = new Date(req.createdAt).getTime();
     const receivedDate = new Date(createdAtMs).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Chicago' });
     const receivedDays = w?.ageDays ?? chicagoDaysAgo(createdAtMs, now);
@@ -474,7 +490,18 @@ export default function RequestQueuePage() {
         <div style={{ ...cellStyle, flex: '1.6 1 260px' }}>
           <span style={eyebrowStyle}>Message to send</span>
           {w ? (
-            <div style={messageBoxStyle} data-testid="lead-message-box"><span style={readinessChipStyle(w, summary)}>{readinessText(w, summary)}</span></div>
+            <div style={messageBoxStyle} data-testid="lead-message-box">
+              {bundled ? (
+                <>
+                  <span data-testid="lead-message-text" style={{ whiteSpace: 'pre-wrap' }}>{bundled}</span>
+                  <button type="button" style={copyButtonStyle} onClick={() => { void copyBundledMessage(id, bundled); }}>
+                    {copiedLeadId === id ? 'Copied' : 'Copy'}
+                  </button>
+                </>
+              ) : (
+                <span style={readinessChipStyle(w, summary)}>{readinessText(w, summary)}</span>
+              )}
+            </div>
           ) : <span style={mutedSmall}>{status === undefined ? 'Checking…' : 'Open the lead to see'}</span>}
         </div>
         <div style={{ ...cellStyle, flex: '0 0 auto', alignItems: 'flex-start' }}>
@@ -738,6 +765,33 @@ function quoteChip(w: LeadWorkflow | null) {
   return st && st.kind !== 'none' && QUOTE_CHIP[st.kind] ? st : null;
 }
 
+function messageItem(question: string, required: boolean): LeadInfoItem {
+  return { id: question, requestId: '', question, status: 'open', answer: null, required, createdAt: '', updatedAt: '', createdVia: 'app', updatedVia: 'app' };
+}
+
+/** One ready-to-send message: greeting, every open question numbered, then the Assumed lines. */
+function bundledMessage(
+  clientName: string,
+  title: string | null,
+  checklist: NonNullable<LeadContactStatus['checklist']>,
+): string {
+  const base = buildOutreach({
+    clientName,
+    title,
+    items: [
+      ...checklist.openQuestions.map((q) => messageItem(q, true)),
+      ...checklist.assumedLines.map((q) => messageItem(q, false)),
+    ],
+  });
+  const [greeting] = base.text.split('\n\n');
+  const lines = [greeting];
+  if (base.asks.length > 0) lines.push(base.asks.map((a, i) => `${i + 1}) ${a}`).join('\n'));
+  else lines.push(`We're putting your quote together now.`);
+  if (base.assumptions.length > 0) lines.push(base.assumptions.map((a) => `Assumed: ${a}`).join('\n'));
+  lines.push('— Chicago Reno');
+  return lines.join('\n\n');
+}
+
 function readinessText(w: LeadWorkflow | null, summary: LeadInfoSummary | undefined): string {
   const st = quoteChip(w);
   if (st) return st.label;
@@ -842,7 +896,8 @@ const projectStyle: React.CSSProperties = { fontSize: 14, color: '#374151' };
 const mutedSmall: React.CSSProperties = { fontSize: 13, color: '#6b7280' };
 const eyebrowStyle: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em' };
 const valueStyle: React.CSSProperties = { fontSize: 14, color: '#111827' };
-const messageBoxStyle: React.CSSProperties = { fontSize: 13, color: '#111827', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px', whiteSpace: 'pre-wrap' };
+const messageBoxStyle: React.CSSProperties = { fontSize: 13, color: '#111827', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px', whiteSpace: 'pre-wrap', display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' };
+const copyButtonStyle: React.CSSProperties = { minHeight: 32, padding: '0 10px', border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', color: '#374151', font: 'inherit', fontSize: 12, cursor: 'pointer' };
 
 const primaryButtonStyle: React.CSSProperties = {
   minHeight: 44,

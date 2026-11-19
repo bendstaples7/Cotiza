@@ -1431,6 +1431,8 @@ export interface LeadContactStatus {
   recent: LeadContactEvent[];
   /** What to do next (handbook cadence). null when it can't be worked out (e.g. quotes unreadable). */
   workflow?: LeadWorkflow | null;
+  /** The checklist texts behind the row's one message (open/asked questions and "Assumed:" lines). */
+  checklist?: { openQuestions: string[]; assumedLines: string[] };
 }
 
 export type LeadBucket = 'do_now' | 'waiting' | 'review' | 'closed';

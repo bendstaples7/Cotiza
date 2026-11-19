@@ -3,7 +3,8 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import RequestQueuePage from '../../client/src/pages/RequestQueuePage';
-import type { LeadContactStatus, LeadWorkflow, ManualRequestWithDeathclock } from '../../client/src/api';
+import type { LeadContactStatus, LeadInfoItem, LeadWorkflow, ManualRequestWithDeathclock } from '../../client/src/api';
+import { checklistMessage } from '../../worker/src/services/lead-contact-status';
 
 const api = vi.hoisted(() => ({
   fetchRequestQueue: vi.fn(),
@@ -30,9 +31,14 @@ const workflow = (over: Partial<LeadWorkflow>): LeadWorkflow => ({
   action: { kind: 'intro_text', label: 'Send intro text', why: 'Nobody has contacted them yet.', step: 'intro_text', channel: 'text' },
   progress: 'lead_in', ageDays: 2, likelySpam: false, notALead: false, plan: [], ...over,
 });
-const status = (w: LeadWorkflow, last: LeadContactStatus['last'] = null): LeadContactStatus => ({
+const status = (w: LeadWorkflow, last: LeadContactStatus['last'] = null, checklist?: LeadContactStatus['checklist']): LeadContactStatus => ({
   last, next: { on: w.next.on, source: 'suggested', overdue: w.next.overdue, dueToday: w.next.dueToday, reason: w.stage },
-  unavailable: [], notConnected: [], recent: [], workflow: w,
+  unavailable: [], notConnected: [], recent: [], workflow: w, ...(checklist ? { checklist } : {}),
+});
+
+const infoItem = (id: string, question: string, itemStatus: LeadInfoItem['status']): LeadInfoItem => ({
+  id, requestId: 'J', question, status: itemStatus, answer: null, required: true,
+  createdAt: '', updatedAt: '', createdVia: 'app', updatedVia: 'app',
 });
 
 function Where() {
@@ -173,5 +179,35 @@ describe('Requests work queue', () => {
     expect(within(row).queryByRole('button', { name: 'Not a lead' })).not.toBeInTheDocument();
     await userEvent.click(within(row).getByRole('button', { name: 'Close in Cotiza too' }));
     expect(api.closeLead).toHaveBeenCalledWith('K', { reason: 'other', note: 'Already in Bid Lost in Trello' });
+  });
+
+  it('renders one bundled message: greeting, numbered open questions, Assumed lines, and Copy', async () => {
+    api.fetchLeadSummaries.mockResolvedValue({ summaries: { J: { total: 4, open: 3, asked: 0, answered: 1, readyToQuote: false } } });
+    api.fetchLeadContactStatuses.mockResolvedValue({ statuses: { J: status(workflow({ pipeline: 'need_info' }), null, {
+      openQuestions: ['Can you send photos of the lower level?', 'Is the ceiling staying?', 'a quick video helps.'],
+      assumedLines: ['Assumed: about 80 linear feet of exterior wall.'],
+    }) } });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    renderQueue();
+    const needInfo = await screen.findByRole('region', { name: 'Need info' });
+    const row = await within(needInfo).findByRole('article', { name: 'Lead: John Oconnell' });
+    const box = within(row).getByTestId('lead-message-box');
+    const message = within(box).getByTestId('lead-message-text').textContent ?? '';
+    expect(message).toContain('Hi John, this is Chicago Reno about your Basement drain tile request.');
+    expect(message).toContain('1) Can you send photos of the lower level?\n2) Is the ceiling staying?\n3) a quick video helps.');
+    expect(message).toContain('Assumed: about 80 linear feet of exterior wall');
+    await userEvent.click(within(box).getByRole('button', { name: 'Copy' }));
+    expect(writeText).toHaveBeenCalledWith(message);
+  });
+
+  it('builds the checklist payload from open and asked items only', () => {
+    expect(checklistMessage([
+      infoItem('1', 'Can you send photos?', 'open'),
+      infoItem('2', 'Optional: a quick video helps.', 'asked'),
+      infoItem('3', 'Assumed: about 80 linear feet.', 'open'),
+      infoItem('4', 'Answered one', 'answered'),
+      infoItem('5', 'Dropped one', 'dropped'),
+    ])).toEqual({ openQuestions: ['Can you send photos?', 'a quick video helps.'], assumedLines: ['Assumed: about 80 linear feet.'] });
   });
 });
