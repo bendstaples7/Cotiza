@@ -784,6 +784,9 @@ export type JobberQueueStatus =
 export async function fetchRequestQueue(sortBy?: 'age_asc' | 'age_desc'): Promise<{ requests: ManualRequestWithDeathclock[]; jobber: JobberQueueStatus }> {
   const params = new URLSearchParams({ include_deathclock: 'true' });
   if (sortBy) params.set('sort_by', sortBy);
+  // The Requests page renders all four tabs, including Quote created and Closed, so it asks for
+  // converted and Cotiza-closed leads too. No other caller uses this helper.
+  params.set('include_closed', 'true');
   const res = await fetch(API_BASE + '/api/quotes/manual-requests?' + params.toString(), {
     headers: { ...authHeaders() },
   });

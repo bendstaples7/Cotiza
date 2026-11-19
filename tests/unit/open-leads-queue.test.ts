@@ -46,4 +46,18 @@ describe('mergeQueueWithOpenLeads', () => {
     const merged = mergeQueueWithOpenLeads([], [lead('A', '2026-11-04T06:00:00Z'), lead('B', '2026-10-20T00:00:00Z')], 'age_asc', 'u', NOW);
     expect(merged.map((r) => r.id)).toEqual(['B', 'A']);
   });
+
+  it('includes converted requests only when includeConverted is set, never archived', async () => {
+    const jobber = { graphqlRequest: async () => ({ requests: {
+      edges: [
+        { node: { id: 'N', requestStatus: 'new', createdAt: '2026-11-04T00:00:00Z' } },
+        { node: { id: 'C', requestStatus: 'converted', createdAt: '2026-11-03T00:00:00Z' } },
+        { node: { id: 'A', requestStatus: 'archived', createdAt: '2026-11-02T00:00:00Z' } },
+      ],
+      pageInfo: { hasNextPage: false, endCursor: null },
+    } }) } as never;
+
+    expect((await loadOpenLeads(jobber, 60, NOW)).open.map((n) => n.id)).toEqual(['N']);
+    expect((await loadOpenLeads(jobber, 60, NOW, { includeConverted: true })).open.map((n) => n.id)).toEqual(['N', 'C']);
+  });
 });

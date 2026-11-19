@@ -33,9 +33,15 @@ export function leadClientName(node: LeadNode): string | null {
 }
 
 /** Reads requests newest first until one is older than the window, keeping the ones not yet converted or archived. */
-export async function loadOpenLeads(jobber: JobberReadClient, days: number, now: number): Promise<{ open: LeadNode[]; complete: boolean }> {
+export async function loadOpenLeads(
+  jobber: JobberReadClient,
+  days: number,
+  now: number,
+  options?: { includeConverted?: boolean },
+): Promise<{ open: LeadNode[]; complete: boolean }> {
   const cutoff = now - days * 86400_000;
   const open: LeadNode[] = [];
+  const includeConverted = options?.includeConverted === true;
   let after: string | null = null;
   for (let page = 0; page < LEAD_MAX_PAGES; page++) {
     const data: LeadPage = await jobber.graphqlRequest<LeadPage>(OPEN_LEADS_QUERY, { first: LEAD_PAGE_SIZE, after });
@@ -47,7 +53,10 @@ export async function loadOpenLeads(jobber: JobberReadClient, days: number, now:
     for (const { node } of edges) {
       const created = Date.parse(node.createdAt ?? '');
       if (Number.isFinite(created) && created < cutoff) return { open, complete: true };
-      if (!CLOSED_REQUEST_STATUSES.has(String(node.requestStatus ?? '').toLowerCase())) open.push(node);
+      const status = String(node.requestStatus ?? '').toLowerCase();
+      if (status === 'archived') continue;
+      if (status === 'converted' && !includeConverted) continue;
+      open.push(node);
     }
     if (!data.requests?.pageInfo?.hasNextPage || !data.requests.pageInfo.endCursor) return { open, complete: true };
     after = data.requests.pageInfo.endCursor;
