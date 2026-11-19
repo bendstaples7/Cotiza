@@ -75,43 +75,49 @@ function quoteName(q: QuoteRef) {
   return q.number ? `#${q.number}` : 'the quote';
 }
 
-export function computeQuoteStage(input: QuoteStageInput): QuoteStage {
+/** Ben's review, whole: the decision plus the text, edits and artifact link his record carries. */
+export type QuoteReviewDetail = QuoteReview & { summary?: string; requestedEdits?: string[]; artifactUrl?: string | null };
+
+const detailOf = (reviews: QuoteStageInput['reviews'], q: QuoteRef | null): QuoteReviewDetail | null =>
+  (reviews !== 'unknown' && q && q.number ? reviews[q.number] ?? null : null);
+
+export function computeQuoteStage(input: QuoteStageInput): QuoteStage & { review: QuoteReviewDetail | null } {
   const live = input.quotes.filter((q) => String(q.status ?? '').toLowerCase() !== 'archived');
   const ref = (q: QuoteRef) => ({ id: q.id, number: q.number, webUri: q.webUri });
   const sent = live.filter((q) => SENT.has(String(q.status ?? '').toLowerCase())).sort((a, b) => num(b) - num(a));
   if (sent.length) {
     const q = sent[0];
-    return { kind: 'sent', quote: ref(q), label: `Quote ${quoteName(q)} · sent`, why: `Quote ${quoteName(q)} is with the customer.` };
+    return { kind: 'sent', quote: ref(q), label: `Quote ${quoteName(q)} · sent`, why: `Quote ${quoteName(q)} is with the customer.`, review: detailOf(input.reviews, q) };
   }
   const drafts = live.filter((q) => String(q.status ?? '').toLowerCase() === 'draft').sort((a, b) => num(b) - num(a));
-  if (!drafts.length) return { kind: 'none', quote: null, label: 'No quote yet', why: 'No draft quote in Jobber yet.' };
+  if (!drafts.length) return { kind: 'none', quote: null, label: 'No quote yet', why: 'No draft quote in Jobber yet.', review: null };
   const q = drafts[0];
   const name = quoteName(q);
+  const review = detailOf(input.reviews, q);
   if (input.reviews === 'unknown' || input.legacyPending === 'unknown') {
-    return { kind: 'unknown', quote: ref(q), label: `Quote ${name} · review status unknown`, why: `Ben's review of ${name} could not be read right now. Check with Ben before sending.` };
+    return { kind: 'unknown', quote: ref(q), label: `Quote ${name} · review status unknown`, why: `Ben's review of ${name} could not be read right now. Check with Ben before sending.`, review };
   }
   const requestedAt = Math.max(ms(input.requested[q.id]), input.legacyPending.includes(q.id) ? Infinity : -Infinity);
-  const review = q.number ? input.reviews[q.number] : undefined;
   const reviewedAfterRequest = review && ms(review.at) >= requestedAt;
   if (requestedAt > -Infinity && !reviewedAfterRequest) {
-    return { kind: 'ben_review', quote: ref(q), label: `Quote ${name} · with Ben`, why: `Waiting on Ben's review of ${name}. Nothing for you to do.` };
+    return { kind: 'ben_review', quote: ref(q), label: `Quote ${name} · with Ben`, why: `Waiting on Ben's review of ${name}. Nothing for you to do.`, review };
   }
   if (review && review.decision === 'approved') {
-    return { kind: 'ready_to_send', quote: ref(q), label: `Quote ${name} · ready to send`, why: `Ben approved ${name}. Send it to the customer in Jobber.` };
+    return { kind: 'ready_to_send', quote: ref(q), label: `Quote ${name} · ready to send`, why: `Ben approved ${name}. Send it to the customer in Jobber.`, review };
   }
   if (review && review.decision === 'changes_requested') {
-    return { kind: 'changes', quote: ref(q), label: `Quote ${name} · Ben's edits`, why: `Ben asked for changes on ${name}. Make them in Jobber, then send it back to Ben.` };
+    return { kind: 'changes', quote: ref(q), label: `Quote ${name} · Ben's edits`, why: `Ben asked for changes on ${name}. Make them in Jobber, then send it back to Ben.`, review };
   }
   if (review) {
-    return { kind: 'ben_review', quote: ref(q), label: `Quote ${name} · reviewed`, why: `Ben reviewed ${name}, but the outcome isn't clear here. Check with Ben before sending.` };
+    return { kind: 'ben_review', quote: ref(q), label: `Quote ${name} · reviewed`, why: `Ben reviewed ${name}, but the outcome isn't clear here. Check with Ben before sending.`, review };
   }
-  return { kind: 'drafting', quote: ref(q), label: `Quote ${name} · drafting`, why: `Finish ${name} in Jobber, then send it to Ben for review.` };
+  return { kind: 'drafting', quote: ref(q), label: `Quote ${name} · drafting`, why: `Finish ${name} in Jobber, then send it to Ben for review.`, review };
 }
 
 // ── Loading ──────────────────────────────────────────────────────────────────
 
 /** Newest ledger review per quote number. Throws on a failed read (callers report "unknown"). */
-export async function loadQuoteReviews(db: D1Database, quoteNumbers: string[]): Promise<Record<string, QuoteReview>> {
+export async function loadQuoteReviews(db: D1Database, quoteNumbers: string[]): Promise<Record<string, QuoteReviewDetail>> {
   const numbers = [...new Set(quoteNumbers.filter(Boolean))].slice(0, 50);
   if (!numbers.length) return {};
   const marks = numbers.map(() => '?').join(', ');
@@ -121,11 +127,18 @@ export async function loadQuoteReviews(db: D1Database, quoteNumbers: string[]): 
                 AND r.seq = (SELECT MAX(seq) FROM quote_review_records x WHERE x.quote_number = r.quote_number)`)
     .bind(...numbers)
     .all<{ quote_number: string; created_at: string; record: string }>();
-  const out: Record<string, QuoteReview> = {};
+  const out: Record<string, QuoteReviewDetail> = {};
   for (const row of results ?? []) {
     let record: unknown = null;
     try { record = JSON.parse(row.record); } catch { record = null; }
-    out[row.quote_number] = { at: row.created_at, decision: reviewDecision(record) };
+    const r = (record && typeof record === 'object' && !Array.isArray(record)) ? record as Record<string, unknown> : {};
+    out[row.quote_number] = {
+      at: row.created_at,
+      decision: reviewDecision(record),
+      summary: typeof r.summary === 'string' ? r.summary : '',
+      requestedEdits: Array.isArray(r.requested_edits) ? r.requested_edits.filter((e): e is string => typeof e === 'string') : [],
+      artifactUrl: typeof r.artifact_url === 'string' ? r.artifact_url : null,
+    };
   }
   return out;
 }
