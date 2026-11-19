@@ -145,6 +145,37 @@ app.get('/reviews/pending', async (c) => {
 });
 
 /**
+ * GET /api/reviews/jobber-drafts
+ * Jobber draft quotes the team sent to Ben from Cotiza, oldest first, without a newer decision.
+ */
+app.get('/reviews/jobber-drafts', async (c) => {
+  const db = c.env.DB;
+  const { results } = await db.prepare(
+    `SELECT lqr.jobber_quote_id, lqr.jobber_request_id, lqr.quote_number, lqr.requested_at,
+            lqr.lead_name, lqr.total_value, lqr.jobber_web_uri
+     FROM lead_quote_reviews lqr
+     WHERE NOT EXISTS (
+       SELECT 1 FROM quote_review_records r
+       WHERE r.quote_number = lqr.quote_number
+         AND r.created_at >= lqr.requested_at
+         AND r.seq = (SELECT MAX(seq) FROM quote_review_records x WHERE x.quote_number = r.quote_number)
+     )
+     ORDER BY lqr.requested_at ASC`,
+  ).all();
+  return c.json({
+    drafts: (results ?? []).map((row: any) => ({
+      jobberQuoteId: row.jobber_quote_id as string,
+      jobberRequestId: row.jobber_request_id as string,
+      quoteNumber: row.quote_number as string | null,
+      requestedAt: row.requested_at as string,
+      leadName: row.lead_name as string | null,
+      totalValue: row.total_value == null ? null : Number(row.total_value),
+      jobberWebUri: row.jobber_web_uri as string | null,
+    })),
+  });
+});
+
+/**
  * GET /api/reviews/pending/count
  * Get pending review count for badge display.
  */
@@ -152,7 +183,16 @@ app.get('/reviews/pending/count', async (c) => {
   const db = c.env.DB;
   const reviewService = new ReviewService(db);
   const count = await reviewService.getPendingReviewCount();
-  return c.json({ count });
+  const row = await db.prepare(
+    `SELECT COUNT(*) as count FROM lead_quote_reviews lqr
+     WHERE NOT EXISTS (
+       SELECT 1 FROM quote_review_records r
+       WHERE r.quote_number = lqr.quote_number
+         AND r.created_at >= lqr.requested_at
+         AND r.seq = (SELECT MAX(seq) FROM quote_review_records x WHERE x.quote_number = r.quote_number)
+     )`,
+  ).first<{ count: number }>();
+  return c.json({ count: count + Number(row?.count ?? 0) });
 });
 
 /**

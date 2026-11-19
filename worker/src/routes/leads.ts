@@ -483,6 +483,13 @@ app.post('/:requestId/quotes/:quoteId/review-request', async (c) => {
   if (!quote) return c.json({ error: 'That quote is not on this request.' }, 404);
   if (String(quote.status ?? '').toLowerCase() !== 'draft') return c.json({ error: 'Only a draft quote can be sent to Ben for review.' }, 409);
   const requestedAt = await requestReview(c.env.DB, requestId, quote, userId);
+  const detail = await read.readQuote(userId, { quoteId }).catch(() => null);
+  const quoteDetail = detail && detail.outcome === 'ok' ? detail.quote : null;
+  const leadName = quoteDetail && quoteDetail.clientName.availability === 'present' ? quoteDetail.clientName.value : null;
+  const total = quoteDetail && quoteDetail.paymentTerms.availability === 'present' ? quoteDetail.paymentTerms.amounts.total : null;
+  await c.env.DB.prepare(
+    'UPDATE lead_quote_reviews SET lead_name = ?, total_value = ?, jobber_web_uri = ? WHERE jobber_quote_id = ?',
+  ).bind(leadName, total, quote.webUri, quoteId).run();
   const jobberNote = await addJobberNote(c.env, userId, noteKey('review', `${await requestKeyPart(quoteId)}_${Date.parse(requestedAt)}`), requestId, {
     kind: 'review_requested', quoteNumber: quote.number,
   });
