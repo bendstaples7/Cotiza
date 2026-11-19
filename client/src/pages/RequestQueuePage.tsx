@@ -330,6 +330,7 @@ export default function RequestQueuePage() {
   };
 
   const [markingId, setMarkingId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'need_info' | 'ready_to_quote' | 'quote_created' | 'closed'>('need_info');
   const markNotALead = async (requestId: string, notALead: boolean) => {
     setMarkingId(requestId);
     try {
@@ -340,7 +341,7 @@ export default function RequestQueuePage() {
         const status = prev[requestId];
         const w = status?.workflow;
         if (!status || !w) return prev;
-        return { ...prev, [requestId]: { ...status, workflow: { ...w, notALead, bucket: notALead || w.likelySpam ? 'review' : 'do_now' } } };
+        return { ...prev, [requestId]: { ...status, workflow: { ...w, notALead, bucket: notALead || w.likelySpam ? 'review' : 'do_now', pipeline: notALead ? 'closed' : w.pipeline } } };
       });
       void loadRequests({ silent: true });
     } catch {
@@ -359,7 +360,7 @@ export default function RequestQueuePage() {
       setContactStatuses((prev) => {
         const status = prev[requestId];
         if (!status?.workflow) return prev;
-        return { ...prev, [requestId]: { ...status, workflow: { ...status.workflow, bucket: 'closed', lostInTrello: false } } };
+        return { ...prev, [requestId]: { ...status, workflow: { ...status.workflow, bucket: 'closed', lostInTrello: false, pipeline: 'closed' } } };
       });
       void loadRequests({ silent: true });
     } catch {
@@ -421,17 +422,19 @@ export default function RequestQueuePage() {
   const leads = requests.filter((r) => r.jobberRequestId);
   const manual = requests.filter((r) => !r.jobberRequestId);
   const workflowOf = (r: ManualRequestWithDeathclock): LeadWorkflow | null => contactStatuses[r.jobberRequestId as string]?.workflow ?? null;
-  // Rows keep the queue's order (oldest first by default) inside each section. A lead whose next
-  // step is still loading, or could not be worked out, is never counted as "do now".
-  const doNow = leads.filter((r) => workflowOf(r)?.bucket === 'do_now');
-  const waiting = leads.filter((r) => workflowOf(r)?.bucket === 'waiting');
-  const review = leads.filter((r) => workflowOf(r)?.bucket === 'review');
+  // Fallback while not every worker serves `pipeline`; mirrors the worker's leadPipeline.
+  const pipelineOf = (w: LeadWorkflow): 'need_info' | 'ready_to_quote' | 'quote_created' | 'closed' =>
+    w.pipeline ?? (w.notALead || w.bucket === 'closed' ? 'closed' : ['quote_drafted', 'ben_review', 'ready_to_send', 'quote_sent'].includes(w.progress) ? 'quote_created' : w.progress === 'ready_to_quote' ? 'ready_to_quote' : 'need_info');
+  const TABS = [
+    { key: 'need_info' as const, label: 'Need info' },
+    { key: 'ready_to_quote' as const, label: 'Ready to create quote' },
+    { key: 'quote_created' as const, label: 'Quote created' },
+    { key: 'closed' as const, label: 'Closed' },
+  ];
   const pending = leads.filter((r) => !(r.jobberRequestId! in contactStatuses));
   const unknown = leads.filter((r) => r.jobberRequestId! in contactStatuses && !workflowOf(r));
-  // Closed leads normally never reach the queue (the server leaves them out); one closed since the
-  // last load is not shown or counted.
-  const readyCount = leads.filter((r) => workflowOf(r)?.progress === 'ready_to_quote' && workflowOf(r)?.bucket !== 'review' && workflowOf(r)?.bucket !== 'closed').length;
-  const statusesLoaded = pending.length === 0;
+  const tabCounts = TABS.map((t) => ({ ...t, count: leads.filter((r) => { const w = workflowOf(r); return !!w && pipelineOf(w) === t.key; }).length }));
+  const activeRows = leads.filter((r) => { const w = workflowOf(r); return !!w && pipelineOf(w) === activeTab; });
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
 
   const renderLeadRow = (req: ManualRequestWithDeathclock) => {
@@ -618,23 +621,27 @@ export default function RequestQueuePage() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
           {leads.length > 0 && (
-            <div style={tilesStyle}>
-              <Tile label="Do now" color="#9a3412" count={statusesLoaded ? doNow.length : null} note="overdue, due today, or ready to quote" />
-              <Tile label="Ready to quote" color="#166534" count={statusesLoaded ? readyCount : null} note="enough info, draft the quote" />
-              <Tile label="Waiting on customer" color="#1e40af" count={statusesLoaded ? waiting.length : null} note="next touch is scheduled" />
-              <Tile label="Review" color="#4b5563" count={statusesLoaded ? review.length : null} note="likely not a lead, or lost in Trello" />
+            <div style={tilesStyle} role="tablist" aria-label="Lead pipeline">
+              {tabCounts.map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === t.key}
+                  onClick={() => setActiveTab(t.key)}
+                  style={{ ...tileStyle, cursor: 'pointer', background: activeTab === t.key ? '#f0fdf4' : '#fff', border: activeTab === t.key ? '2px solid #166534' : '1px solid #e5e7eb' }}
+                >
+                  <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>{t.label}</span>
+                  <span style={{ fontSize: 30, fontWeight: 700, color: '#111827' }}>{t.count}</span>
+                </button>
+              ))}
             </div>
           )}
 
-          {doNow.length > 0 && (
-            <Section title="Do now" note="One button per lead. Do it, and the next follow-up date sets itself.">
-              {doNow.map(renderLeadRow)}
-            </Section>
-          )}
-          {waiting.length > 0 && (
-            <Section title="Waiting on customer" note="Nothing to do until the date shown. These move to Do now on their own.">
-              {waiting.map(renderLeadRow)}
-            </Section>
+          {activeRows.length > 0 && (
+            <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }} aria-label={TABS.find((t) => t.key === activeTab)!.label}>
+              {activeRows.map(renderLeadRow)}
+            </section>
           )}
           {pending.length > 0 && (
             <Section title="Checking next steps" note="Reading contact history from Jobber, Quo and email.">
@@ -644,11 +651,6 @@ export default function RequestQueuePage() {
           {unknown.length > 0 && (
             <Section title="Next step unknown" note="Contact history could not be read right now. Open the lead to check it.">
               {unknown.map(renderLeadRow)}
-            </Section>
-          )}
-          {review.length > 0 && (
-            <Section title="Review" note="No real project described, marked not a lead, or already in Bid Lost in Trello. Close or archive it, or send one intro text.">
-              {review.map(renderLeadRow)}
             </Section>
           )}
 
@@ -724,16 +726,6 @@ const CADENCE_KEY = [
   { title: '4 · Weekly', text: 'If still no response.' },
   { title: '5 · Monthly', text: 'After several weekly tries, until they reply or we close it.' },
 ];
-
-function Tile({ label, color, count, note }: { label: string; color: string; count: number | null; note: string }) {
-  return (
-    <div style={tileStyle}>
-      <span style={{ fontSize: 13, fontWeight: 600, color }}>{label}</span>
-      <span style={{ fontSize: 30, fontWeight: 700, color: '#111827' }}>{count ?? '…'}</span>
-      <span style={{ fontSize: 13, color: '#4b5563' }}>{note}</span>
-    </div>
-  );
-}
 
 function Section({ title, note, children }: { title: string; note: string; children: React.ReactNode }) {
   return (

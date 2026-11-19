@@ -67,35 +67,38 @@ describe('Requests work queue', () => {
     });
     api.fetchLeadContactStatuses.mockResolvedValue({
       statuses: {
-        A: status(workflow({ bucket: 'waiting', step: 3, stage: 'Step 3 · every 2–3 business days', next: { on: '2099-11-10', source: 'suggested', overdue: false, dueToday: false, daysOverdue: 0 }, action: { kind: 'ask_info', label: 'Text: ask for a site visit', why: 'Still need a site visit to quote.', step: 'follow_up', channel: 'text' }, progress: 'getting_info' }),
+        A: status(workflow({ bucket: 'waiting', pipeline: 'ready_to_quote', step: 3, stage: 'Step 3 · every 2–3 business days', next: { on: '2099-11-10', source: 'suggested', overdue: false, dueToday: false, daysOverdue: 0 }, action: { kind: 'ask_info', label: 'Text: ask for a site visit', why: 'Still need a site visit to quote.', step: 'follow_up', channel: 'text' }, progress: 'getting_info' }),
           { at: '2026-11-03T16:11:00Z', channel: 'note', direction: 'outgoing', source: 'jobber', label: 'Outreach (Jobber note)' }),
-        K: status(workflow({ bucket: 'review', likelySpam: true, action: { kind: 'intro_text', label: 'Send intro text', why: 'No project described yet. Send one intro text or mark it not a lead.', step: 'intro_text', channel: 'text' } })),
-        J: status(workflow({})),
+        K: status(workflow({ bucket: 'review', pipeline: 'closed', likelySpam: true, action: { kind: 'intro_text', label: 'Send intro text', why: 'No project described yet. Send one intro text or mark it not a lead.', step: 'intro_text', channel: 'text' } })),
+        J: status(workflow({ pipeline: 'need_info' })),
       },
     });
   });
 
-  it('sorts leads into Do now, Waiting on customer and Review with one action each', async () => {
+  it('shows each lead under its pipeline tab with one action each', async () => {
     renderQueue();
     await screen.findAllByText('Overdue 2 days'); // next steps loaded
-    const doNow = screen.getByRole('region', { name: 'Do now' });
-    expect(within(doNow).getByText('John Oconnell')).toBeInTheDocument();
-    expect(within(doNow).getByText('Overdue 2 days')).toBeInTheDocument();
-    expect(within(doNow).getByText('Step 1 · reach out on intake')).toBeInTheDocument();
-    expect(within(doNow).getByRole('button', { name: 'Send intro text' })).toBeInTheDocument();
-    expect(within(doNow).getByText('No outreach yet')).toBeInTheDocument();
 
-    const waiting = screen.getByRole('region', { name: 'Waiting on customer' });
-    expect(within(waiting).getByText('Anne Brady')).toBeInTheDocument();
-    expect(within(waiting).getByText('Outreach (Jobber note)')).toBeInTheDocument();
-    expect(within(waiting).getByText('Need: a site visit')).toBeInTheDocument();
-
-    const review = screen.getByRole('region', { name: 'Review' });
-    expect(within(review).getByText('Katherine Harris')).toBeInTheDocument();
-    expect(within(review).getByRole('button', { name: 'Not a lead' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'How next contact is set' })).toBeInTheDocument();
+    const needInfo = screen.getByRole('region', { name: 'Need info' });
+    expect(within(needInfo).getByText('John Oconnell')).toBeInTheDocument();
+    expect(within(needInfo).getByText('Overdue 2 days')).toBeInTheDocument();
+    expect(within(needInfo).getByText('Step 1 · reach out on intake')).toBeInTheDocument();
+    expect(within(needInfo).getByRole('button', { name: 'Send intro text' })).toBeInTheDocument();
+    expect(within(needInfo).getByText('No outreach yet')).toBeInTheDocument();
     // John has no checklist: no readiness chip.
-    expect(within(doNow).queryByText('No checklist yet')).not.toBeInTheDocument();
+    expect(within(needInfo).queryByText('No checklist yet')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: /Ready to create quote/ }));
+    const ready = await screen.findByRole('region', { name: 'Ready to create quote' });
+    expect(within(ready).getByText('Anne Brady')).toBeInTheDocument();
+    expect(within(ready).getByText('Outreach (Jobber note)')).toBeInTheDocument();
+    expect(within(ready).getByText('Need: a site visit')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: /Closed/ }));
+    const closed = await screen.findByRole('region', { name: 'Closed' });
+    expect(within(closed).getByText('Katherine Harris')).toBeInTheDocument();
+    expect(within(closed).getByRole('button', { name: 'Not a lead' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'How next contact is set' })).toBeInTheDocument();
   });
 
   it('never counts a lead as "do now" before its next step is known', async () => {
@@ -103,7 +106,7 @@ describe('Requests work queue', () => {
     renderQueue();
     const pending = await screen.findByRole('region', { name: 'Checking next steps' });
     expect(within(pending).getByText('John Oconnell')).toBeInTheDocument();
-    expect(screen.queryByRole('region', { name: 'Do now' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Need info' })).not.toBeInTheDocument();
   });
 
   it('shows leads whose status failed as unknown, not as work to do', async () => {
@@ -111,39 +114,41 @@ describe('Requests work queue', () => {
     renderQueue();
     const unknown = await screen.findByRole('region', { name: 'Next step unknown' });
     expect(within(unknown).getByText('Anne Brady')).toBeInTheDocument();
-    expect(screen.queryByRole('region', { name: 'Do now' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Need info' })).not.toBeInTheDocument();
   });
 
   it('opens the lead page with the action preselected', async () => {
     renderQueue();
     await screen.findAllByText('Overdue 2 days');
-    const doNow = screen.getByRole('region', { name: 'Do now' });
-    await userEvent.click(within(doNow).getByRole('button', { name: 'Send intro text' }));
+    const needInfo = screen.getByRole('region', { name: 'Need info' });
+    await userEvent.click(within(needInfo).getByRole('button', { name: 'Send intro text' }));
     expect(screen.getByTestId('where')).toHaveTextContent('/quotes/leads/J?action=intro_text');
   });
 
   it('marks a lead as not a lead', async () => {
     renderQueue();
-    const review = await screen.findByRole('region', { name: 'Review' });
-    await userEvent.click(within(review).getByRole('button', { name: 'Not a lead' }));
+    await screen.findByText('Overdue 2 days');
+    await userEvent.click(screen.getByRole('tab', { name: /Closed/ }));
+    const closed = await screen.findByRole('region', { name: 'Closed' });
+    await userEvent.click(within(closed).getByRole('button', { name: 'Not a lead' }));
     expect(api.setLeadNotALead).toHaveBeenCalledWith('K', true);
   });
 
   it('shows a "Lead received" badge and the secondary action under the main one', async () => {
     api.fetchLeadContactStatuses.mockResolvedValue({
       statuses: {
-        A: status(workflow({ bucket: 'waiting', next: { on: '2099-11-10', source: 'suggested', overdue: false, dueToday: false, daysOverdue: 0 } })),
-        K: status(workflow({ bucket: 'review', likelySpam: true })),
+        A: status(workflow({ bucket: 'waiting', pipeline: 'ready_to_quote', next: { on: '2099-11-10', source: 'suggested', overdue: false, dueToday: false, daysOverdue: 0 } })),
+        K: status(workflow({ bucket: 'review', pipeline: 'closed', likelySpam: true })),
         J: status(workflow({
-          ageDays: 7, progress: 'ready_to_quote',
+          ageDays: 7, progress: 'ready_to_quote', pipeline: 'need_info',
           action: { kind: 'draft_quote', label: 'Draft quote', why: 'We have what we need to quote. No open questions.', step: 'draft_quote', channel: 'other' },
           secondary: { kind: 'quote_update', label: 'Send “quote in progress” text', why: 'Let them know it’s coming.', step: 'quote_update', channel: 'text' },
         })),
       },
     });
     renderQueue();
-    const doNow = await screen.findByRole('region', { name: 'Do now' });
-    const row = await within(doNow).findByRole('article', { name: 'Lead: John Oconnell' });
+    const needInfo = await screen.findByRole('region', { name: 'Need info' });
+    const row = await within(needInfo).findByRole('article', { name: 'Lead: John Oconnell' });
     expect(within(row).getByTestId('lead-received-badge')).toHaveTextContent('Lead received ·7 days ago');
     expect(within(within(row).getByTestId('lead-received-badge')).getByText('Nov 2')).toBeInTheDocument();
     expect(within(row).queryByText(/^Lead in /)).toBeNull();
@@ -155,18 +160,18 @@ describe('Requests work queue', () => {
   it('the secondary "Also:" button opens the lead on that action', async () => {
     api.fetchLeadContactStatuses.mockResolvedValue({
       statuses: {
-        A: status(workflow({ bucket: 'waiting', next: { on: '2099-11-10', source: 'suggested', overdue: false, dueToday: false, daysOverdue: 0 } })),
-        K: status(workflow({ bucket: 'review', likelySpam: true })),
+        A: status(workflow({ bucket: 'waiting', pipeline: 'ready_to_quote', next: { on: '2099-11-10', source: 'suggested', overdue: false, dueToday: false, daysOverdue: 0 } })),
+        K: status(workflow({ bucket: 'review', pipeline: 'closed', likelySpam: true })),
         J: status(workflow({
-          progress: 'ready_to_quote',
+          progress: 'ready_to_quote', pipeline: 'need_info',
           action: { kind: 'draft_quote', label: 'Draft quote', why: 'We have what we need to quote.', step: 'draft_quote', channel: 'other' },
           secondary: { kind: 'quote_update', label: 'Send “quote in progress” text', why: 'Let them know it’s coming.', step: 'quote_update', channel: 'text' },
         })),
       },
     });
     renderQueue();
-    const doNow = await screen.findByRole('region', { name: 'Do now' });
-    const row = await within(doNow).findByRole('article', { name: 'Lead: John Oconnell' });
+    const needInfo = await screen.findByRole('region', { name: 'Need info' });
+    const row = await within(needInfo).findByRole('article', { name: 'Lead: John Oconnell' });
     await userEvent.click(within(row).getByRole('button', { name: /Also: Send “quote in progress” text/ }));
     expect(screen.getByTestId('where')).toHaveTextContent('/quotes/leads/J?action=quote_update');
   });
@@ -175,14 +180,16 @@ describe('Requests work queue', () => {
     api.closeLead.mockResolvedValue({ closure: {}, jobberNote: null, jobberArchive: { status: 'archived' }, trello: null, trelloReminder: false });
     api.fetchLeadContactStatuses.mockResolvedValue({
       statuses: {
-        A: status(workflow({ bucket: 'waiting', next: { on: '2099-11-10', source: 'suggested', overdue: false, dueToday: false, daysOverdue: 0 } })),
-        K: status(workflow({ bucket: 'review', lostInTrello: true, action: { kind: 'lost_in_trello', label: 'Close in Cotiza too', why: 'Lost in Trello: the card is in Bid Lost.', step: 'none', channel: 'other' } })),
-        J: status(workflow({})),
+        A: status(workflow({ bucket: 'waiting', pipeline: 'ready_to_quote', next: { on: '2099-11-10', source: 'suggested', overdue: false, dueToday: false, daysOverdue: 0 } })),
+        K: status(workflow({ bucket: 'review', pipeline: 'closed', lostInTrello: true, action: { kind: 'lost_in_trello', label: 'Close in Cotiza too', why: 'Lost in Trello: the card is in Bid Lost.', step: 'none', channel: 'other' } })),
+        J: status(workflow({ pipeline: 'need_info' })),
       },
     });
     renderQueue();
-    const review = await screen.findByRole('region', { name: 'Review' });
-    const row = await within(review).findByRole('article', { name: 'Lead: Katherine Harris' });
+    await screen.findByText('Overdue 2 days');
+    await userEvent.click(screen.getByRole('tab', { name: /Closed/ }));
+    const closed = await screen.findByRole('region', { name: 'Closed' });
+    const row = await within(closed).findByRole('article', { name: 'Lead: Katherine Harris' });
     expect(within(row).getByText('Lost in Trello: the card is in Bid Lost.')).toBeInTheDocument();
     expect(within(row).queryByRole('button', { name: 'Not a lead' })).not.toBeInTheDocument();
     await userEvent.click(within(row).getByRole('button', { name: 'Close in Cotiza too' }));
