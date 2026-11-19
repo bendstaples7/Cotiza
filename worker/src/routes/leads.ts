@@ -354,7 +354,10 @@ app.get('/:requestId/photos/:index', async (c) => {
 app.post('/:requestId/info', async (c) => {
   const body = await c.req.json().catch(() => ({})) as { question?: unknown; required?: unknown };
   try {
-    const item = await new LeadInfoService(c.env.DB).add(c.req.param('requestId'), body, { userId: c.get('user').id, via: 'app' });
+    const userId = c.get('user').id;
+    const item = await new LeadInfoService(c.env.DB).add(c.req.param('requestId'), body, { userId, via: 'app' });
+    const { autoDraftIfReady } = await import('../services/lead-auto-draft.js');
+    await autoDraftIfReady(c.env, userId, item.requestId);
     return c.json({ item }, 201);
   } catch (err) {
     const bad = badRequest(err);
@@ -366,7 +369,10 @@ app.post('/:requestId/info', async (c) => {
 app.patch('/info/:itemId', async (c) => {
   const body = await c.req.json().catch(() => ({})) as { status?: unknown; answer?: unknown; question?: unknown };
   try {
-    const item = await new LeadInfoService(c.env.DB).update(c.req.param('itemId'), body, { userId: c.get('user').id, via: 'app' });
+    const userId = c.get('user').id;
+    const item = await new LeadInfoService(c.env.DB).update(c.req.param('itemId'), body, { userId, via: 'app' });
+    const { autoDraftIfReady } = await import('../services/lead-auto-draft.js');
+    await autoDraftIfReady(c.env, userId, item.requestId);
     return c.json({ item });
   } catch (err) {
     const bad = badRequest(err);
