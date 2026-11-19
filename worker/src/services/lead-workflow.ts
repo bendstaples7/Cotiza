@@ -148,6 +148,15 @@ export type LeadBucket = 'do_now' | 'waiting' | 'review' | 'closed';
 export type LeadActionKind = 'intro_text' | 'reply' | 'ask_info' | 'quote_update' | 'draft_quote' | 'ben_edits' | 'wait_review' | 'send_quote' | 'quote_follow_up' | 'follow_up' | 'check_back' | 'review' | 'lost_in_trello' | 'none';
 /** quote_drafted is the Drafting step; ben_review and ready_to_send follow it before quote_sent. */
 export type LeadProgress = 'lead_in' | 'getting_info' | 'ready_to_quote' | 'quote_drafted' | 'ben_review' | 'ready_to_send' | 'quote_sent';
+/** The one pipeline status the Requests page filters on (card 96c6f073). */
+export type LeadPipeline = 'need_info' | 'ready_to_quote' | 'quote_created' | 'closed';
+
+export function leadPipeline(w: Pick<LeadWorkflow, 'notALead' | 'bucket' | 'progress'>): LeadPipeline {
+  if (w.notALead || w.bucket === 'closed') return 'closed';
+  if (w.progress === 'quote_drafted' || w.progress === 'ben_review' || w.progress === 'ready_to_send' || w.progress === 'quote_sent') return 'quote_created';
+  if (w.progress === 'ready_to_quote') return 'ready_to_quote';
+  return 'need_info';
+}
 export type PlanState = 'done' | 'missed' | 'due' | 'upcoming';
 
 export interface LeadAction {
@@ -181,6 +190,8 @@ export interface LeadWorkflow {
    */
   secondary: LeadAction | null;
   progress: LeadProgress;
+  /** One status per lead: need_info / ready_to_quote / quote_created / closed (leadPipeline). */
+  pipeline: LeadPipeline;
   /** Days since the lead came in (Chicago calendar days), null when unknown. */
   ageDays: number | null;
   /** True when this lead sits in Review because it looks like it isn't a real project. */
@@ -272,12 +283,13 @@ export function computeLeadWorkflow(input: WorkflowInput): LeadWorkflow {
   const w = applyClosure(computeOpenWorkflow(input), input.closed, input.now);
   // Lost in Trello but still open here: never closed automatically, the team confirms it in Review.
   if (input.lostInTrello && !w.closed && !w.notALead) {
-    return {
+    const lost: LeadWorkflow = {
       ...w, lostInTrello: true, bucket: 'review', secondary: null,
       action: { kind: 'lost_in_trello', label: 'Close in Cotiza too', why: 'Lost in Trello: the card is in Bid Lost, but the lead is still open here and in Jobber.', step: 'none', channel: 'other' },
     };
+    return { ...lost, pipeline: leadPipeline(lost) };
   }
-  return w;
+  return { ...w, pipeline: leadPipeline(w) };
 }
 
 function computeOpenWorkflow(input: WorkflowInput): LeadWorkflow {
@@ -393,6 +405,7 @@ function computeOpenWorkflow(input: WorkflowInput): LeadWorkflow {
     action,
     secondary,
     progress,
+    pipeline: 'need_info',
     ageDays,
     likelySpam,
     notALead: input.notALead,

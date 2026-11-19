@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ContactEvent } from '../../worker/src/services/lead-contact-service.js';
 import { classifyTeamNote, requestEvents } from '../../worker/src/services/lead-contact-status.js';
-import { addDays, computeLeadWorkflow, daysBetween, handbookCadence, shortAsk } from '../../worker/src/services/lead-workflow.js';
+import { addDays, computeLeadWorkflow, daysBetween, handbookCadence, leadPipeline, shortAsk } from '../../worker/src/services/lead-workflow.js';
 
 // Wed Nov 4 2026, 10:00 in Chicago.
 const NOW = Date.parse('2026-11-04T16:00:00Z');
@@ -214,5 +214,25 @@ describe('shortAsk', () => {
     expect(shortAsk('When can we come by to check the ceiling height?')).toBe('a site visit');
     expect(shortAsk('Can you send the room measurements?')).toBe('measurements');
     expect(shortAsk('Which door is it, front or back?')).toBe('which door is it, front');
+  });
+});
+
+describe('pipeline status (card 96c6f073 T1)', () => {
+  const lead = request('2026-11-02T14:00:00Z');
+  it('a lead nobody has contacted is need_info', () => {
+    expect(workflow([lead]).pipeline).toBe('need_info');
+  });
+  it('a lead with every answer in is ready_to_quote', () => {
+    expect(workflow([lead, out('2026-11-02T15:00:00Z')], { info: info({ readyToQuote: true, firstAsk: null }) }).pipeline).toBe('ready_to_quote');
+  });
+  it('a lead with a Jobber quote (draft or sent) is quote_created', () => {
+    expect(workflow([lead], { quotes: [{ status: 'draft' }] }).pipeline).toBe('quote_created');
+    expect(workflow([lead], { quotes: [{ status: 'awaiting_response' }] }).pipeline).toBe('quote_created');
+  });
+  it('a lead marked not a lead is closed', () => {
+    expect(workflow([lead], { notALead: true }).pipeline).toBe('closed');
+  });
+  it('leadPipeline maps a closed bucket to closed', () => {
+    expect(leadPipeline({ notALead: false, bucket: 'closed', progress: 'getting_info' })).toBe('closed');
   });
 });
