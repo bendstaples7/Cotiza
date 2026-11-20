@@ -292,26 +292,38 @@ export async function handleMcpPost(request: Request, deps: {
     const name = String(message.params?.name || '');
     const args = message.params?.arguments ?? {};
     if (name === CONNECTOR_STATUS_TOOL.name) {
-      const listed = new Set(toolsFor(principal, await listsFinance(), await listsExpenses(), await listsExpenseCreate()).map((tool) => tool.name));
-      const writeFamilies: Array<{ tools: ReadonlyArray<{ name: string }>; tick: string }> = [
+      const lookupResult = async (fn: () => Promise<boolean>): Promise<{ ok: boolean; value: boolean }> => {
+        try {
+          return { ok: true, value: await fn() };
+        } catch {
+          return { ok: false, value: false };
+        }
+      };
+      const finance = await lookupResult(canReadFinance);
+      const expenses = await lookupResult(officeAllowed);
+      const expenseCreate = await lookupResult(officeCreateAllowed);
+      const listed = new Set(toolsFor(principal, finance.ok && finance.value, expenses.ok && expenses.value, expenseCreate.ok && expenseCreate.value).map((tool) => tool.name));
+      const writeFamilies: Array<{ tools: ReadonlyArray<{ name: string }>; tick: string; lookup?: { ok: boolean } }> = [
         { tools: REVIEW_WRITE_TOOLS, tick: 'Also allow recording quote-review feedback' },
         { tools: LEAD_WRITE_TOOLS, tick: 'Also allow updating lead questions' },
-        { tools: QUOTE_WRITE_TOOLS, tick: 'Also allow creating draft quotes and applying approved edits to them' },
-        { tools: EXPENSE_WRITE_TOOLS, tick: 'Also allow attaching invoice PDFs to Jobber expenses (office account only)' },
-        { tools: [EXPENSE_CREATE_TOOL], tick: 'Also allow logging paid vendor invoices as Jobber expenses (office account only)' },
+        { tools: QUOTE_WRITE_TOOLS, tick: 'Also allow creating draft quotes and applying approved edits to them (office account only)' },
+        { tools: EXPENSE_WRITE_TOOLS, tick: 'Also allow attaching invoice PDFs to Jobber expenses (office account only)', lookup: expenses },
+        { tools: [EXPENSE_CREATE_TOOL], tick: 'Also allow logging paid vendor invoices as Jobber expenses (office account only)', lookup: expenseCreate },
       ];
       const enabledWriteTools: string[] = [];
       const missing: Array<{ tool: string; tick: string }> = [];
+      const unknown: Array<{ tool: string; reason: string }> = [];
       for (const family of writeFamilies) {
         for (const tool of family.tools) {
           if (listed.has(tool.name)) enabledWriteTools.push(tool.name);
+          else if (family.lookup && !family.lookup.ok) unknown.push({ tool: tool.name, reason: 'lookup failed' });
           else missing.push({ tool: tool.name, tick: family.tick });
         }
       }
       return mcpEvent({
         jsonrpc: '2.0',
         id,
-        result: { content: [{ type: 'text', text: JSON.stringify({ outcome: 'ok', scopes: principal.scope.split(' '), enabledWriteTools, missing }) }] },
+        result: { content: [{ type: 'text', text: JSON.stringify({ outcome: 'ok', scopes: principal.scope.split(' '), enabledWriteTools, missing, unknown }) }] },
       }, 200, headers);
     }
     if (!TOOL_DEFINITIONS.some((tool) => tool.name === name) && !REVIEW_TOOL_NAMES.has(name) && !FINANCE_READ_TOOL_NAMES.has(name) && !QUOTE_WRITE_TOOL_NAMES.has(name) && !EXPENSE_WRITE_TOOL_NAMES.has(name) && !LEAD_READ_TOOL_NAMES.has(name) && !LEAD_WRITE_TOOL_NAMES.has(name) && !SKILL_TOOL_NAMES.has(name) && name !== EXPENSE_CREATE_TOOL.name) {
