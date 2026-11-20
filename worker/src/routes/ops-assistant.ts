@@ -430,6 +430,7 @@ export async function handleMcpPost(request: Request, deps: {
 }
 
 function consentPage(txId: string, email: string, offerReviewWrite: boolean, offerFinanceRead: boolean, offerQuoteWrite = false, offerLeadWrite = false, offerExpenseWrite = false, offerExpenseCreate = false): string {
+  const office = isPayoutReportUser(email);
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Connect the assistant</title>
 <style>
@@ -444,12 +445,12 @@ function consentPage(txId: string, email: string, offerReviewWrite: boolean, off
   <p>Signed in as ${escapeHtml(email)}. This allows an assistant to read Jobber requests, quotes, jobs and visits, and the quote-review ledger, for your Cotiza user. It cannot create, edit, send, or delete Jobber records.</p>
   <form method="post" action="/oauth/authorize">
     <input type="hidden" name="tx" value="${escapeHtml(txId)}">
-    ${offerReviewWrite ? `<p><label><input type="checkbox" name="review_write" value="yes"> Also allow recording quote-review feedback. The assistant can add entries to the Cotiza review ledger. It cannot change or delete entries, and it still cannot change Jobber.</label></p>` : ''}
-    ${offerLeadWrite ? `<p><label><input type="checkbox" name="lead_write" value="yes"> Also allow updating lead questions. The assistant can add questions to a lead's info-needed list and record answers. It cannot change Jobber.</label></p>` : ''}
-    ${offerQuoteWrite ? `<p><label><input type="checkbox" name="quote_write" value="yes"> Also allow creating draft quotes and applying approved edits to them. The assistant can create new draft Jobber quotes and change line items on quotes that are still drafts, after you approve them. It cannot send quotes, change their status, or contact customers.</label></p>` : ''}
-    ${offerFinanceRead ? `<p><label><input type="checkbox" name="finance_read" value="yes"> Also allow reading weekly payout reports (expenses and payments). Read-only: the assistant can read Jobber expenses, payment records and invoices for a period of up to 31 days, and search Jobber expenses across any dates. It cannot send, pay or change anything.</label></p>` : ''}
-    ${offerExpenseWrite ? `<p><label><input type="checkbox" name="expense_write" value="yes"> Also allow attaching invoice PDFs to Jobber expenses (office account only). It never creates, deletes or pays anything.</label></p>` : ''}
-    ${offerExpenseCreate ? `<p><label><input type="checkbox" name="expense_create" value="yes"> Also allow logging paid vendor invoices as Jobber expenses (office account only). The assistant can create one expense per invoice, with the invoice PDF as its receipt. It never edits, deletes or pays anything.</label></p>` : ''}
+    ${offerReviewWrite ? `<p><label><input type="checkbox" name="review_write" value="yes" checked> Also allow recording quote-review feedback. The assistant can add entries to the Cotiza review ledger. It cannot change or delete entries, and it still cannot change Jobber.</label></p>` : ''}
+    ${offerLeadWrite ? `<p><label><input type="checkbox" name="lead_write" value="yes" checked> Also allow updating lead questions. The assistant can add questions to a lead's info-needed list and record answers. It cannot change Jobber.</label></p>` : ''}
+    ${offerQuoteWrite ? `<p><label><input type="checkbox" name="quote_write" value="yes"${office ? ' checked' : ''}> Also allow creating draft quotes and applying approved edits to them. The assistant can create new draft Jobber quotes and change line items on quotes that are still drafts, after you approve them. It cannot send quotes, change their status, or contact customers.</label></p>` : ''}
+    ${offerFinanceRead ? `<p><label><input type="checkbox" name="finance_read" value="yes"${office ? ' checked' : ''}> Also allow reading weekly payout reports (expenses and payments). Read-only: the assistant can read Jobber expenses, payment records and invoices for a period of up to 31 days, and search Jobber expenses across any dates. It cannot send, pay or change anything.</label></p>` : ''}
+    ${offerExpenseWrite ? `<p><label><input type="checkbox" name="expense_write" value="yes"${office ? ' checked' : ''}> Also allow attaching invoice PDFs to Jobber expenses (office account only). It never creates, deletes or pays anything.</label></p>` : ''}
+    ${offerExpenseCreate ? `<p><label><input type="checkbox" name="expense_create" value="yes"${office ? ' checked' : ''}> Also allow logging paid vendor invoices as Jobber expenses (office account only). The assistant can create one expense per invoice, with the invoice PDF as its receipt. It never edits, deletes or pays anything.</label></p>` : ''}
     <div class="row">
       <button type="submit" name="decision" value="allow">Allow read access</button>
       <button type="submit" name="decision" value="deny">Cancel</button>
