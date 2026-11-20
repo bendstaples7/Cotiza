@@ -140,7 +140,7 @@ describe('ops assistant tools', () => {
     expect(response.headers.get('Content-Type')).toContain('text/event-stream');
     const body = await mcpJson(response);
     const names = body.result!.tools!.map((tool) => tool.name);
-    expect(names).toEqual(['inspect_reporting_capabilities', 'inspect_expense_capabilities', 'read_request_photo', 'find_requests', 'read_request', 'find_quotes', 'read_quote', 'list_request_quotes', 'find_jobs', 'read_job', 'read_client_history', 'find_products', 'read_review_feedback', 'list_open_leads', 'read_lead_info', 'read_skill']);
+    expect(names).toEqual(['connector_status', 'inspect_reporting_capabilities', 'inspect_expense_capabilities', 'read_request_photo', 'find_requests', 'read_request', 'find_quotes', 'read_quote', 'list_request_quotes', 'find_jobs', 'read_job', 'read_client_history', 'find_products', 'read_review_feedback', 'list_open_leads', 'read_lead_info', 'read_skill']);
     const described = body.result!.tools!.filter((tool) => tool.name !== 'inspect_expense_capabilities').map((tool) => `${tool.name} ${tool.description}`).join('\n').toLowerCase();
     expect(described).not.toMatch(/\b(create|delete|mutation|graphql)\b/);
     for (const query of Object.values(ASSISTANT_QUERIES)) {
@@ -331,6 +331,55 @@ describe('ops assistant tools', () => {
     const payload = await toolText(called);
     expect(payload.outcome).toBe('ok');
     expect(payload.summary).toContain('Porch');
+  });
+});
+
+describe('connector_status tool', () => {
+  const readOnly: AssistantPrincipal = { ...principal };
+  const reviewWriter: AssistantPrincipal = { ...principal, scope: 'ops:read review:write' };
+
+  it('lists the missing write tools and the consent box to tick for a read-only connection', async () => {
+    const response = await handleMcpPost(mcp('tools/call', { name: 'connector_status', arguments: {} }), {
+      directory: fakeDirectory(readOnly),
+      read: new OpsAssistantRead({ graphqlRequest: vi.fn() }, createMockD1() as never),
+      db: createMockD1() as never,
+      budget: new CallBudget(),
+    });
+    const payload = await toolText(response);
+    expect(payload.outcome).toBe('ok');
+    expect(payload.scopes).toEqual(['ops:read']);
+    expect(payload.enabledWriteTools).toEqual([]);
+    const review = (payload.missing as Array<{ tool: string; tick: string }>)
+      .filter((m) => m.tool === 'record_review_feedback' || m.tool === 'record_quote_review');
+    expect(review.map((m) => m.tool).sort()).toEqual(['record_quote_review', 'record_review_feedback']);
+    expect(review.every((m) => m.tick === 'Also allow recording quote-review feedback')).toBe(true);
+  });
+
+  it('reports the review write tools as enabled once review:write is granted', async () => {
+    const response = await handleMcpPost(mcp('tools/call', { name: 'connector_status', arguments: {} }), {
+      directory: fakeDirectory(reviewWriter),
+      read: new OpsAssistantRead({ graphqlRequest: vi.fn() }, createMockD1() as never),
+      db: createMockD1() as never,
+      budget: new CallBudget(),
+    });
+    const payload = await toolText(response);
+    expect(payload.enabledWriteTools).toContain('record_review_feedback');
+    expect(payload.enabledWriteTools).toContain('record_quote_review');
+    expect((payload.missing as Array<{ tool: string }>)
+      .some((m) => m.tool === 'record_review_feedback' || m.tool === 'record_quote_review')).toBe(false);
+  });
+
+  it('is listed for both a read-only and a review-write connection', async () => {
+    for (const p of [readOnly, reviewWriter]) {
+      const response = await handleMcpPost(mcp('tools/list'), {
+        directory: fakeDirectory(p),
+        read: new OpsAssistantRead({ graphqlRequest: vi.fn() }, createMockD1() as never),
+        db: createMockD1() as never,
+        budget: new CallBudget(),
+      });
+      const body = await mcpJson(response);
+      expect(body.result!.tools!.some((tool) => tool.name === 'connector_status')).toBe(true);
+    }
   });
 });
 
