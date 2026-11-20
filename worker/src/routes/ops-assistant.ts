@@ -63,6 +63,13 @@ import { EXPENSE_CREATE_TOOL, logExpense } from '../services/jobber-expense-crea
 /** Tools that write to draft Jobber quotes. Listed and callable only with quote:write. */
 const QUOTE_WRITE_TOOLS = [...QUOTE_LINE_TOOLS, QUOTE_MESSAGE_TOOL, QUOTE_CREATE_TOOL];
 const QUOTE_WRITE_TOOL_NAMES = new Set<string>(QUOTE_WRITE_TOOLS.map((t) => t.name));
+/** Read-only tool every connection may call: which scopes are granted and which write tools are on. */
+const CONNECTOR_STATUS_TOOL = {
+  name: 'connector_status',
+  description: 'Which permissions this connection has and which write tools are on; call at the start of a review',
+  annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+};
 import { callSkillTool, SkillArgsError, SkillSource, SKILL_READ_TOOLS, SKILL_TOOL_NAMES } from '../services/skill-source.js';
 import { getStapleStackRepo } from '../config.js';
 import { callLeadTool, LeadToolArgsError, LEAD_READ_TOOLS, LEAD_READ_TOOL_NAMES, LEAD_WRITE_TOOLS, LEAD_WRITE_TOOL_NAMES } from '../services/lead-info-tools.js';
@@ -132,7 +139,7 @@ function mcpEvent(body: unknown, status = 200, extra?: HeadersInit): Response {
 }
 
 function toolsFor(principal: AssistantPrincipal, canReadFinance: boolean, canEditExpenses: boolean, canCreateExpenses = false) {
-  const tools: Array<{ name: string }> = [...TOOL_DEFINITIONS, ...REVIEW_READ_TOOLS, ...LEAD_READ_TOOLS, ...SKILL_READ_TOOLS];
+  const tools: Array<{ name: string }> = [CONNECTOR_STATUS_TOOL, ...TOOL_DEFINITIONS, ...REVIEW_READ_TOOLS, ...LEAD_READ_TOOLS, ...SKILL_READ_TOOLS];
   if (hasScope(principal.scope, REVIEW_WRITE_SCOPE)) tools.push(...REVIEW_WRITE_TOOLS);
   if (hasScope(principal.scope, LEAD_WRITE_SCOPE)) tools.push(...LEAD_WRITE_TOOLS);
   if (canReadFinance) tools.push(...FINANCE_READ_TOOLS);
@@ -284,6 +291,41 @@ export async function handleMcpPost(request: Request, deps: {
   if (message.method === 'tools/call') {
     const name = String(message.params?.name || '');
     const args = message.params?.arguments ?? {};
+    if (name === CONNECTOR_STATUS_TOOL.name) {
+      const lookupResult = async (fn: () => Promise<boolean>): Promise<{ ok: boolean; value: boolean }> => {
+        try {
+          return { ok: true, value: await fn() };
+        } catch {
+          return { ok: false, value: false };
+        }
+      };
+      const finance = await lookupResult(canReadFinance);
+      const expenses = await lookupResult(officeAllowed);
+      const expenseCreate = await lookupResult(officeCreateAllowed);
+      const listed = new Set(toolsFor(principal, finance.ok && finance.value, expenses.ok && expenses.value, expenseCreate.ok && expenseCreate.value).map((tool) => tool.name));
+      const writeFamilies: Array<{ tools: ReadonlyArray<{ name: string }>; tick: string; lookup?: { ok: boolean } }> = [
+        { tools: REVIEW_WRITE_TOOLS, tick: 'Also allow recording quote-review feedback' },
+        { tools: LEAD_WRITE_TOOLS, tick: 'Also allow updating lead questions' },
+        { tools: QUOTE_WRITE_TOOLS, tick: 'Also allow creating draft quotes and applying approved edits to them (office account only)' },
+        { tools: EXPENSE_WRITE_TOOLS, tick: 'Also allow attaching invoice PDFs to Jobber expenses (office account only)', lookup: expenses },
+        { tools: [EXPENSE_CREATE_TOOL], tick: 'Also allow logging paid vendor invoices as Jobber expenses (office account only)', lookup: expenseCreate },
+      ];
+      const enabledWriteTools: string[] = [];
+      const missing: Array<{ tool: string; tick: string }> = [];
+      const unknown: Array<{ tool: string; reason: string }> = [];
+      for (const family of writeFamilies) {
+        for (const tool of family.tools) {
+          if (listed.has(tool.name)) enabledWriteTools.push(tool.name);
+          else if (family.lookup && !family.lookup.ok) unknown.push({ tool: tool.name, reason: 'lookup failed' });
+          else missing.push({ tool: tool.name, tick: family.tick });
+        }
+      }
+      return mcpEvent({
+        jsonrpc: '2.0',
+        id,
+        result: { content: [{ type: 'text', text: JSON.stringify({ outcome: 'ok', scopes: principal.scope.split(' '), enabledWriteTools, missing, unknown }) }] },
+      }, 200, headers);
+    }
     if (!TOOL_DEFINITIONS.some((tool) => tool.name === name) && !REVIEW_TOOL_NAMES.has(name) && !FINANCE_READ_TOOL_NAMES.has(name) && !QUOTE_WRITE_TOOL_NAMES.has(name) && !EXPENSE_WRITE_TOOL_NAMES.has(name) && !LEAD_READ_TOOL_NAMES.has(name) && !LEAD_WRITE_TOOL_NAMES.has(name) && !SKILL_TOOL_NAMES.has(name) && name !== EXPENSE_CREATE_TOOL.name) {
       return mcpEvent({ jsonrpc: '2.0', id, error: { code: -32602, message: 'Unknown tool' } }, 200, headers);
     }
