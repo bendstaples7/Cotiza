@@ -506,6 +506,45 @@ describe('oauth email step', () => {
   });
 });
 
+describe('oauth consent defaults', () => {
+  async function signIn(email: string) {
+    const db = createMockD1();
+    configurePrepareResults(db, [
+      { run: {} },
+      { first: { id: 'user-a', email, name: 'x', created_at: '2026-01-01T00:00:00Z', last_active_at: '2026-01-01T00:00:00Z' } },
+      { run: {} }, { run: {} }, { run: {} },
+    ]);
+    const txs = new Map<string, string>();
+    let scope: string | null = null;
+    const tx = JSON.stringify({ clientId: 'cotiza-ops-local', redirectUri: 'http://127.0.0.1:8787/oauth/exercise-callback', codeChallenge: 'challenge', state: 'exercise', resource: 'http://127.0.0.1:8787/mcp', offerReviewWrite: true, offerFinanceRead: true, offerQuoteWrite: true, offerLeadWrite: true, offerExpenseWrite: true, offerExpenseCreate: true });
+    const directory: AssistantDirectory = { ...fakeDirectory(null), loadTx: async (id) => txs.get(id) ?? tx, saveTx: async (id, payload) => { txs.set(id, payload); }, saveCode: async (record) => { scope = record.scope; } };
+    const app = createOpsAssistantApp(() => directory);
+    const env = { DB: db } as never;
+    const post = (body: URLSearchParams) => app.request('http://127.0.0.1:8787/oauth/authorize', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() }, env);
+    const html = await (await post(new URLSearchParams({ tx: 'tx-1', email }))).text();
+    const ticked = [...html.matchAll(/name="([a-z_]+)" value="yes" checked/g)].map((m) => m[1]);
+    const form = new URLSearchParams({ tx: 'tx-1', decision: 'allow' });
+    for (const name of ticked) form.set(name, 'yes');
+    expect((await post(form)).status).toBe(302);
+    const listed = await handleMcpPost(mcp('tools/list'), { directory: fakeDirectory({ ...principal, scope: scope! }), read: new OpsAssistantRead({ graphqlRequest: vi.fn() }, createMockD1() as never), db: createMockD1() as never, budget: new CallBudget() });
+    return { ticked, names: (await mcpJson(listed)).result!.tools!.map((t) => t.name) };
+  }
+
+  it('starts every offered box ticked for the office account', async () => {
+    const { ticked, names } = await signIn('office@chicago-reno.com');
+    expect(ticked).toEqual(['review_write', 'lead_write', 'quote_write', 'finance_read', 'expense_write', 'expense_create']);
+    expect(names).toContain('record_review_feedback');
+    expect(names).toContain('record_quote_review');
+  });
+
+  it('starts only the ledger boxes ticked for a non-office account', async () => {
+    const { ticked, names } = await signIn('ben@chicago-reno.com');
+    expect(ticked).toEqual(['review_write', 'lead_write']);
+    expect(names).toContain('record_review_feedback');
+    expect(names).toContain('record_quote_review');
+  });
+});
+
 describe('oauth registration guard', () => {
   it('rejects a client that wants an outside redirect', async () => {
     const app = createOpsAssistantApp(() => fakeDirectory(null));
