@@ -29,7 +29,13 @@ export interface ClosureResult {
   postponedUnavailable: boolean;
 }
 
-export async function applyClosuresToOpenLeads(db: D1Database, jobber: JobberReadClient, open: LeadNode[], now: number): Promise<ClosureResult> {
+export async function applyClosuresToOpenLeads(
+  db: D1Database,
+  jobber: JobberReadClient,
+  open: LeadNode[],
+  now: number,
+  options?: { keepClosed?: boolean; since?: number },
+): Promise<ClosureResult> {
   let closures: Map<string, LeadClosure>;
   try {
     closures = await new LeadContactService(db).closures();
@@ -39,9 +45,14 @@ export async function applyClosuresToOpenLeads(db: D1Database, jobber: JobberRea
     return { open, closuresUnavailable: true, postponedUnavailable: false };
   }
   const today = chicagoDate(now);
-  const listed = open.filter((node) => closureListed(closures.get(node.id), today));
+  const keepClosed = options?.keepClosed === true;
+  const since = options?.since ?? -Infinity;
+  // The queue's Closed tab keeps closed leads (and asks for archived ones by id); every other caller drops them.
+  const listed = keepClosed ? open : open.filter((node) => closureListed(closures.get(node.id), today));
   const present = new Set(open.map((n) => n.id));
-  const due = [...closures.entries()].filter(([id, c]) => !present.has(id) && closureListed(c, today)).map(([id]) => id);
+  const due = [...closures.entries()]
+    .filter(([id, c]) => !present.has(id) && (closureListed(c, today) || (keepClosed && Date.parse(c.closedAt) >= since)))
+    .map(([id]) => id);
   const toFetch = due.slice(0, MAX_POSTPONED_FETCH);
   let postponedUnavailable = due.length > toFetch.length;
   const fetched: LeadNode[] = [];
@@ -52,7 +63,8 @@ export async function applyClosuresToOpenLeads(db: D1Database, jobber: JobberRea
       try {
         const data = await jobber.graphqlRequest<{ request?: LeadNode | null }>(REQUEST_NODE_QUERY, { id });
         const node = data.request;
-        if (node && !CLOSED_REQUEST_STATUSES.has(String(node.requestStatus ?? '').toLowerCase())) fetched.push(node);
+        // A closed lead is archived in Jobber; the Closed tab still needs it.
+        if (node && (keepClosed || !CLOSED_REQUEST_STATUSES.has(String(node.requestStatus ?? '').toLowerCase()))) fetched.push(node);
       } catch (err) {
         postponedUnavailable = true;
         console.warn(`[lead-closures] postponed lead unavailable: ${sanitizeLogText(err instanceof Error ? err.message : String(err)).slice(0, 180)}`);

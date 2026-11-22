@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import DeathclockBadge from '../components/DeathclockBadge';
-import LeadReceivedBadge from '../components/LeadReceivedBadge';
+import { chicagoDaysAgo } from '../components/LeadReceivedBadge';
 import RequestJobberQuoteModal from '../components/RequestJobberQuoteModal';
-import { formatDay, sourceList, timeAgo } from '../components/LeadContactLine';
+import { formatDay } from '../components/LeadContactLine';
 import type { ErrorResponse } from 'shared';
 import { isPlaceholderJobberClientName } from 'shared';
 import {
@@ -20,7 +20,8 @@ import {
   closeLead,
   warnIfJobberNoteFailed,
 } from '../api';
-import type { JobberQueueStatus, LeadContactStatus, LeadInfoSummary, LeadWorkflow, ManualRequestWithDeathclock, ResolveRequestQuoteResult } from '../api';
+import type { JobberQueueStatus, LeadContactStatus, LeadInfoItem, LeadInfoSummary, LeadWorkflow, ManualRequestWithDeathclock, ResolveRequestQuoteResult } from '../api';
+import { buildOutreach } from '../leadOutreach';
 
 // ---------------------------------------------------------------------------
 // Deathclock color → hex map (mirrors DeathclockBadge component)
@@ -84,6 +85,7 @@ export default function RequestQueuePage() {
     req: ManualRequestWithDeathclock;
     resolution: ResolveRequestQuoteResult;
   } | null>(null);
+  const [copiedLeadId, setCopiedLeadId] = useState<string | null>(null);
 
   // Tick counter to trigger re-renders every second for live deathclock age
   const [tick, setTick] = useState(0);
@@ -275,6 +277,16 @@ export default function RequestQueuePage() {
     };
   }, [loadRequests]);
 
+  const copyBundledMessage = async (id: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedLeadId(id);
+      setTimeout(() => setCopiedLeadId((cur) => (cur === id ? null : cur)), 2000);
+    } catch {
+      setGenerateError('Could not copy. Select the text and copy it by hand.');
+    }
+  };
+
   const handleSortChange = (sort: 'age_asc' | 'age_desc') => {
     const params = new URLSearchParams(searchParams.toString());
     params.set('sort', sort);
@@ -330,6 +342,7 @@ export default function RequestQueuePage() {
   };
 
   const [markingId, setMarkingId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'need_info' | 'ready_to_quote' | 'quote_created' | 'closed'>('need_info');
   const markNotALead = async (requestId: string, notALead: boolean) => {
     setMarkingId(requestId);
     try {
@@ -340,7 +353,7 @@ export default function RequestQueuePage() {
         const status = prev[requestId];
         const w = status?.workflow;
         if (!status || !w) return prev;
-        return { ...prev, [requestId]: { ...status, workflow: { ...w, notALead, bucket: notALead || w.likelySpam ? 'review' : 'do_now' } } };
+        return { ...prev, [requestId]: { ...status, workflow: { ...w, notALead, bucket: notALead || w.likelySpam ? 'review' : 'do_now', pipeline: notALead ? 'closed' : w.pipeline } } };
       });
       void loadRequests({ silent: true });
     } catch {
@@ -359,7 +372,7 @@ export default function RequestQueuePage() {
       setContactStatuses((prev) => {
         const status = prev[requestId];
         if (!status?.workflow) return prev;
-        return { ...prev, [requestId]: { ...status, workflow: { ...status.workflow, bucket: 'closed', lostInTrello: false } } };
+        return { ...prev, [requestId]: { ...status, workflow: { ...status.workflow, bucket: 'closed', lostInTrello: false, pipeline: 'closed' } } };
       });
       void loadRequests({ silent: true });
     } catch {
@@ -421,17 +434,19 @@ export default function RequestQueuePage() {
   const leads = requests.filter((r) => r.jobberRequestId);
   const manual = requests.filter((r) => !r.jobberRequestId);
   const workflowOf = (r: ManualRequestWithDeathclock): LeadWorkflow | null => contactStatuses[r.jobberRequestId as string]?.workflow ?? null;
-  // Rows keep the queue's order (oldest first by default) inside each section. A lead whose next
-  // step is still loading, or could not be worked out, is never counted as "do now".
-  const doNow = leads.filter((r) => workflowOf(r)?.bucket === 'do_now');
-  const waiting = leads.filter((r) => workflowOf(r)?.bucket === 'waiting');
-  const review = leads.filter((r) => workflowOf(r)?.bucket === 'review');
+  // Fallback while not every worker serves `pipeline`; mirrors the worker's leadPipeline.
+  const pipelineOf = (w: LeadWorkflow): 'need_info' | 'ready_to_quote' | 'quote_created' | 'closed' =>
+    w.pipeline ?? (w.notALead || w.bucket === 'closed' ? 'closed' : ['quote_drafted', 'ben_review', 'ready_to_send', 'quote_sent'].includes(w.progress) ? 'quote_created' : w.progress === 'ready_to_quote' ? 'ready_to_quote' : 'need_info');
+  const TABS = [
+    { key: 'need_info' as const, label: 'Need info' },
+    { key: 'ready_to_quote' as const, label: 'Ready to create quote' },
+    { key: 'quote_created' as const, label: 'Quote created' },
+    { key: 'closed' as const, label: 'Closed' },
+  ];
   const pending = leads.filter((r) => !(r.jobberRequestId! in contactStatuses));
   const unknown = leads.filter((r) => r.jobberRequestId! in contactStatuses && !workflowOf(r));
-  // Closed leads normally never reach the queue (the server leaves them out); one closed since the
-  // last load is not shown or counted.
-  const readyCount = leads.filter((r) => workflowOf(r)?.progress === 'ready_to_quote' && workflowOf(r)?.bucket !== 'review' && workflowOf(r)?.bucket !== 'closed').length;
-  const statusesLoaded = pending.length === 0;
+  const tabCounts = TABS.map((t) => ({ ...t, count: leads.filter((r) => { const w = workflowOf(r); return !!w && pipelineOf(w) === t.key; }).length }));
+  const activeRows = leads.filter((r) => { const w = workflowOf(r); return !!w && pipelineOf(w) === activeTab; });
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
 
   const renderLeadRow = (req: ManualRequestWithDeathclock) => {
@@ -440,9 +455,15 @@ export default function RequestQueuePage() {
     const w = status?.workflow ?? null;
     const summary = leadSummaries[id];
     const linkedQuotes = jobberQuoteBadges[id];
+    const checklist = status?.checklist;
+    const bundled = checklist && (checklist.openQuestions.length > 0 || checklist.assumedLines.length > 0)
+      ? bundledMessage(req.customerName, req.requestTitle ?? null, checklist)
+      : null;
+    const createdAtMs = new Date(req.createdAt).getTime();
+    const receivedDate = new Date(createdAtMs).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Chicago' });
+    const receivedDays = w?.ageDays ?? chicagoDaysAgo(createdAtMs, now);
     return (
-      <article key={id} style={{ ...rowStyle, position: 'relative', paddingTop: 44 }} aria-label={`Lead: ${req.customerName}`}>
-        <div style={receivedBadgeSlot}><LeadReceivedBadge createdAt={new Date(req.createdAt).toISOString()} ageDays={w?.ageDays} now={now} /></div>
+      <article key={id} style={rowStyle} aria-label={`Lead: ${req.customerName}`}>
         <div style={{ ...cellStyle, flex: '1.4 1 220px' }}>
           <a
             href={'/quotes/leads/' + encodeURIComponent(id)}
@@ -452,20 +473,9 @@ export default function RequestQueuePage() {
             {req.customerName}
           </a>
           <span style={projectStyle}>{req.requestTitle?.trim() || req.serviceDescription?.trim() || 'Untitled request'}</span>
+          <span style={mutedSmall}>Received {receivedDate} · {receivedDays} day{receivedDays === 1 ? '' : 's'}</span>
           {linkedQuotes && linkedQuotes.length > 0 && (
             <span style={mutedSmall}>Jobber quote #{linkedQuotes[0].quoteNumber} · {linkedQuotes[0].quoteStatus.replace(/_/g, ' ')}</span>
-          )}
-        </div>
-        <div style={{ ...cellStyle, flex: '1 1 170px' }}>
-          <span style={eyebrowStyle}>Last contact</span>
-          {status === undefined ? <span style={mutedSmall}>Checking…</span> : !status ? <span style={mutedSmall}>Could not be read</span> : (
-            <>
-              <span style={valueStyle}>{status.last && status.last.channel !== 'request' ? status.last.label : 'No outreach yet'}</span>
-              <span style={mutedSmall}>
-                {status.last && status.last.channel !== 'request' ? timeAgo(status.last.at, now) : 'Only the request itself'}
-                {status.unavailable.length > 0 && ` · ${sourceList(status.unavailable)} couldn't be read`}
-              </span>
-            </>
           )}
         </div>
         <div style={{ ...cellStyle, flex: '1 1 170px' }}>
@@ -477,41 +487,35 @@ export default function RequestQueuePage() {
             </>
           ) : <span style={mutedSmall}>{status === undefined ? 'Checking…' : 'Open the lead to see'}</span>}
         </div>
-        <div style={{ ...cellStyle, flex: '1.3 1 240px', alignItems: 'flex-start', gap: 8 }}>
-          {w && <span style={whyStyle}>{w.action.why}</span>}
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            {w?.bucket === 'review' && w.lostInTrello ? (
-              <>
-                <button type="button" style={primaryButtonStyle} disabled={markingId === id} onClick={() => { void closeLostInTrello(id); }}>Close in Cotiza too</button>
-                <button type="button" style={secondaryButtonStyle} onClick={() => openRequest(req)}>Open lead</button>
-              </>
-            ) : w?.bucket === 'review' ? (
-              <>
-                {w.notALead ? (
-                  <button type="button" style={secondaryButtonStyle} disabled={markingId === id} onClick={() => markNotALead(id, false)}>Undo: it is a lead</button>
-                ) : (
-                  <button type="button" style={secondaryButtonStyle} disabled={markingId === id} onClick={() => markNotALead(id, true)}>Not a lead</button>
-                )}
-                {!w.notALead && (
-                  <button type="button" style={secondaryButtonStyle} onClick={() => openRequest(req, 'intro_text')}>Send intro text</button>
-                )}
-              </>
-            ) : (
-              <button type="button" style={primaryButtonStyle} onClick={() => openRequest(req, w?.action.kind)}>
-                {w?.action.label ?? 'Open lead'}
-              </button>
-            )}
-            {w && (w.bucket !== 'review' || w.lostInTrello) && (w.progress === 'ready_to_quote' || quoteChip(w) || (summary?.total ?? 0) > 0) && (
-              <span style={readinessChipStyle(w, summary)}>{readinessText(w, summary)}</span>
-            )}
-            {w?.secondary && w.bucket !== 'review' && (
-              <button type="button" style={secondaryButtonStyle} onClick={() => openRequest(req, w.secondary!.kind)} title={w.secondary.why}>
-                Also: {w.secondary.label}
-              </button>
-            )}
-            <button type="button" style={linkButtonStyle} onClick={() => handleRequestClick(req)}>Quote builder</button>
-            <button type="button" style={linkButtonStyle} onClick={() => openRequest(req, 'close')}>Close lead</button>
-          </div>
+        <div style={{ ...cellStyle, flex: '1.6 1 260px' }}>
+          <span style={eyebrowStyle}>Message to send</span>
+          {w ? (
+            <div style={messageBoxStyle} data-testid="lead-message-box">
+              {bundled ? (
+                <>
+                  <span data-testid="lead-message-text" style={{ whiteSpace: 'pre-wrap' }}>{bundled}</span>
+                  <button type="button" style={copyButtonStyle} onClick={() => { void copyBundledMessage(id, bundled); }}>
+                    {copiedLeadId === id ? 'Copied' : 'Copy'}
+                  </button>
+                </>
+              ) : (
+                <span style={readinessChipStyle(w, summary)}>{readinessText(w, summary)}</span>
+              )}
+            </div>
+          ) : <span style={mutedSmall}>{status === undefined ? 'Checking…' : 'Open the lead to see'}</span>}
+        </div>
+        <div style={{ ...cellStyle, flex: '0 0 auto', alignItems: 'flex-start' }}>
+          {w?.bucket === 'review' && w.lostInTrello ? (
+            <button type="button" style={primaryButtonStyle} disabled={markingId === id} onClick={() => { void closeLostInTrello(id); }}>Close in Cotiza too</button>
+          ) : w?.bucket === 'review' ? (
+            w.notALead
+              ? <button type="button" style={secondaryButtonStyle} disabled={markingId === id} onClick={() => markNotALead(id, false)}>Undo: it is a lead</button>
+              : <button type="button" style={secondaryButtonStyle} disabled={markingId === id} onClick={() => markNotALead(id, true)}>Not a lead</button>
+          ) : (
+            <button type="button" style={primaryButtonStyle} onClick={() => openRequest(req, w?.action.kind)}>
+              {w?.action.label ?? 'Open lead'}
+            </button>
+          )}
         </div>
       </article>
     );
@@ -618,23 +622,27 @@ export default function RequestQueuePage() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
           {leads.length > 0 && (
-            <div style={tilesStyle}>
-              <Tile label="Do now" color="#9a3412" count={statusesLoaded ? doNow.length : null} note="overdue, due today, or ready to quote" />
-              <Tile label="Ready to quote" color="#166534" count={statusesLoaded ? readyCount : null} note="enough info, draft the quote" />
-              <Tile label="Waiting on customer" color="#1e40af" count={statusesLoaded ? waiting.length : null} note="next touch is scheduled" />
-              <Tile label="Review" color="#4b5563" count={statusesLoaded ? review.length : null} note="likely not a lead, or lost in Trello" />
+            <div style={tilesStyle} role="tablist" aria-label="Lead pipeline">
+              {tabCounts.map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === t.key}
+                  onClick={() => setActiveTab(t.key)}
+                  style={{ ...tileStyle, cursor: 'pointer', background: activeTab === t.key ? '#f0fdf4' : '#fff', border: activeTab === t.key ? '2px solid #166534' : '1px solid #e5e7eb' }}
+                >
+                  <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>{t.label}</span>
+                  <span style={{ fontSize: 30, fontWeight: 700, color: '#111827' }}>{t.count}</span>
+                </button>
+              ))}
             </div>
           )}
 
-          {doNow.length > 0 && (
-            <Section title="Do now" note="One button per lead. Do it, and the next follow-up date sets itself.">
-              {doNow.map(renderLeadRow)}
-            </Section>
-          )}
-          {waiting.length > 0 && (
-            <Section title="Waiting on customer" note="Nothing to do until the date shown. These move to Do now on their own.">
-              {waiting.map(renderLeadRow)}
-            </Section>
+          {activeRows.length > 0 && (
+            <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }} aria-label={TABS.find((t) => t.key === activeTab)!.label}>
+              {activeRows.map(renderLeadRow)}
+            </section>
           )}
           {pending.length > 0 && (
             <Section title="Checking next steps" note="Reading contact history from Jobber, Quo and email.">
@@ -644,11 +652,6 @@ export default function RequestQueuePage() {
           {unknown.length > 0 && (
             <Section title="Next step unknown" note="Contact history could not be read right now. Open the lead to check it.">
               {unknown.map(renderLeadRow)}
-            </Section>
-          )}
-          {review.length > 0 && (
-            <Section title="Review" note="No real project described, marked not a lead, or already in Bid Lost in Trello. Close or archive it, or send one intro text.">
-              {review.map(renderLeadRow)}
             </Section>
           )}
 
@@ -725,16 +728,6 @@ const CADENCE_KEY = [
   { title: '5 · Monthly', text: 'After several weekly tries, until they reply or we close it.' },
 ];
 
-function Tile({ label, color, count, note }: { label: string; color: string; count: number | null; note: string }) {
-  return (
-    <div style={tileStyle}>
-      <span style={{ fontSize: 13, fontWeight: 600, color }}>{label}</span>
-      <span style={{ fontSize: 30, fontWeight: 700, color: '#111827' }}>{count ?? '…'}</span>
-      <span style={{ fontSize: 13, color: '#4b5563' }}>{note}</span>
-    </div>
-  );
-}
-
 function Section({ title, note, children }: { title: string; note: string; children: React.ReactNode }) {
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }} aria-label={title}>
@@ -770,6 +763,33 @@ const QUOTE_CHIP: Record<string, { background: string; color: string }> = {
 function quoteChip(w: LeadWorkflow | null) {
   const st = w?.quoteStage;
   return st && st.kind !== 'none' && QUOTE_CHIP[st.kind] ? st : null;
+}
+
+function messageItem(question: string, required: boolean): LeadInfoItem {
+  return { id: question, requestId: '', question, status: 'open', answer: null, required, createdAt: '', updatedAt: '', createdVia: 'app', updatedVia: 'app' };
+}
+
+/** One ready-to-send message: greeting, every open question numbered, then the Assumed lines. */
+function bundledMessage(
+  clientName: string,
+  title: string | null,
+  checklist: NonNullable<LeadContactStatus['checklist']>,
+): string {
+  const base = buildOutreach({
+    clientName,
+    title,
+    items: [
+      ...checklist.openQuestions.map((q) => messageItem(q, true)),
+      ...checklist.assumedLines.map((q) => messageItem(q, false)),
+    ],
+  });
+  const [greeting] = base.text.split('\n\n');
+  const lines = [greeting];
+  if (base.asks.length > 0) lines.push(base.asks.map((a, i) => `${i + 1}) ${a}`).join('\n'));
+  else lines.push(`We're putting your quote together now.`);
+  if (base.assumptions.length > 0) lines.push(base.assumptions.map((a) => `Assumed: ${a}`).join('\n'));
+  lines.push('— Chicago Reno');
+  return lines.join('\n\n');
 }
 
 function readinessText(w: LeadWorkflow | null, summary: LeadInfoSummary | undefined): string {
@@ -860,7 +880,6 @@ const emptyStyle: React.CSSProperties = {
 const tilesStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 };
 const tileStyle: React.CSSProperties = { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column', gap: 4 };
 
-const receivedBadgeSlot: React.CSSProperties = { position: 'absolute', top: 12, right: 16 };
 const rowStyle: React.CSSProperties = {
   background: '#fff',
   border: '1px solid #e5e7eb',
@@ -877,7 +896,8 @@ const projectStyle: React.CSSProperties = { fontSize: 14, color: '#374151' };
 const mutedSmall: React.CSSProperties = { fontSize: 13, color: '#6b7280' };
 const eyebrowStyle: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em' };
 const valueStyle: React.CSSProperties = { fontSize: 14, color: '#111827' };
-const whyStyle: React.CSSProperties = { fontSize: 13, color: '#374151' };
+const messageBoxStyle: React.CSSProperties = { fontSize: 13, color: '#111827', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px', whiteSpace: 'pre-wrap', display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' };
+const copyButtonStyle: React.CSSProperties = { minHeight: 32, padding: '0 10px', border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', color: '#374151', font: 'inherit', fontSize: 12, cursor: 'pointer' };
 
 const primaryButtonStyle: React.CSSProperties = {
   minHeight: 44,
@@ -901,17 +921,6 @@ const secondaryButtonStyle: React.CSSProperties = {
   font: 'inherit',
   fontSize: 14,
   cursor: 'pointer',
-};
-const linkButtonStyle: React.CSSProperties = {
-  border: 0,
-  background: 'none',
-  padding: '0 4px',
-  minHeight: 44,
-  color: '#1d4ed8',
-  font: 'inherit',
-  fontSize: 13,
-  cursor: 'pointer',
-  textDecoration: 'underline',
 };
 
 const manualCardStyle: React.CSSProperties = {

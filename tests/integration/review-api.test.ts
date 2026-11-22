@@ -184,6 +184,62 @@ describe('Review API Routes', () => {
     });
   });
 
+  describe('GET /api/reviews/jobber-drafts', () => {
+    it('a sent draft appears', async () => {
+      configurePrepareResults(db, [
+        {
+          all: {
+            results: [
+              {
+                jobber_quote_id: 'jq-1',
+                jobber_request_id: 'req-1',
+                quote_number: 'Q-1',
+                requested_at: '2026-11-01T12:00:00Z',
+                lead_name: 'Acme',
+                total_value: 1000,
+                jobber_web_uri: 'https://app.getjobber.com/quotes/1',
+              },
+            ],
+          },
+        },
+      ]);
+
+      const testApp = createTestApp();
+      const res = await testApp.request('/api/reviews/jobber-drafts', { headers: AUTH_HEADERS });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.drafts).toHaveLength(1);
+      expect(body.drafts[0]).toEqual({
+        jobberQuoteId: 'jq-1',
+        jobberRequestId: 'req-1',
+        quoteNumber: 'Q-1',
+        requestedAt: '2026-11-01T12:00:00Z',
+        leadName: 'Acme',
+        totalValue: 1000,
+        jobberWebUri: 'https://app.getjobber.com/quotes/1',
+      });
+    });
+  });
+
+  describe('GET /api/reviews/pending/count', () => {
+    it('badge count', async () => {
+      configurePrepareResults(db, [
+        // getPendingReviewCount: Cotiza draft reviews
+        { first: { count: 3 } },
+        // New Jobber draft count
+        { first: { count: 2 } },
+      ]);
+
+      const testApp = createTestApp();
+      const res = await testApp.request('/api/reviews/pending/count', { headers: AUTH_HEADERS });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.count).toBe(5);
+    });
+  });
+
   describe('GET /api/reviews/:id', () => {
     it('returns review detail', async () => {
       const now = new Date().toISOString();

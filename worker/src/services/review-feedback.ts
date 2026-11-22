@@ -137,6 +137,18 @@ export function validateQuoteRecord(value: unknown): Record<string, unknown> {
   if (decision !== undefined && decision !== 'approved' && decision !== 'changes_requested') {
     throw new InvalidAssistantArgs('record.decision must be "approved" or "changes_requested" (or left out while the review is open).');
   }
+  const r = value as Record<string, unknown>;
+  if (r.summary !== undefined && r.summary !== null && (typeof r.summary !== 'string' || cleanText(r.summary).length > 8_000)) {
+    throw new InvalidAssistantArgs('record.summary must be the review text, 8000 characters or fewer.');
+  }
+  if (r.requested_edits !== undefined && r.requested_edits !== null
+    && (!Array.isArray(r.requested_edits) || r.requested_edits.some((e) => typeof e !== 'string'))) {
+    throw new InvalidAssistantArgs('record.requested_edits must be a list of edit texts.');
+  }
+  if (r.artifact_url !== undefined && r.artifact_url !== null
+    && (typeof r.artifact_url !== 'string' || !/^https:\/\/claude\.ai\//i.test(r.artifact_url.trim()))) {
+    throw new InvalidAssistantArgs('record.artifact_url must be a https://claude.ai/ link.');
+  }
   if (JSON.stringify(value).length > REVIEW_FEEDBACK_LIMITS.recordChars) {
     throw new InvalidAssistantArgs(`record must be ${REVIEW_FEEDBACK_LIMITS.recordChars} characters of JSON or fewer.`);
   }

@@ -95,6 +95,29 @@ describe('closed leads in the open-lead list', () => {
     expect(graphqlRequest).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps closed leads and fetches archived ones when keepClosed is set', async () => {
+    // A closed lead is archived in Jobber, so the by-id fetch returns it as archived.
+    const graphqlRequest = vi.fn(async (_q: string, vars: { id: string }) => ({ request: { id: vars.id, title: 'Basement', requestStatus: 'archived', createdAt: '2026-07-01T00:00:00Z' } }));
+    const open = [{ id: 'A', createdAt: '2026-11-01T00:00:00Z' }];
+    const rows = [
+      { jobber_request_id: 'A', closed_reason: 'no_response', check_back_on: null },
+      { jobber_request_id: 'OUTSIDE', closed_reason: 'went_elsewhere', check_back_on: null },
+    ];
+
+    // Default: the present lead A drops out, and OUTSIDE (not present, not due) is not fetched.
+    const dropped = await applyClosuresToOpenLeads(db(rows), { graphqlRequest }, open, NOW);
+    expect(dropped.open.map((n) => n.id)).toEqual([]);
+    expect(graphqlRequest).not.toHaveBeenCalled();
+
+    // The Closed tab keeps A, and OUTSIDE comes back from Jobber even though it is archived.
+    const kept = await applyClosuresToOpenLeads(db(rows), { graphqlRequest }, open, NOW, {
+      keepClosed: true,
+      since: Date.parse('2026-07-01T00:00:00Z'),
+    });
+    expect(kept.open.map((n) => n.id)).toEqual(['A', 'OUTSIDE']);
+    expect(graphqlRequest).toHaveBeenCalledTimes(1);
+  });
+
   it('flags a due postponed lead that could not be read, instead of dropping it silently', async () => {
     const graphqlRequest = vi.fn(async () => { throw new Error('Jobber 502'); });
     const result = await applyClosuresToOpenLeads(db([{ jobber_request_id: 'OLD', closed_reason: 'postponed', check_back_on: '2026-11-01' }]), { graphqlRequest }, [], NOW);

@@ -218,7 +218,13 @@ export async function callLeadTool(db: D1Database, principal: AssistantPrincipal
       for (const u of updates) await info.update(u.itemId, u.fields, by);
       for (const e of adds) await info.add(requestId, e, by);
       const items = await info.list(requestId);
-      return { outcome: 'ok' as const, requestId, added: adds.length, updated: updates.length, items: items.map((i) => ({ ...i, untrusted: true })), summary: summarize(items) };
+      const summary = summarize(items);
+      // A connector save that makes the lead ready to quote drafts the quote here too.
+      if (summary.readyToQuote) {
+        const { autoDraftIfReady } = await import('./lead-auto-draft.js');
+        await autoDraftIfReady({ DB: db } as never, principal.userId, requestId);
+      }
+      return { outcome: 'ok' as const, requestId, added: adds.length, updated: updates.length, items: items.map((i) => ({ ...i, untrusted: true })), summary };
     }
     throw new LeadToolArgsError('Unknown tool');
   } catch (err) {

@@ -142,4 +142,40 @@ describe('lead draft quote route', () => {
     expect(res.status).toBeGreaterThanOrEqual(400);
     expect(res.status).toBeLessThan(500);
   });
+
+  describe('auto draft when the checklist turns ready', () => {
+    const ready = () => [{ id: 'i1', question: 'How big?', status: 'answered', answer: '10x10', required: true }];
+    const auto = async (existing: { id: string } | null) => {
+      const { autoDraftIfReady } = await import('../../worker/src/services/lead-auto-draft.js');
+      const db = createMockD1();
+      withExisting(db, existing);
+      return autoDraftIfReady({ DB: db } as never, 'user-a', REQ);
+    };
+
+    it('drafts once for a ready lead with no draft, and logs it', async () => {
+      mocks.list.mockResolvedValue(ready());
+      await auto(null);
+      expect(mocks.generateQuoteDraft).toHaveBeenCalledTimes(1);
+      expect(mocks.log).toHaveBeenCalledWith(expect.objectContaining({ operation: 'auto_draft_quote', severity: 'info' }));
+    });
+
+    it('makes no second draft when one already exists', async () => {
+      mocks.list.mockResolvedValue(ready());
+      await auto({ id: 'draft-1' });
+      expect(mocks.generateQuoteDraft).not.toHaveBeenCalled();
+    });
+
+    it('does nothing for a lead that is not ready', async () => {
+      mocks.list.mockResolvedValue([{ id: 'i1', question: 'How big?', status: 'open', answer: null, required: true }]);
+      await auto(null);
+      expect(mocks.generateQuoteDraft).not.toHaveBeenCalled();
+    });
+
+    it('leaves the lead Ready and logs the failure when drafting fails', async () => {
+      mocks.list.mockResolvedValue(ready());
+      mocks.generateQuoteDraft.mockRejectedValue(new Error('model down'));
+      await expect(auto(null)).resolves.toBeUndefined();
+      expect(mocks.log).toHaveBeenCalledWith(expect.objectContaining({ operation: 'auto_draft_quote', severity: 'error' }));
+    });
+  });
 });

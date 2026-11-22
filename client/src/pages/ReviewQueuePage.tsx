@@ -1,12 +1,33 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getPendingReviews } from '../api';
+import { API_BASE, getPendingReviews, getToken } from '../api';
 import ReviewBadge from '../components/review/ReviewBadge';
 import type { PendingReviewItem } from '../api';
+
+interface JobberDraftItem {
+  jobberQuoteId: string;
+  jobberRequestId: string;
+  quoteNumber: string | null;
+  requestedAt: string;
+  leadName: string | null;
+  totalValue: number | null;
+  jobberWebUri: string | null;
+}
+
+async function getJobberDrafts(): Promise<JobberDraftItem[]> {
+  const token = getToken();
+  const res = await fetch(API_BASE + '/api/reviews/jobber-drafts', {
+    headers: token ? { Authorization: 'Bearer ' + token } : {},
+  });
+  if (!res.ok) throw new Error('Failed to load Jobber drafts.');
+  const data = await res.json() as { drafts: JobberDraftItem[] };
+  return data.drafts;
+}
 
 export default function ReviewQueuePage() {
   const navigate = useNavigate();
   const [reviews, setReviews] = useState<PendingReviewItem[]>([]);
+  const [jobberDrafts, setJobberDrafts] = useState<JobberDraftItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -14,8 +35,9 @@ export default function ReviewQueuePage() {
     try {
       setLoading(true);
       setError(null);
-      const result = await getPendingReviews();
+      const [result, drafts] = await Promise.all([getPendingReviews(), getJobberDrafts()]);
       setReviews(result);
+      setJobberDrafts(drafts);
     } catch (err) {
       setError((err as any).message ?? 'Failed to load pending reviews.');
     } finally {
@@ -42,6 +64,36 @@ export default function ReviewQueuePage() {
 
       {error && (
         <div role="alert" style={alertStyle}>{error}</div>
+      )}
+
+      {jobberDrafts.length > 0 && (
+        <div style={{ marginBottom: '1.5rem' }}>
+          <h2 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Jobber drafts sent to Ben</h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {jobberDrafts.map((draft) => (
+              <a
+                key={draft.jobberQuoteId}
+                href={draft.jobberWebUri ?? '#'}
+                target="_blank"
+                rel="noreferrer"
+                style={{ ...cardStyle, textDecoration: 'none', color: 'inherit' }}
+              >
+                <div style={{ flex: 1, minWidth: 0, padding: '0.75rem 1rem' }}>
+                  <div style={{ fontWeight: 600, fontSize: '0.95rem', color: '#061216' }}>
+                    {draft.leadName ?? 'Lead'} · Quote {draft.quoteNumber ? `#${draft.quoteNumber}` : '—'}
+                  </div>
+                  <div style={metaRowStyle}>
+                    <span style={metaStyle}>Waiting since {new Date(draft.requestedAt).toLocaleString()}</span>
+                    <span style={metaStyle}>
+                      {draft.totalValue == null ? 'Total unavailable' : `$${draft.totalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                    </span>
+                  </div>
+                </div>
+                <div style={chevronStyle}>›</div>
+              </a>
+            ))}
+          </div>
+        </div>
       )}
 
       {reviews.length === 0 ? (

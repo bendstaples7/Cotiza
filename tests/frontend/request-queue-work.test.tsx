@@ -3,7 +3,8 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import RequestQueuePage from '../../client/src/pages/RequestQueuePage';
-import type { LeadContactStatus, LeadWorkflow, ManualRequestWithDeathclock } from '../../client/src/api';
+import type { LeadContactStatus, LeadInfoItem, LeadWorkflow, ManualRequestWithDeathclock } from '../../client/src/api';
+import { checklistMessage } from '../../worker/src/services/lead-contact-status';
 
 const api = vi.hoisted(() => ({
   fetchRequestQueue: vi.fn(),
@@ -30,9 +31,14 @@ const workflow = (over: Partial<LeadWorkflow>): LeadWorkflow => ({
   action: { kind: 'intro_text', label: 'Send intro text', why: 'Nobody has contacted them yet.', step: 'intro_text', channel: 'text' },
   progress: 'lead_in', ageDays: 2, likelySpam: false, notALead: false, plan: [], ...over,
 });
-const status = (w: LeadWorkflow, last: LeadContactStatus['last'] = null): LeadContactStatus => ({
+const status = (w: LeadWorkflow, last: LeadContactStatus['last'] = null, checklist?: LeadContactStatus['checklist']): LeadContactStatus => ({
   last, next: { on: w.next.on, source: 'suggested', overdue: w.next.overdue, dueToday: w.next.dueToday, reason: w.stage },
-  unavailable: [], notConnected: [], recent: [], workflow: w,
+  unavailable: [], notConnected: [], recent: [], workflow: w, ...(checklist ? { checklist } : {}),
+});
+
+const infoItem = (id: string, question: string, itemStatus: LeadInfoItem['status']): LeadInfoItem => ({
+  id, requestId: 'J', question, status: itemStatus, answer: null, required: true,
+  createdAt: '', updatedAt: '', createdVia: 'app', updatedVia: 'app',
 });
 
 function Where() {
@@ -67,35 +73,36 @@ describe('Requests work queue', () => {
     });
     api.fetchLeadContactStatuses.mockResolvedValue({
       statuses: {
-        A: status(workflow({ bucket: 'waiting', step: 3, stage: 'Step 3 · every 2–3 business days', next: { on: '2099-11-10', source: 'suggested', overdue: false, dueToday: false, daysOverdue: 0 }, action: { kind: 'ask_info', label: 'Text: ask for a site visit', why: 'Still need a site visit to quote.', step: 'follow_up', channel: 'text' }, progress: 'getting_info' }),
+        A: status(workflow({ bucket: 'waiting', pipeline: 'ready_to_quote', step: 3, stage: 'Step 3 · every 2–3 business days', next: { on: '2099-11-10', source: 'suggested', overdue: false, dueToday: false, daysOverdue: 0 }, action: { kind: 'ask_info', label: 'Text: ask for a site visit', why: 'Still need a site visit to quote.', step: 'follow_up', channel: 'text' }, progress: 'getting_info' }),
           { at: '2026-11-03T16:11:00Z', channel: 'note', direction: 'outgoing', source: 'jobber', label: 'Outreach (Jobber note)' }),
-        K: status(workflow({ bucket: 'review', likelySpam: true, action: { kind: 'intro_text', label: 'Send intro text', why: 'No project described yet. Send one intro text or mark it not a lead.', step: 'intro_text', channel: 'text' } })),
-        J: status(workflow({})),
+        K: status(workflow({ bucket: 'review', pipeline: 'closed', likelySpam: true, action: { kind: 'intro_text', label: 'Send intro text', why: 'No project described yet. Send one intro text or mark it not a lead.', step: 'intro_text', channel: 'text' } })),
+        J: status(workflow({ pipeline: 'need_info' })),
       },
     });
   });
 
-  it('sorts leads into Do now, Waiting on customer and Review with one action each', async () => {
+  it('shows each lead under its pipeline tab with one action each', async () => {
     renderQueue();
     await screen.findAllByText('Overdue 2 days'); // next steps loaded
-    const doNow = screen.getByRole('region', { name: 'Do now' });
-    expect(within(doNow).getByText('John Oconnell')).toBeInTheDocument();
-    expect(within(doNow).getByText('Overdue 2 days')).toBeInTheDocument();
-    expect(within(doNow).getByText('Step 1 · reach out on intake')).toBeInTheDocument();
-    expect(within(doNow).getByRole('button', { name: 'Send intro text' })).toBeInTheDocument();
-    expect(within(doNow).getByText('No outreach yet')).toBeInTheDocument();
 
-    const waiting = screen.getByRole('region', { name: 'Waiting on customer' });
-    expect(within(waiting).getByText('Anne Brady')).toBeInTheDocument();
-    expect(within(waiting).getByText('Outreach (Jobber note)')).toBeInTheDocument();
-    expect(within(waiting).getByText('Need: a site visit')).toBeInTheDocument();
+    const needInfo = screen.getByRole('region', { name: 'Need info' });
+    expect(within(needInfo).getByText('John Oconnell')).toBeInTheDocument();
+    expect(within(needInfo).getByText('Overdue 2 days')).toBeInTheDocument();
+    expect(within(needInfo).getByText('Step 1 · reach out on intake')).toBeInTheDocument();
+    expect(within(needInfo).getByRole('button', { name: 'Send intro text' })).toBeInTheDocument();
+    // John has no checklist: the message box carries the placeholder.
+    expect(within(needInfo).getByText('No checklist yet')).toBeInTheDocument();
 
-    const review = screen.getByRole('region', { name: 'Review' });
-    expect(within(review).getByText('Katherine Harris')).toBeInTheDocument();
-    expect(within(review).getByRole('button', { name: 'Not a lead' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: /Ready to create quote/ }));
+    const ready = await screen.findByRole('region', { name: 'Ready to create quote' });
+    expect(within(ready).getByText('Anne Brady')).toBeInTheDocument();
+    expect(within(ready).getByText('Need: a site visit')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: /Closed/ }));
+    const closed = await screen.findByRole('region', { name: 'Closed' });
+    expect(within(closed).getByText('Katherine Harris')).toBeInTheDocument();
+    expect(within(closed).getByRole('button', { name: 'Not a lead' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'How next contact is set' })).toBeInTheDocument();
-    // John has no checklist: no readiness chip.
-    expect(within(doNow).queryByText('No checklist yet')).not.toBeInTheDocument();
   });
 
   it('never counts a lead as "do now" before its next step is known', async () => {
@@ -103,7 +110,7 @@ describe('Requests work queue', () => {
     renderQueue();
     const pending = await screen.findByRole('region', { name: 'Checking next steps' });
     expect(within(pending).getByText('John Oconnell')).toBeInTheDocument();
-    expect(screen.queryByRole('region', { name: 'Do now' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Need info' })).not.toBeInTheDocument();
   });
 
   it('shows leads whose status failed as unknown, not as work to do', async () => {
@@ -111,81 +118,96 @@ describe('Requests work queue', () => {
     renderQueue();
     const unknown = await screen.findByRole('region', { name: 'Next step unknown' });
     expect(within(unknown).getByText('Anne Brady')).toBeInTheDocument();
-    expect(screen.queryByRole('region', { name: 'Do now' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Need info' })).not.toBeInTheDocument();
   });
 
   it('opens the lead page with the action preselected', async () => {
     renderQueue();
     await screen.findAllByText('Overdue 2 days');
-    const doNow = screen.getByRole('region', { name: 'Do now' });
-    await userEvent.click(within(doNow).getByRole('button', { name: 'Send intro text' }));
+    const needInfo = screen.getByRole('region', { name: 'Need info' });
+    await userEvent.click(within(needInfo).getByRole('button', { name: 'Send intro text' }));
     expect(screen.getByTestId('where')).toHaveTextContent('/quotes/leads/J?action=intro_text');
   });
 
   it('marks a lead as not a lead', async () => {
     renderQueue();
-    const review = await screen.findByRole('region', { name: 'Review' });
-    await userEvent.click(within(review).getByRole('button', { name: 'Not a lead' }));
+    await screen.findByText('Overdue 2 days');
+    await userEvent.click(screen.getByRole('tab', { name: /Closed/ }));
+    const closed = await screen.findByRole('region', { name: 'Closed' });
+    await userEvent.click(within(closed).getByRole('button', { name: 'Not a lead' }));
     expect(api.setLeadNotALead).toHaveBeenCalledWith('K', true);
   });
 
-  it('shows a "Lead received" badge and the secondary action under the main one', async () => {
+  it('mockup row layout', async () => {
     api.fetchLeadContactStatuses.mockResolvedValue({
       statuses: {
-        A: status(workflow({ bucket: 'waiting', next: { on: '2099-11-10', source: 'suggested', overdue: false, dueToday: false, daysOverdue: 0 } })),
-        K: status(workflow({ bucket: 'review', likelySpam: true })),
+        A: status(workflow({ bucket: 'waiting', pipeline: 'ready_to_quote', next: { on: '2099-11-10', source: 'suggested', overdue: false, dueToday: false, daysOverdue: 0 } })),
+        K: status(workflow({ bucket: 'review', pipeline: 'closed', likelySpam: true })),
         J: status(workflow({
-          ageDays: 7, progress: 'ready_to_quote',
+          ageDays: 7, progress: 'ready_to_quote', pipeline: 'need_info',
           action: { kind: 'draft_quote', label: 'Draft quote', why: 'We have what we need to quote. No open questions.', step: 'draft_quote', channel: 'other' },
           secondary: { kind: 'quote_update', label: 'Send “quote in progress” text', why: 'Let them know it’s coming.', step: 'quote_update', channel: 'text' },
         })),
       },
     });
     renderQueue();
-    const doNow = await screen.findByRole('region', { name: 'Do now' });
-    const row = await within(doNow).findByRole('article', { name: 'Lead: John Oconnell' });
-    expect(within(row).getByTestId('lead-received-badge')).toHaveTextContent('Lead received ·7 days ago');
-    expect(within(within(row).getByTestId('lead-received-badge')).getByText('Nov 2')).toBeInTheDocument();
-    expect(within(row).queryByText(/^Lead in /)).toBeNull();
-    expect(within(row).getByRole('button', { name: /Also: Send “quote in progress” text/ })).toBeInTheDocument();
+    const needInfo = await screen.findByRole('region', { name: 'Need info' });
+    const row = await within(needInfo).findByRole('article', { name: 'Lead: John Oconnell' });
+    expect(within(row).getByText(/^Received Nov 2 · /)).toBeInTheDocument();
+    expect(within(row).queryByTestId('lead-received-badge')).not.toBeInTheDocument();
+    expect(within(row).getAllByTestId('lead-message-box')).toHaveLength(1);
+    expect(within(row).getAllByRole('button')).toHaveLength(1);
+    expect(within(row).getByRole('link', { name: 'John Oconnell' })).toBeInTheDocument();
     await userEvent.click(within(row).getByRole('button', { name: 'Draft quote' }));
     expect(screen.getByTestId('where')).toHaveTextContent('/quotes/leads/J?action=draft_quote');
-  });
-
-  it('the secondary "Also:" button opens the lead on that action', async () => {
-    api.fetchLeadContactStatuses.mockResolvedValue({
-      statuses: {
-        A: status(workflow({ bucket: 'waiting', next: { on: '2099-11-10', source: 'suggested', overdue: false, dueToday: false, daysOverdue: 0 } })),
-        K: status(workflow({ bucket: 'review', likelySpam: true })),
-        J: status(workflow({
-          progress: 'ready_to_quote',
-          action: { kind: 'draft_quote', label: 'Draft quote', why: 'We have what we need to quote.', step: 'draft_quote', channel: 'other' },
-          secondary: { kind: 'quote_update', label: 'Send “quote in progress” text', why: 'Let them know it’s coming.', step: 'quote_update', channel: 'text' },
-        })),
-      },
-    });
-    renderQueue();
-    const doNow = await screen.findByRole('region', { name: 'Do now' });
-    const row = await within(doNow).findByRole('article', { name: 'Lead: John Oconnell' });
-    await userEvent.click(within(row).getByRole('button', { name: /Also: Send “quote in progress” text/ }));
-    expect(screen.getByTestId('where')).toHaveTextContent('/quotes/leads/J?action=quote_update');
   });
 
   it('a lead lost in Trello sits in Review with "Close in Cotiza too"', async () => {
     api.closeLead.mockResolvedValue({ closure: {}, jobberNote: null, jobberArchive: { status: 'archived' }, trello: null, trelloReminder: false });
     api.fetchLeadContactStatuses.mockResolvedValue({
       statuses: {
-        A: status(workflow({ bucket: 'waiting', next: { on: '2099-11-10', source: 'suggested', overdue: false, dueToday: false, daysOverdue: 0 } })),
-        K: status(workflow({ bucket: 'review', lostInTrello: true, action: { kind: 'lost_in_trello', label: 'Close in Cotiza too', why: 'Lost in Trello: the card is in Bid Lost.', step: 'none', channel: 'other' } })),
-        J: status(workflow({})),
+        A: status(workflow({ bucket: 'waiting', pipeline: 'ready_to_quote', next: { on: '2099-11-10', source: 'suggested', overdue: false, dueToday: false, daysOverdue: 0 } })),
+        K: status(workflow({ bucket: 'review', pipeline: 'closed', lostInTrello: true, action: { kind: 'lost_in_trello', label: 'Close in Cotiza too', why: 'Lost in Trello: the card is in Bid Lost.', step: 'none', channel: 'other' } })),
+        J: status(workflow({ pipeline: 'need_info' })),
       },
     });
     renderQueue();
-    const review = await screen.findByRole('region', { name: 'Review' });
-    const row = await within(review).findByRole('article', { name: 'Lead: Katherine Harris' });
-    expect(within(row).getByText('Lost in Trello: the card is in Bid Lost.')).toBeInTheDocument();
+    await screen.findByText('Overdue 2 days');
+    await userEvent.click(screen.getByRole('tab', { name: /Closed/ }));
+    const closed = await screen.findByRole('region', { name: 'Closed' });
+    const row = await within(closed).findByRole('article', { name: 'Lead: Katherine Harris' });
     expect(within(row).queryByRole('button', { name: 'Not a lead' })).not.toBeInTheDocument();
     await userEvent.click(within(row).getByRole('button', { name: 'Close in Cotiza too' }));
     expect(api.closeLead).toHaveBeenCalledWith('K', { reason: 'other', note: 'Already in Bid Lost in Trello' });
+  });
+
+  it('renders one bundled message: greeting, numbered open questions, Assumed lines, and Copy', async () => {
+    api.fetchLeadSummaries.mockResolvedValue({ summaries: { J: { total: 4, open: 3, asked: 0, answered: 1, readyToQuote: false } } });
+    api.fetchLeadContactStatuses.mockResolvedValue({ statuses: { J: status(workflow({ pipeline: 'need_info' }), null, {
+      openQuestions: ['Can you send photos of the lower level?', 'Is the ceiling staying?', 'a quick video helps.'],
+      assumedLines: ['Assumed: about 80 linear feet of exterior wall.'],
+    }) } });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    renderQueue();
+    const needInfo = await screen.findByRole('region', { name: 'Need info' });
+    const row = await within(needInfo).findByRole('article', { name: 'Lead: John Oconnell' });
+    const box = within(row).getByTestId('lead-message-box');
+    const message = within(box).getByTestId('lead-message-text').textContent ?? '';
+    expect(message).toContain('Hi John, this is Chicago Reno about your Basement drain tile request.');
+    expect(message).toContain('1) Can you send photos of the lower level?\n2) Is the ceiling staying?\n3) a quick video helps.');
+    expect(message).toContain('Assumed: about 80 linear feet of exterior wall');
+    await userEvent.click(within(box).getByRole('button', { name: 'Copy' }));
+    expect(writeText).toHaveBeenCalledWith(message);
+  });
+
+  it('builds the checklist payload from open and asked items only', () => {
+    expect(checklistMessage([
+      infoItem('1', 'Can you send photos?', 'open'),
+      infoItem('2', 'Optional: a quick video helps.', 'asked'),
+      infoItem('3', 'Assumed: about 80 linear feet.', 'open'),
+      infoItem('4', 'Answered one', 'answered'),
+      infoItem('5', 'Dropped one', 'dropped'),
+    ])).toEqual({ openQuestions: ['Can you send photos?', 'a quick video helps.'], assumedLines: ['Assumed: about 80 linear feet.'] });
   });
 });

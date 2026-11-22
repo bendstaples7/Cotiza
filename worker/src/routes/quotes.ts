@@ -333,6 +333,8 @@ app.get('/manual-requests', async (c) => {
 
   const includeDeathclock = c.req.query('include_deathclock') === 'true';
   const sortBy = c.req.query('sort_by') as 'age_asc' | 'age_desc' | undefined;
+  // Opt-in: the Requests page also shows quote-created and closed leads under their tabs.
+  const includeClosed = c.req.query('include_closed') === 'true';
 
   if (sortBy && sortBy !== 'age_asc' && sortBy !== 'age_desc') {
     return c.json({ error: "sort_by must be 'age_asc' or 'age_desc'" }, 400);
@@ -347,9 +349,12 @@ app.get('/manual-requests', async (c) => {
   let rows: typeof stored;
   try {
     const { jobberIntegration } = await createJobberIntegration(db, c.env);
-    const loaded = await loadOpenLeads(jobberIntegration, OPEN_LEAD_DAYS, Date.now());
+    const loaded = await loadOpenLeads(jobberIntegration, OPEN_LEAD_DAYS, Date.now(), { includeConverted: includeClosed });
     // Leads the team closed leave the queue; a postponed one comes back on its check-back date.
-    const applied = await applyClosuresToOpenLeads(db, jobberIntegration, loaded.open, Date.now());
+    const applied = await applyClosuresToOpenLeads(db, jobberIntegration, loaded.open, Date.now(), {
+      keepClosed: includeClosed,
+      since: Date.now() - OPEN_LEAD_DAYS * 86400_000,
+    });
     rows = mergeQueueWithOpenLeads(stored, applied.open, sortBy || 'age_asc', userId, Date.now());
     jobber = {
       status: 'live', days: OPEN_LEAD_DAYS, complete: loaded.complete,

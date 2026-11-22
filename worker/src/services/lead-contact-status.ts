@@ -142,6 +142,18 @@ export function firstOpenAsk(items: LeadInfoItem[]): string | null {
   return ask ? ask.question : null;
 }
 
+const ASSUMED_RE = /^assumed:\s*/i;
+const OPTIONAL_RE = /^optional:\s*/i;
+
+/** The checklist texts a queue message needs; answered and dropped items never appear. */
+export function checklistMessage(items: LeadInfoItem[]): { openQuestions: string[]; assumedLines: string[] } {
+  const live = items.filter((i) => i.status === 'open' || i.status === 'asked');
+  return {
+    openQuestions: live.filter((i) => !ASSUMED_RE.test(i.question)).map((i) => i.question.replace(OPTIONAL_RE, '').trim()),
+    assumedLines: live.filter((i) => ASSUMED_RE.test(i.question)).map((i) => i.question.trim()),
+  };
+}
+
 /** Contact status plus what to do next, from the handbook cadence and the info-needed checklist. */
 export async function gatherLeadWorkflow(input: Parameters<typeof gatherContactStatus>[0] & {
   items: LeadInfoItem[];
@@ -154,13 +166,13 @@ export async function gatherLeadWorkflow(input: Parameters<typeof gatherContactS
   quoteStage?: QuoteStage | null;
   /** Every Trello card linking this request is in Bid Lost. */
   lostInTrello?: boolean;
-}): Promise<{ status: ContactStatus; logged: LoggedContact[]; workflow: LeadWorkflow | null }> {
+}): Promise<{ status: ContactStatus & { checklist: ReturnType<typeof checklistMessage> }; logged: LoggedContact[]; workflow: LeadWorkflow | null }> {
   const [gathered, notALead, closed] = await Promise.all([
     gatherContactStatus(input),
     input.contacts.notALead(input.requestId),
     input.contacts.closure(input.requestId),
   ]);
-  if (input.quotes === 'unknown') return { status: gathered.status, logged: gathered.logged, workflow: null };
+  if (input.quotes === 'unknown') return { status: { ...gathered.status, checklist: checklistMessage(input.items) }, logged: gathered.logged, workflow: null };
   const summary = summarize(input.items);
   const workflow = computeLeadWorkflow({
     events: gathered.events,
@@ -174,5 +186,5 @@ export async function gatherLeadWorkflow(input: Parameters<typeof gatherContactS
     lostInTrello: input.lostInTrello ?? false,
     now: input.now,
   });
-  return { status: gathered.status, logged: gathered.logged, workflow };
+  return { status: { ...gathered.status, checklist: checklistMessage(input.items) }, logged: gathered.logged, workflow };
 }

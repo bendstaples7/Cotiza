@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import ReviewBadge from '../../client/src/components/review/ReviewBadge';
 import PushToJobberButton from '../../client/src/components/review/PushToJobberButton';
 import ReviewLineItemFeedbackPanel from '../../client/src/components/review/ReviewLineItemFeedbackPanel';
@@ -16,6 +16,8 @@ const mockGetPendingReviews = vi.hoisted(() => vi.fn<() => Promise<any[]>>());
 const mockAddFeedback = vi.hoisted(() => vi.fn<() => Promise<{ feedbackId: string; createdAt: string }>>());
 
 vi.mock('../../client/src/api', () => ({
+  API_BASE: 'http://test.local',
+  getToken: () => 'test-token',
   getPendingReviews: mockGetPendingReviews,
   addFeedback: mockAddFeedback,
 }));
@@ -204,11 +206,23 @@ describe('PushToJobberButton', () => {
 // ---------------------------------------------------------------------------
 
 describe('ReviewQueuePage', () => {
+  function stubJobberDrafts(drafts: unknown[]) {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ drafts }),
+    }));
+  }
+
   beforeEach(() => {
     mockGetPendingReviews.mockReset();
+    stubJobberDrafts([]);
   });
 
-  it('renders empty state when no reviews', async () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('empty Cotiza list still says no Cotiza drafts pending review', async () => {
     mockGetPendingReviews.mockResolvedValue([]);
 
     render(
@@ -232,7 +246,7 @@ describe('ReviewQueuePage', () => {
     expect(screen.getByText('Loading pending reviews…')).toBeInTheDocument();
   });
 
-  it('renders review cards when data loaded', async () => {
+  it('keeps the Cotiza draft list', async () => {
     const now = new Date().toISOString();
     mockGetPendingReviews.mockResolvedValue([
       {
@@ -278,6 +292,63 @@ describe('ReviewQueuePage', () => {
     // Should show cycle numbers
     expect(screen.getByText('Cycle 1')).toBeInTheDocument();
     expect(screen.getByText('Cycle 2')).toBeInTheDocument();
+  });
+
+  it('keeps the existing review card click-through', async () => {
+    mockGetPendingReviews.mockResolvedValue([
+      {
+        id: 'review-1',
+        quoteDraftId: 'draft-1',
+        draftNumber: 42,
+        totalValue: 15000.50,
+        status: 'pending_review',
+        submittedAt: new Date().toISOString(),
+        reviewCycle: 1,
+        submittedBy: { id: 'user-1', name: 'Alice' },
+      },
+    ]);
+
+    function LocationProbe() {
+      return <div data-testid="location">{useLocation().pathname + useLocation().search}</div>;
+    }
+
+    render(
+      <MemoryRouter>
+        <LocationProbe />
+        <ReviewQueuePage />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Review 42 from Alice' }));
+
+    expect(screen.getByTestId('location')).toHaveTextContent('/quotes/drafts/draft-1?from=reviews&reviewAccess=true');
+  });
+
+  it('shows the Jobber drafts sent to Ben and links to Jobber', async () => {
+    mockGetPendingReviews.mockResolvedValue([]);
+    stubJobberDrafts([
+      {
+        jobberQuoteId: 'jq-1',
+        jobberRequestId: 'req-1',
+        quoteNumber: 'Q-1',
+        requestedAt: '2026-11-01T12:00:00.000Z',
+        leadName: 'Acme',
+        totalValue: 1000,
+        jobberWebUri: 'https://app.getjobber.com/quotes/1',
+      },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <ReviewQueuePage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Jobber drafts sent to Ben')).toBeInTheDocument();
+    const link = screen.getByRole('link', { name: /Acme · Quote #Q-1/ });
+    expect(link).toHaveAttribute('href', 'https://app.getjobber.com/quotes/1');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(screen.getByText('$1,000.00')).toBeInTheDocument();
   });
 });
 

@@ -784,6 +784,9 @@ export type JobberQueueStatus =
 export async function fetchRequestQueue(sortBy?: 'age_asc' | 'age_desc'): Promise<{ requests: ManualRequestWithDeathclock[]; jobber: JobberQueueStatus }> {
   const params = new URLSearchParams({ include_deathclock: 'true' });
   if (sortBy) params.set('sort_by', sortBy);
+  // The Requests page renders all four tabs, including Quote created and Closed, so it asks for
+  // converted and Cotiza-closed leads too. No other caller uses this helper.
+  params.set('include_closed', 'true');
   const res = await fetch(API_BASE + '/api/quotes/manual-requests?' + params.toString(), {
     headers: { ...authHeaders() },
   });
@@ -1431,6 +1434,8 @@ export interface LeadContactStatus {
   recent: LeadContactEvent[];
   /** What to do next (handbook cadence). null when it can't be worked out (e.g. quotes unreadable). */
   workflow?: LeadWorkflow | null;
+  /** The checklist texts behind the row's one message (open/asked questions and "Assumed:" lines). */
+  checklist?: { openQuestions: string[]; assumedLines: string[] };
 }
 
 export type LeadBucket = 'do_now' | 'waiting' | 'review' | 'closed';
@@ -1443,6 +1448,16 @@ export interface TrelloResult {
   cards: Array<{ name: string; url: string; done: boolean; error?: string }>;
 }
 export type LeadProgress = 'lead_in' | 'getting_info' | 'ready_to_quote' | 'quote_drafted' | 'ben_review' | 'ready_to_send' | 'quote_sent';
+export type LeadPipeline = 'need_info' | 'ready_to_quote' | 'quote_created' | 'closed';
+
+/** Ben's review of a quote, as its newest ledger record carries it (worker: lead-quote-stage.ts). */
+export interface LeadReviewDetail {
+  at: string;
+  decision: 'approved' | 'changes_requested' | 'unclear';
+  summary?: string;
+  requestedEdits?: string[];
+  artifactUrl?: string | null;
+}
 
 /** Where a drafted quote is, so the team knows whose move it is (worker: lead-quote-stage.ts). */
 export interface LeadQuoteStage {
@@ -1450,6 +1465,8 @@ export interface LeadQuoteStage {
   quote: { id: string; number: string | null; webUri: string | null } | null;
   label: string;
   why: string;
+  /** Ben's newest review of this quote, when the ledger has one. */
+  review?: LeadReviewDetail | null;
 }
 
 /** The team sent a draft quote to Ben for review. */
@@ -1488,6 +1505,8 @@ export interface LeadWorkflow {
   /** A smaller extra action under the main one (the handbook "quote in progress" update, or a reply). */
   secondary?: LeadWorkflowAction | null;
   progress: LeadProgress;
+  /** One status per lead (worker leadPipeline). Optional until every worker serving the page has it. */
+  pipeline?: LeadPipeline;
   ageDays: number | null;
   likelySpam: boolean;
   notALead: boolean;
