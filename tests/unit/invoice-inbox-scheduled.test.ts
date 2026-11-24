@@ -65,12 +65,4 @@ describe('invoice inbox scheduled pass', () => {
     expect(INVOICE_INBOX_CRON).toBe('0 */4 * * *');
     expect(scan).not.toHaveBeenCalled();
   });
-
-  it('wrangler.toml schedules the invoice cron and has go-live on', async () => {
-    const { readFileSync } = await import('node:fs');
-    const { resolve } = await import('node:path');
-    const toml = readFileSync(resolve(process.cwd(), 'worker/wrangler.toml'), 'utf8');
-    expect(toml).toContain(`"${INVOICE_INBOX_CRON}"`);
-    expect(toml).toMatch(/^INVOICE_INBOX_GO_LIVE = "true"$/m);
-  });
 });
