@@ -10,7 +10,7 @@ import type { ImageJobMessage } from './queue/image-consumer.js';
 import { handleScheduledSync } from './scheduled/corpus-sync.js';
 import { handleJobberSessionKeepAlive, JOBBER_SESSION_KEEPALIVE_CRON } from './scheduled/jobber-session-keepalive.js';
 import { EmailContextService } from './services/email-context-service.js';
-import { runInvoiceInboxScan } from './services/invoice-inbox-scan.js';
+import { INVOICE_INBOX_CRON, runInvoiceInboxScan } from './services/invoice-inbox-scan.js';
 import { runEmailAskScan } from './services/email-ask-scan.js';
 import { runEmailAskDraft } from './services/email-ask-draft.js';
 import invoiceInboxRoutes from './routes/invoice-inbox.js';
@@ -228,9 +228,9 @@ export default {
       const service = new EmailContextService(env.GMAIL_CLIENT_ID, env.GMAIL_CLIENT_SECRET, env.GMAIL_REFRESH_TOKEN);
       ctx.waitUntil(runEmailAskDraft(service, env.DB));
     }
-    // Dry-run invoice detector (card fae9e3e9): record would-log rows, never touches Jobber.
+    // Invoice inbox (card fae9e3e9): logs vendor invoices as Jobber expenses; dry-run only if INVOICE_INBOX_GO_LIVE is not 'true'.
     if (
-      event.cron === JOBBER_SESSION_KEEPALIVE_CRON &&
+      event.cron === INVOICE_INBOX_CRON &&
       env.GMAIL_CLIENT_ID?.trim() &&
       env.GMAIL_CLIENT_SECRET?.trim() &&
       env.GMAIL_REFRESH_TOKEN?.trim()
@@ -262,6 +262,7 @@ export default {
       await handleJobberSessionKeepAlive(env);
       return;
     }
+    if (event.cron === INVOICE_INBOX_CRON) return; // never the daily corpus sync
     await handleScheduledSync(env, ctx);
   },
 };
