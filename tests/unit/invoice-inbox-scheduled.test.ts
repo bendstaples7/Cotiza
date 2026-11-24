@@ -24,6 +24,7 @@ vi.mock('../../worker/src/scheduled/jobber-session-keepalive.js', async (importO
 }));
 
 import worker from '../../worker/src/index.js';
+import { INVOICE_INBOX_CRON } from '../../worker/src/services/invoice-inbox-scan.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -43,10 +44,25 @@ describe('invoice inbox scheduled pass', () => {
       INVOICE_INBOX_GO_LIVE: 'true',
     } as never;
     const waitUntil = vi.fn();
-    await worker.scheduled({ cron: KEEPALIVE_CRON } as never, env, { waitUntil } as never);
+    await worker.scheduled({ cron: INVOICE_INBOX_CRON } as never, env, { waitUntil } as never);
     await Promise.all(waitUntil.mock.calls.map((call) => call[0]));
     expect(open).toHaveBeenCalledTimes(1);
     expect(scan).toHaveBeenCalledTimes(1);
     expect(scan).toHaveBeenCalledWith(expect.anything(), db);
+  });
+
+  it('runs every 4 hours on its own cron, not on the 30-minute keep-alive', async () => {
+    const env = {
+      DB: {},
+      R2_BUCKET: { list: vi.fn(async () => ({ objects: [], truncated: false })) },
+      GMAIL_CLIENT_ID: 'id',
+      GMAIL_CLIENT_SECRET: 'secret',
+      GMAIL_REFRESH_TOKEN: 'refresh',
+    } as never;
+    const waitUntil = vi.fn();
+    await worker.scheduled({ cron: KEEPALIVE_CRON } as never, env, { waitUntil } as never);
+    await Promise.all(waitUntil.mock.calls.map((call) => call[0]));
+    expect(INVOICE_INBOX_CRON).toBe('0 */4 * * *');
+    expect(scan).not.toHaveBeenCalled();
   });
 });

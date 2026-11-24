@@ -314,6 +314,9 @@ async function logWouldLogRows(
   return result;
 }
 
+/** Invoice inbox poll: every 4 hours (Ben 2026-11-24). Keep in sync with worker/wrangler.toml [triggers]. */
+export const INVOICE_INBOX_CRON = '0 */4 * * *';
+
 export async function runInvoiceInboxScan(
   service: {
     fetchInvoiceMessages(limit?: number): Promise<GmailInvoiceMessage[]>;
