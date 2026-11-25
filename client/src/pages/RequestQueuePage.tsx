@@ -447,7 +447,10 @@ export default function RequestQueuePage() {
   const unknown = leads.filter((r) => r.jobberRequestId! in contactStatuses && !workflowOf(r));
   const tabCounts = TABS.map((t) => ({ ...t, count: leads.filter((r) => { const w = workflowOf(r); return !!w && pipelineOf(w) === t.key; }).length }));
   const activeRows = leads.filter((r) => { const w = workflowOf(r); return !!w && pipelineOf(w) === activeTab; });
-  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+  const openLeads = requests.length;
+  const overdueCount = leads.filter((r) => workflowOf(r)?.next.overdue).length;
+  const oldestDays = leads.reduce((max, r) => Math.max(max, workflowOf(r)?.ageDays ?? 0), 0);
+  const summaryText = `${openLeads} open lead${openLeads === 1 ? '' : 's'} · ${overdueCount} overdue · oldest ${oldestDays} day${oldestDays === 1 ? '' : 's'}`;
 
   const renderLeadRow = (req: ManualRequestWithDeathclock) => {
     const id = req.jobberRequestId as string;
@@ -464,7 +467,7 @@ export default function RequestQueuePage() {
     const receivedDays = w?.ageDays ?? chicagoDaysAgo(createdAtMs, now);
     return (
       <article key={id} style={rowStyle} aria-label={`Lead: ${req.customerName}`}>
-        <div style={{ ...cellStyle, flex: '1.4 1 220px' }}>
+        <div style={cellStyle}>
           <a
             href={'/quotes/leads/' + encodeURIComponent(id)}
             onClick={(e) => { e.preventDefault(); openRequest(req); }}
@@ -478,8 +481,7 @@ export default function RequestQueuePage() {
             <span style={mutedSmall}>Jobber quote #{linkedQuotes[0].quoteNumber} · {linkedQuotes[0].quoteStatus.replace(/_/g, ' ')}</span>
           )}
         </div>
-        <div style={{ ...cellStyle, flex: '1 1 170px' }}>
-          <span style={eyebrowStyle}>Next contact</span>
+        <div style={cellStyle}>
           {w ? (
             <>
               <span style={{ ...valueStyle, fontWeight: 600, color: dueColor(w) }}>{dueText(w, now)}</span>
@@ -487,8 +489,7 @@ export default function RequestQueuePage() {
             </>
           ) : <span style={mutedSmall}>{status === undefined ? 'Checking…' : 'Open the lead to see'}</span>}
         </div>
-        <div style={{ ...cellStyle, flex: '1.6 1 260px' }}>
-          <span style={eyebrowStyle}>Message to send</span>
+        <div style={cellStyle}>
           {w ? (
             <div style={messageBoxStyle} data-testid="lead-message-box">
               {bundled ? (
@@ -504,7 +505,7 @@ export default function RequestQueuePage() {
             </div>
           ) : <span style={mutedSmall}>{status === undefined ? 'Checking…' : 'Open the lead to see'}</span>}
         </div>
-        <div style={{ ...cellStyle, flex: '0 0 auto', alignItems: 'flex-start' }}>
+        <div style={cellStyle}>
           {w?.bucket === 'review' && w.lostInTrello ? (
             <button type="button" style={primaryButtonStyle} disabled={markingId === id} onClick={() => { void closeLostInTrello(id); }}>Close in Cotiza too</button>
           ) : w?.bucket === 'review' ? (
@@ -513,9 +514,13 @@ export default function RequestQueuePage() {
               : <button type="button" style={secondaryButtonStyle} disabled={markingId === id} onClick={() => markNotALead(id, true)}>Not a lead</button>
           ) : (
             <button type="button" style={primaryButtonStyle} onClick={() => openRequest(req, w?.action.kind)}>
-              {w?.action.label ?? 'Open lead'}
+              {actionLabel(w, checklist)}
             </button>
           )}
+          <div style={actionLinksStyle}>
+            <button type="button" style={linkButtonStyle} onClick={() => openRequest(req, 'draft_quote')}>Quote builder</button>
+            <button type="button" style={linkButtonStyle} onClick={() => openRequest(req)}>Close lead</button>
+          </div>
         </div>
       </article>
     );
@@ -559,9 +564,9 @@ export default function RequestQueuePage() {
       )}
 
       <header style={headerStyle}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 16 }}>
           <h1 style={titleStyle}>Requests</h1>
-          <p style={subtitleStyle}>{today} · Work top to bottom. Goal: every lead to a sent quote.</p>
+          <span style={summaryStyle}>{summaryText}</span>
         </div>
         <div style={sortToggleContainerStyle}>
           <button
@@ -622,7 +627,7 @@ export default function RequestQueuePage() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
           {leads.length > 0 && (
-            <div style={tilesStyle} role="tablist" aria-label="Lead pipeline">
+            <div style={tabRowStyle} role="tablist" aria-label="Lead pipeline">
               {tabCounts.map((t) => (
                 <button
                   key={t.key}
@@ -630,12 +635,20 @@ export default function RequestQueuePage() {
                   role="tab"
                   aria-selected={activeTab === t.key}
                   onClick={() => setActiveTab(t.key)}
-                  style={{ ...tileStyle, cursor: 'pointer', background: activeTab === t.key ? '#f0fdf4' : '#fff', border: activeTab === t.key ? '2px solid #166534' : '1px solid #e5e7eb' }}
+                  style={activeTab === t.key ? tabActiveStyle : tabStyle}
                 >
-                  <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>{t.label}</span>
-                  <span style={{ fontSize: 30, fontWeight: 700, color: '#111827' }}>{t.count}</span>
+                  <span>{t.label}</span>
+                  <span style={countPillStyle}>{t.count}</span>
                 </button>
               ))}
+            </div>
+          )}
+          {leads.length > 0 && (
+            <div style={columnHeaderStyle} role="row">
+              <span role="columnheader">Lead</span>
+              <span role="columnheader">Next contact</span>
+              <span role="columnheader">Message to send</span>
+              <span role="columnheader">Action</span>
             </div>
           )}
 
@@ -792,6 +805,16 @@ function bundledMessage(
   return lines.join('\n\n');
 }
 
+function actionLabel(w: LeadWorkflow | null, checklist: LeadContactStatus['checklist'] | undefined): string {
+  if (!w) return 'Open lead';
+  const n = checklist?.openQuestions.length ?? 0;
+  if (w.action.kind === 'ask_info' && n > 0) return `Send message (${n} question${n === 1 ? '' : 's'})`;
+  if (w.action.kind === 'ask_info') return 'List the questions';
+  if (w.action.kind === 'intro_text') return 'Send intro + questions';
+  if (w.action.kind === 'draft_quote') return 'Draft quote';
+  return 'Open lead';
+}
+
 function readinessText(w: LeadWorkflow | null, summary: LeadInfoSummary | undefined): string {
   const st = quoteChip(w);
   if (st) return st.label;
@@ -821,7 +844,12 @@ function readinessChipStyle(w: LeadWorkflow | null, summary: LeadInfoSummary | u
 const containerStyle: React.CSSProperties = { maxWidth: 1180, margin: '0 auto' };
 const headerStyle: React.CSSProperties = { display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16, marginBottom: 20 };
 const titleStyle: React.CSSProperties = { margin: 0, fontSize: 28, fontWeight: 700 };
-const subtitleStyle: React.CSSProperties = { margin: 0, fontSize: 14, color: '#4b5563' };
+const summaryStyle: React.CSSProperties = { fontSize: 14, color: '#4b5563' };
+const tabRowStyle: React.CSSProperties = { display: 'flex', gap: 8, borderBottom: '1px solid #d1d5db' };
+const tabStyle: React.CSSProperties = { border: 0, borderBottom: '3px solid transparent', background: 'transparent', padding: '10px 16px', font: 'inherit', fontSize: 14, color: '#374151', display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer' };
+const tabActiveStyle: React.CSSProperties = { ...tabStyle, borderBottomColor: '#b45309', fontWeight: 600, color: '#111827' };
+const countPillStyle: React.CSSProperties = { background: '#f3f4f6', color: '#374151', borderRadius: 999, padding: '2px 9px', fontSize: 12, fontWeight: 700 };
+const columnHeaderStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: '250px 150px 1fr 190px', gap: 20, padding: '0 18px', fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#4b5563' };
 
 const sortToggleContainerStyle: React.CSSProperties = {
   display: 'inline-flex',
@@ -877,24 +905,23 @@ const emptyStyle: React.CSSProperties = {
   border: '1px solid #e0e0e0',
 };
 
-const tilesStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 };
-const tileStyle: React.CSSProperties = { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column', gap: 4 };
+const actionLinksStyle: React.CSSProperties = { display: 'flex', gap: 12, fontSize: 13 };
+const linkButtonStyle: React.CSSProperties = { border: 0, background: 'none', padding: 0, font: 'inherit', fontSize: 13, color: '#1d4ed8', cursor: 'pointer', textAlign: 'left' };
 
 const rowStyle: React.CSSProperties = {
   background: '#fff',
   border: '1px solid #e5e7eb',
-  borderRadius: 12,
-  padding: '16px 20px',
-  display: 'flex',
-  flexWrap: 'wrap',
+  borderRadius: 8,
+  padding: '16px 18px',
+  display: 'grid',
+  gridTemplateColumns: '250px 150px 1fr 190px',
   gap: 20,
-  alignItems: 'center',
+  alignItems: 'start',
 };
 const cellStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 };
 const clientLinkStyle: React.CSSProperties = { fontSize: 16, fontWeight: 600, color: '#111827', textDecoration: 'none' };
 const projectStyle: React.CSSProperties = { fontSize: 14, color: '#374151' };
 const mutedSmall: React.CSSProperties = { fontSize: 13, color: '#6b7280' };
-const eyebrowStyle: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em' };
 const valueStyle: React.CSSProperties = { fontSize: 14, color: '#111827' };
 const messageBoxStyle: React.CSSProperties = { fontSize: 13, color: '#111827', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px', whiteSpace: 'pre-wrap', display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' };
 const copyButtonStyle: React.CSSProperties = { minHeight: 32, padding: '0 10px', border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', color: '#374151', font: 'inherit', fontSize: 12, cursor: 'pointer' };
@@ -902,6 +929,8 @@ const copyButtonStyle: React.CSSProperties = { minHeight: 32, padding: '0 10px',
 const primaryButtonStyle: React.CSSProperties = {
   minHeight: 44,
   padding: '0 16px',
+  whiteSpace: 'normal',
+  textAlign: 'left',
   border: 0,
   borderRadius: 8,
   background: '#1d4ed8',
