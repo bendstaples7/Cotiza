@@ -47,6 +47,7 @@ import {
   normalizeName, postponeComment, reopenComment, reopenInTrello, trelloClient, type BoardSnapshot, type TrelloResult,
 } from '../services/trello-sync.js';
 import { leadClientName, loadOpenLeads, OPEN_LEAD_DAYS } from '../services/open-leads.js';
+import { ensureLeadChecklist } from '../services/lead-checklist.js';
 
 type Env = { Bindings: Bindings; Variables: { user: { id: string; email: string } } };
 const app = new Hono<Env>();
@@ -220,7 +221,6 @@ app.get('/contact-status', async (c) => {
   const { jobberIntegration } = await openJobberIntegration(c.env.DB, c.env);
   const read = new OpsAssistantRead(jobberIntegration, c.env.DB, c.env.IMAGES);
   const contacts = new LeadContactService(c.env.DB);
-  const info = new LeadInfoService(c.env.DB);
   const now = Date.now();
   const statuses: Record<string, unknown> = {};
   // One board read for the whole batch; leads lost in Trello (card in Bid Lost) go to Review.
@@ -230,17 +230,28 @@ app.get('/contact-status', async (c) => {
     while (next < valid.length) {
       const requestId = valid[next++];
       try {
-        const [request, quotes, items] = await Promise.all([
+        const [request, quotes] = await Promise.all([
           read.readRequest(userId, { requestId }) as unknown as Promise<{ outcome?: string; request?: RequestDetail }>,
           // Quote states move a lead on (finish a draft, follow up on a sent one); unknown when the read fails.
           read.listRequestQuotes(userId, { requestId }).catch(() => null),
-          info.list(requestId),
         ]);
         // One set of services per lead: each tracks its own failed-read flag.
         const { email, phone } = contextServices(c.env);
         const known = knownQuotes(quotes);
         const quoteStage = await quoteStageFor(c.env.DB, requestId, known);
         const lost = Boolean(trello) && request.outcome === 'ok' && cardsLostInTrello(trello!, avail((request.request as RequestFields)?.jobberWebUri));
+        // T11: seed this lead's job-type checklist once, answered from what Jobber already holds.
+        const detail = request.request as {
+          title?: { availability?: string; value?: string | null } | null;
+          requestBody?: { availability?: string; value?: string | null } | null;
+        } | null | undefined;
+        const presentText = (field?: { availability?: string; value?: string | null } | null) =>
+          field?.availability === 'present' ? field.value ?? null : null;
+        const items = await ensureLeadChecklist(c.env, userId, requestId, {
+          title: presentText(detail?.title),
+          notes: presentText(detail?.requestBody),
+          photoCount: () => loadRequestPhotos(jobberIntegration, requestId, null).then((p) => p?.noteAttachments?.edges?.length ?? 0).catch(() => 0),
+        });
         const { status, workflow } = await gatherLeadWorkflow({ requestId, detail: request.request, requestFailed: request.outcome !== 'ok', contacts, phone, email, now, items, quotes: known, quoteStage, lostInTrello: lost });
         statuses[requestId] = { ...status, workflow };
       } catch (err) {
