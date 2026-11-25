@@ -81,7 +81,8 @@ describe('Requests work queue', () => {
     });
   });
 
-  it('shows each lead under its pipeline tab with one action each', async () => {
+  // Ben's approved mockup 2026-11-19: rows also carry Quote builder / Close lead links.
+  it('shows each lead under its pipeline tab with its next action', async () => {
     renderQueue();
     await screen.findAllByText('Overdue 2 days'); // next steps loaded
 
@@ -89,7 +90,7 @@ describe('Requests work queue', () => {
     expect(within(needInfo).getByText('John Oconnell')).toBeInTheDocument();
     expect(within(needInfo).getByText('Overdue 2 days')).toBeInTheDocument();
     expect(within(needInfo).getByText('Step 1 · reach out on intake')).toBeInTheDocument();
-    expect(within(needInfo).getByRole('button', { name: 'Send intro text' })).toBeInTheDocument();
+    expect(within(needInfo).getByRole('button', { name: 'Send intro + questions' })).toBeInTheDocument();
     // John has no checklist: the message box carries the placeholder.
     expect(within(needInfo).getByText('No checklist yet')).toBeInTheDocument();
 
@@ -125,7 +126,7 @@ describe('Requests work queue', () => {
     renderQueue();
     await screen.findAllByText('Overdue 2 days');
     const needInfo = screen.getByRole('region', { name: 'Need info' });
-    await userEvent.click(within(needInfo).getByRole('button', { name: 'Send intro text' }));
+    await userEvent.click(within(needInfo).getByRole('button', { name: 'Send intro + questions' }));
     expect(screen.getByTestId('where')).toHaveTextContent('/quotes/leads/J?action=intro_text');
   });
 
@@ -156,7 +157,10 @@ describe('Requests work queue', () => {
     expect(within(row).getByText(/^Received Nov 2 · /)).toBeInTheDocument();
     expect(within(row).queryByTestId('lead-received-badge')).not.toBeInTheDocument();
     expect(within(row).getAllByTestId('lead-message-box')).toHaveLength(1);
-    expect(within(row).getAllByRole('button')).toHaveLength(1);
+    // Ben's approved mockup 2026-11-19: main action plus Quote builder / Close lead links.
+    expect(within(row).getAllByRole('button')).toHaveLength(3);
+    expect(within(row).getByRole('button', { name: 'Quote builder' })).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Close lead' })).toBeInTheDocument();
     expect(within(row).getByRole('link', { name: 'John Oconnell' })).toBeInTheDocument();
     await userEvent.click(within(row).getByRole('button', { name: 'Draft quote' }));
     expect(screen.getByTestId('where')).toHaveTextContent('/quotes/leads/J?action=draft_quote');
@@ -209,5 +213,18 @@ describe('Requests work queue', () => {
       infoItem('4', 'Answered one', 'answered'),
       infoItem('5', 'Dropped one', 'dropped'),
     ])).toEqual({ openQuestions: ['Can you send photos?', 'a quick video helps.'], assumedLines: ['Assumed: about 80 linear feet.'] });
+  });
+
+  it('rows share one grid: header row, four tabs with counts, summary, action links', async () => {
+    renderQueue();
+    const needInfo = await screen.findByRole('region', { name: 'Need info' });
+    const row = await within(needInfo).findByRole('article', { name: 'Lead: John Oconnell' });
+    expect(screen.getAllByRole('columnheader').map((c) => c.textContent)).toEqual(['Lead', 'Next contact', 'Message to send', 'Action']);
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs).toHaveLength(4);
+    expect(within(tabs[0]).getByText('1')).toBeInTheDocument();
+    expect(screen.getByText(/\d+ open leads · \d+ overdue · oldest \d+ days?/)).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Quote builder' })).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Close lead' })).toBeInTheDocument();
   });
 });
