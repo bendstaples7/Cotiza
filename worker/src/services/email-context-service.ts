@@ -6,6 +6,8 @@ const GMAIL_API_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
 /** Invoice bodies are capped so one huge email cannot exhaust Worker memory (card fae9e3e9). */
 const INVOICE_BODY_MAX_CHARS = 50_000;
 const INVOICE_HTML_MAX_CHARS = 200_000;
+/** Home Depot promos can outnumber receipts, so it gets its own capped query (card f9e131f8 T3). */
+const HOME_DEPOT_CANDIDATES = 25;
 const OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const API_TIMEOUT_MS = 8_000;
 
@@ -420,13 +422,27 @@ export class EmailContextService {
     this.lastReadFailed = false;
     const accessToken = await this.getAccessToken();
     if (!accessToken) throw new Error('Gmail token refresh failed');
-    const list = await this.apiFetch<GmailListResponse>(
+    // Home Depot gets its own query: promos whose subject merely contains "order" would otherwise
+    // fill the shared result cap and displace real receipts (card f9e131f8 T3).
+    const invoiceList = await this.apiFetch<GmailListResponse>(
       accessToken,
-      '/messages?q=' + encodeURIComponent('newer_than:2d (has:attachment filename:pdf OR from:messaging.squareup.com subject:"You paid an invoice" OR (from:homedepot.com (subject:receipt OR subject:order)))') + '&maxResults=' + limit,
+      '/messages?q=' + encodeURIComponent('newer_than:2d (has:attachment filename:pdf OR from:messaging.squareup.com subject:"You paid an invoice")') + '&maxResults=' + limit,
     );
     if (this.lastReadFailed) throw new Error('Gmail invoice list read failed');
+    const homeDepotList = await this.apiFetch<GmailListResponse>(
+      accessToken,
+      '/messages?q=' + encodeURIComponent('newer_than:2d from:homedepot.com (subject:receipt OR subject:order OR subject:purchase)') + '&maxResults=' + HOME_DEPOT_CANDIDATES,
+    );
+    if (this.lastReadFailed) throw new Error('Gmail home depot list read failed');
+    const refs: Array<{ id: string; threadId: string }> = [];
+    const seen = new Set<string>();
+    for (const ref of [...(invoiceList?.messages ?? []).slice(0, limit), ...(homeDepotList?.messages ?? [])]) {
+      if (seen.has(ref.id)) continue;
+      seen.add(ref.id);
+      refs.push(ref);
+    }
     const messages: import('./invoice-inbox-scan.js').GmailInvoiceMessage[] = [];
-    for (const ref of (list?.messages ?? []).slice(0, limit)) {
+    for (const ref of refs) {
       const msg = await this.apiFetch<GmailMessage>(accessToken, `/messages/${ref.id}?format=full`);
       if (this.lastReadFailed || !msg) throw new Error('Gmail invoice message read failed');
       const collected = { texts: [] as string[], names: [] as string[], htmls: [] as string[] };
@@ -438,7 +454,7 @@ export class EmailContextService {
         subject: this.getHeader(msg.payload?.headers ?? [], 'Subject'),
         bodyText: (() => {
           const text = collected.texts.map((data) => this.decodeBase64(data, Infinity)).filter(Boolean).join('\n').slice(0, INVOICE_BODY_MAX_CHARS);
-          if (text) return text;
+          if (text.trim()) return text;
           const html = collected.htmls.map((data) => this.decodeBase64(data, INVOICE_HTML_MAX_CHARS)).join('\n');
           return htmlToText(html).slice(0, INVOICE_BODY_MAX_CHARS);
         })(),

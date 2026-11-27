@@ -5,8 +5,9 @@ const SENDER_HINTS = [/20four7/i, /four7\s*va/i];
 const SQUARE_SENDER = /<[^>]*@messaging\.squareup\.com>|^[^<]*@messaging\.squareup\.com$/i;
 const SQUARE_SUBJECT = /you paid an invoice/i;
 const SQUARE_PAID = /you have paid invoice|paid invoice #|invoice paid|total paid/i;
-// Home Depot e-receipts arrive from homedepot.com (an HTML link, not always a PDF).
-const HOME_DEPOT_SENDER = /@(?:[a-z0-9-]+\.)*homedepot\.com(?![.\w-])/i;
+// Home Depot e-receipts arrive from homedepot.com (an HTML link, not always a PDF). Match the
+// angle-bracket address when present, else the bare From, so a display name cannot spoof it.
+const HOME_DEPOT_SENDER = /<[^>]*@(?:[a-z0-9-]+\.)*homedepot\.com(?![.\w-])[^>]*>|^[^<]*@(?:[a-z0-9-]+\.)*homedepot\.com(?![.\w-])$/i;
 const HOME_DEPOT_RECEIPT = /\b(?:receipt|order|purchase|e-?receipt)\b/i;
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const MAX_PER_RUN = 25;
@@ -182,7 +183,8 @@ function draftFromHomeDepot(message: GmailInvoiceMessage, text: string) {
   }
 
   // Word end + a required ':' or '#' so "points", "power tools" or "Pro Xtra" are not a PO/job name.
-  const jobMatch = text.match(/\b(?:job\s*name|job|p\.?\s?o\.?(?:\s*(?:number|#))?)\b\s*[:#]\s*([^\n\r]{2,60})/i);
+  // No \b before the delimiter: a dotted label like "P.O.:" has a non-word period before the colon.
+  const jobMatch = text.match(/\b(?:job\s*name|job|p\.?\s?o\.?(?:\s*(?:number|#))?)\s*[:#]\s*([^\n\r]{2,60})/i);
   const jobName = jobMatch ? jobMatch[1].trim() : null;
   const attachmentName = message.attachmentNames.find((name) => /\.pdf$/i.test(name)) ?? null;
 

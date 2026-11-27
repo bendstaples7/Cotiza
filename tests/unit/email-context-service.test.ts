@@ -402,6 +402,7 @@ describe('EmailContextService', () => {
       const fetchMock = vi.fn()
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(tokenResponse) })
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(listResponse) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ messages: [], resultSizeEstimate: 0 }) })
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(nested) })
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(flat) });
       vi.stubGlobal('fetch', fetchMock);
@@ -448,6 +449,7 @@ describe('EmailContextService', () => {
       const fetchMock = vi.fn()
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(tokenResponse) })
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(listResponse) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ messages: [], resultSizeEstimate: 0 }) })
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(square) });
       vi.stubGlobal('fetch', fetchMock);
 
@@ -496,6 +498,7 @@ describe('EmailContextService', () => {
       const fetchMock = vi.fn()
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(tokenResponse) })
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(listResponse) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ messages: [], resultSizeEstimate: 0 }) })
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(square) });
       vi.stubGlobal('fetch', fetchMock);
 
@@ -540,6 +543,7 @@ describe('EmailContextService', () => {
       const fetchMock = vi.fn()
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(tokenResponse) })
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(listResponse) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ messages: [], resultSizeEstimate: 0 }) })
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(square) });
       vi.stubGlobal('fetch', fetchMock);
 
@@ -583,6 +587,7 @@ describe('EmailContextService', () => {
       const fetchMock = vi.fn()
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(tokenResponse) })
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(listResponse) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ messages: [], resultSizeEstimate: 0 }) })
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(square) });
       vi.stubGlobal('fetch', fetchMock);
 
@@ -626,6 +631,7 @@ describe('EmailContextService', () => {
       const fetchMock = vi.fn()
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(tokenResponse) })
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(listResponse) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ messages: [], resultSizeEstimate: 0 }) })
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(square) });
       vi.stubGlobal('fetch', fetchMock);
 
@@ -667,6 +673,7 @@ describe('EmailContextService', () => {
       const fetchMock = vi.fn()
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(tokenResponse) })
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(listResponse) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ messages: [], resultSizeEstimate: 0 }) })
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(huge) });
       vi.stubGlobal('fetch', fetchMock);
 
