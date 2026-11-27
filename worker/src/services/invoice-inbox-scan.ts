@@ -5,6 +5,10 @@ const SENDER_HINTS = [/20four7/i, /four7\s*va/i];
 const SQUARE_SENDER = /<[^>]*@messaging\.squareup\.com>|^[^<]*@messaging\.squareup\.com$/i;
 const SQUARE_SUBJECT = /you paid an invoice/i;
 const SQUARE_PAID = /you have paid invoice|paid invoice #|invoice paid|total paid/i;
+// Home Depot e-receipts arrive from homedepot.com (an HTML link, not always a PDF). Match the
+// angle-bracket address when present, else the bare From, so a display name cannot spoof it.
+const HOME_DEPOT_SENDER = /<[^>]*@(?:[a-z0-9-]+\.)*homedepot\.com(?![.\w-])[^>]*>|^[^<]*@(?:[a-z0-9-]+\.)*homedepot\.com(?![.\w-])$/i;
+const HOME_DEPOT_RECEIPT = /\b(?:receipt|order|purchase|e-?receipt)\b/i;
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const MAX_PER_RUN = 25;
 
@@ -30,6 +34,11 @@ export interface InvoiceScanResult {
 export function classifyInvoiceMessage(
   message: Pick<GmailInvoiceMessage, 'from' | 'subject' | 'bodyText' | 'snippet' | 'attachmentNames'>,
 ): boolean {
+  // Home Depot e-receipts carry an HTML link (not always a PDF); match sender + SUBJECT words
+  // only, so "Order now" in a promo body is not read as a receipt.
+  if (HOME_DEPOT_SENDER.test(message.from)) {
+    return HOME_DEPOT_RECEIPT.test(message.subject);
+  }
   // Square's "You paid an invoice!" mail carries no PDF - the document is a link.
   // The same subject also goes out for unpaid/overdue invoices, so require the body
   // or snippet to state the invoice was actually paid.
@@ -51,6 +60,24 @@ export function invoiceDedupeKey(
   return null;
 }
 
+/**
+ * Turn a Home Depot e-receipt's HTML into the plain text the text/plain part would give
+ * (card f9e131f8 T2): block tags become newlines, then entities are decoded.
+ */
+export function htmlToText(html: string): string {
+  return html
+    .replace(/<\s*(?:br|\/p|\/tr|\/div|\/td)\s*\/?>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&#36;/g, '$')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&amp;/gi, '&')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 export function draftFromMessage(message: GmailInvoiceMessage): {
   messageId: string;
   vendor: string | null;
@@ -58,6 +85,7 @@ export function draftFromMessage(message: GmailInvoiceMessage): {
   amount: number | null;
   expenseDate: string | null;
   attachmentName: string | null;
+  jobName: string | null;
   status: 'would_log' | 'uncertain';
   reason: string | null;
 } {
@@ -66,6 +94,7 @@ export function draftFromMessage(message: GmailInvoiceMessage): {
   const vendor = rawVendor || null;
 
   const text = [message.subject, message.bodyText, message.snippet ?? ''].join('\n');
+  if (HOME_DEPOT_SENDER.test(message.from)) return draftFromHomeDepot(message, text);
   const numberMatch = text.match(/#\s*([A-Za-z0-9][A-Za-z0-9-]{2,})/);
   const invoiceNumber = numberMatch ? numberMatch[1].toUpperCase() : null;
 
@@ -118,8 +147,58 @@ export function draftFromMessage(message: GmailInvoiceMessage): {
     amount,
     expenseDate,
     attachmentName,
+    jobName: null,
     status: reasons.length > 0 ? 'uncertain' : 'would_log',
     reason: reasons.length > 0 ? reasons.join('; ') : null,
+  };
+}
+
+/**
+ * A Home Depot e-receipt (card f9e131f8 T2): vendor is always Home Depot and the PO/job name is
+ * kept for the review list. Nothing is logged until job matching lands in T4.
+ */
+function draftFromHomeDepot(message: GmailInvoiceMessage, text: string) {
+  // The captured token must contain a digit, so "Order Total" is never read as an order number.
+  const orderMatch = text.match(/\b(?:order|receipt|invoice)\s*#?\s*([A-Za-z0-9-]*\d[A-Za-z0-9-]{2,})/i);
+  const invoiceNumber = orderMatch ? orderMatch[1].toUpperCase() : null;
+  const totals = [...text.matchAll(/\b(?:order\s+total|total|amount)\b[^$]{0,40}\$\s?([0-9][0-9,]*\.[0-9]{2})/gi)]
+    .map((match) => Math.round(parseFloat(match[1].replace(/,/g, '')) * 100) / 100);
+  const distinctTotals = [...new Set(totals)];
+  const amount = distinctTotals.length === 1 ? distinctTotals[0] : null;
+
+  const isoDate = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
+  const namedDate = text.match(/\b([A-Z][a-z]+)\s+(\d{1,2}),\s+(\d{4})\b/);
+  let expenseDate: string | null = null;
+  if (isoDate) {
+    const iso = new Date(isoDate[1] + 'T12:00:00Z');
+    expenseDate = !Number.isNaN(iso.getTime()) && iso.toISOString().slice(0, 10) === isoDate[1] ? isoDate[1] : null;
+  } else if (namedDate) {
+    const parsed = Date.parse(`${namedDate[1]} ${namedDate[2]}, ${namedDate[3]} 12:00:00 UTC`);
+    if (!Number.isNaN(parsed)) {
+      const named = new Date(parsed);
+      if (named.getUTCFullYear() === Number(namedDate[3]) && named.getUTCMonth() === MONTHS.indexOf(namedDate[1]) && named.getUTCDate() === Number(namedDate[2])) {
+        expenseDate = named.toISOString().slice(0, 10);
+      }
+    }
+  }
+
+  // Word end + a required ':' or '#' so "points", "power tools" or "Pro Xtra" are not a PO/job name.
+  // No \b before the delimiter: a dotted label like "P.O.:" has a non-word period before the colon.
+  const jobMatch = text.match(/\b(?:job\s*name|job|p\.?\s?o\.?(?:\s*(?:number|#))?)\s*[:#]\s*([^\n\r]{2,60})/i);
+  const jobName = jobMatch ? jobMatch[1].trim() : null;
+  const attachmentName = message.attachmentNames.find((name) => /\.pdf$/i.test(name)) ?? null;
+
+  return {
+    messageId: message.id,
+    vendor: 'Home Depot',
+    invoiceNumber,
+    amount,
+    expenseDate,
+    attachmentName,
+    jobName,
+    // T2 is dry-run: job matching and the Jobber write land in T4.
+    status: 'uncertain' as const,
+    reason: 'home depot receipt: job match pending',
   };
 }
 
@@ -146,7 +225,7 @@ export async function scanInvoiceInbox(deps: {
     const status = duplicate ? 'skipped' : !key ? 'uncertain' : draft.status;
     await deps.db
       .prepare(
-        'INSERT INTO invoice_inbox_items (message_id, thread_id, vendor, invoice_number, amount, expense_date, attachment_name, dedupe_key, status, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(message_id) DO NOTHING',
+        'INSERT INTO invoice_inbox_items (message_id, thread_id, vendor, invoice_number, amount, expense_date, attachment_name, dedupe_key, status, reason, job_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(message_id) DO NOTHING',
       )
       .bind(
         message.id,
@@ -159,6 +238,7 @@ export async function scanInvoiceInbox(deps: {
         key,
         status,
         duplicate ? 'duplicate of an earlier invoice' : draft.reason,
+        draft.jobName,
       )
       .run();
     if (status === 'skipped') result.skipped++;
