@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   classifyInvoiceMessage,
   draftFromMessage,
+  htmlToText,
   invoiceDedupeKey,
   scanInvoiceInbox,
   runInvoiceInboxScan,
@@ -28,6 +29,7 @@ interface DbRow {
   invoice_number?: string | null;
   amount?: number | null;
   expense_date?: string | null;
+  job_name?: string | null;
   status?: string;
   reason?: string | null;
   jobber_expense_id?: string | null;
@@ -68,6 +70,7 @@ function db() {
               invoice_number: args[3] as string | null,
               amount: args[4] as number | null,
               expense_date: args[5] as string | null,
+              job_name: args[10] as string | null,
               status: String(args[8]),
               reason: args[9] as string | null,
               jobber_expense_id: null,
@@ -144,6 +147,29 @@ describe('invoice inbox scan', () => {
           bodyText: 'You have paid invoice #5511-R-0027 for $10.00.',
           attachmentNames: [],
         }),
+      ),
+    ).toBe(false);
+  });
+
+  it('classifies a Home Depot e-receipt with no PDF', () => {
+    expect(
+      classifyInvoiceMessage(
+        msg({
+          from: 'Home Depot <HomeDepot@email.homedepot.com>',
+          subject: 'Your Home Depot receipt for order #W12345678',
+          bodyText: 'Order Total $143.27',
+          attachmentNames: [],
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      classifyInvoiceMessage(
+        msg({ from: 'Home Depot <HomeDepot@email.homedepot.com>', subject: 'Save big this week', bodyText: 'Deals inside', attachmentNames: [] }),
+      ),
+    ).toBe(false);
+    expect(
+      classifyInvoiceMessage(
+        msg({ from: 'Home Depot <HomeDepot@email.homedepot.com>', subject: 'Black Friday deals', bodyText: 'Order now and save', attachmentNames: [] }),
       ),
     ).toBe(false);
   });
@@ -556,5 +582,60 @@ describe('invoice inbox scan', () => {
     expect(addLabel).not.toHaveBeenCalled();
     expect(store.rows[0]).toMatchObject({ status: 'logged', jobber_expense_id: 'exp-new', reason: null });
     vi.restoreAllMocks();
+  });
+});
+
+describe('Home Depot receipts (card f9e131f8 T3)', () => {
+  const receipt = (over: Partial<GmailInvoiceMessage> = {}) =>
+    msg({
+      from: 'Home Depot <HomeDepot@email.homedepot.com>',
+      subject: 'Your Home Depot receipt for order #W12345678',
+      bodyText: 'Order Total $143.27\nPlaced on November 20, 2026\nJob Name: 4123 N Kedzie',
+      attachmentNames: [],
+      ...over,
+    });
+
+  it('drafts the vendor, order number, total, date and job name', () => {
+    const draft = draftFromMessage(receipt());
+    expect([draft.vendor, draft.invoiceNumber, draft.amount, draft.expenseDate, draft.jobName, draft.status]).toEqual([
+      'Home Depot',
+      'W12345678',
+      143.27,
+      '2026-11-20',
+      '4123 N Kedzie',
+      'uncertain',
+    ]);
+    expect(draft.reason).toBe('home depot receipt: job match pending');
+  });
+
+  it('does not read a perk line as a PO/job name', () => {
+    const draft = draftFromMessage(receipt({ bodyText: 'Earn Pro Xtra points on power tools\nOrder Total $10.00' }));
+    expect(draft.jobName).toBeNull();
+  });
+
+  it('reads an HTML-only Home Depot receipt through htmlToText', () => {
+    const html = '<table><tr><td>Order #W123456</td></tr><tr><td>Order Total</td><td>&#36;143.27</td></tr><tr><td>Job Name: 4123 N Kedzie</td></tr></table>';
+    const draft = draftFromMessage(msg({
+      from: 'Home Depot <HomeDepot@email.homedepot.com>',
+      subject: 'Your Home Depot receipt for order #W123456',
+      bodyText: htmlToText(html),
+      attachmentNames: [],
+    }));
+    expect([draft.invoiceNumber, draft.amount, draft.jobName]).toEqual(['W123456', 143.27, '4123 N Kedzie']);
+  });
+
+  it('queues a Home Depot receipt on the review list and never logs it yet', async () => {
+    const store = db();
+    const result = await scanInvoiceInbox({ messages: [receipt()], db: store as unknown as D1Database });
+    expect(result).toEqual({ scanned: 1, wouldLog: 0, uncertain: 1, skipped: 0 });
+    expect(store.rows[0]).toMatchObject({ vendor: 'Home Depot', job_name: '4123 N Kedzie', status: 'uncertain' });
+  });
+
+  it('marks a repeat Home Depot receipt skipped', async () => {
+    const store = db();
+    const first = await scanInvoiceInbox({ messages: [receipt()], db: store as unknown as D1Database });
+    const second = await scanInvoiceInbox({ messages: [receipt({ id: 'm2' })], db: store as unknown as D1Database });
+    expect(first.uncertain).toBe(1);
+    expect(second.skipped).toBe(1);
   });
 });

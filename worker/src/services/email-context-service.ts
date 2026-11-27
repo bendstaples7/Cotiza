@@ -1,5 +1,6 @@
 import type { ActivityLogService } from './activity-log-service.js';
 import { buildMimeReply } from './email-ask-draft.js';
+import { htmlToText } from './invoice-inbox-scan.js';
 
 const GMAIL_API_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
 /** Invoice bodies are capped so one huge email cannot exhaust Worker memory (card fae9e3e9). */
@@ -421,7 +422,7 @@ export class EmailContextService {
     if (!accessToken) throw new Error('Gmail token refresh failed');
     const list = await this.apiFetch<GmailListResponse>(
       accessToken,
-      '/messages?q=' + encodeURIComponent('newer_than:2d (has:attachment filename:pdf OR from:messaging.squareup.com subject:"You paid an invoice")') + '&maxResults=' + limit,
+      '/messages?q=' + encodeURIComponent('newer_than:2d (has:attachment filename:pdf OR from:messaging.squareup.com subject:"You paid an invoice" OR (from:homedepot.com (subject:receipt OR subject:order)))') + '&maxResults=' + limit,
     );
     if (this.lastReadFailed) throw new Error('Gmail invoice list read failed');
     const messages: import('./invoice-inbox-scan.js').GmailInvoiceMessage[] = [];
@@ -435,7 +436,12 @@ export class EmailContextService {
         threadId: msg.threadId,
         from: this.getHeader(msg.payload?.headers ?? [], 'From'),
         subject: this.getHeader(msg.payload?.headers ?? [], 'Subject'),
-        bodyText: collected.texts.map((data) => this.decodeBase64(data, Infinity)).filter(Boolean).join('\n').slice(0, INVOICE_BODY_MAX_CHARS),
+        bodyText: (() => {
+          const text = collected.texts.map((data) => this.decodeBase64(data, Infinity)).filter(Boolean).join('\n').slice(0, INVOICE_BODY_MAX_CHARS);
+          if (text) return text;
+          const html = collected.htmls.map((data) => this.decodeBase64(data, INVOICE_HTML_MAX_CHARS)).join('\n');
+          return htmlToText(html).slice(0, INVOICE_BODY_MAX_CHARS);
+        })(),
         snippet: msg.snippet,
         attachmentNames: collected.names,
         receiptUrl: squareInvoiceLink(collected.htmls.map((data) => this.decodeBase64(data, INVOICE_HTML_MAX_CHARS)).join('\n').slice(0, INVOICE_HTML_MAX_CHARS)),
