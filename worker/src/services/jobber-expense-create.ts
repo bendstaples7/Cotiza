@@ -26,7 +26,7 @@ const EXPENSE_CREATE = `mutation AssistantExpenseCreate($input: ExpenseCreateInp
 }`;
 export const EXPENSE_CREATE_QUERIES = { EXPENSES_QUERY, EXPENSE_QUERY, EXPENSE_CREATE };
 
-const RECEIPT_HOSTS = new Set(['squareup.com', 'app.squareup.com']);
+const RECEIPT_HOSTS = new Set(['squareup.com', 'app.squareup.com', 'homedepot.com', 'www.homedepot.com']);
 const TRACKING_HOSTS = new Set(['a.squareupmessaging.com']);
 const MAX_RECEIPT_BYTES = 5 * 1024 * 1024;
 const MAX_REDIRECTS = 3;
@@ -192,13 +192,15 @@ export async function logExpense(
   fetchReceipt: ReceiptFetcher = defaultFetcher,
 ) {
   const raw = objectArgs(args);
-  onlyKeys(raw, ['sourceKey', 'title', 'description', 'date', 'total', 'receiptUrl']);
+  onlyKeys(raw, ['sourceKey', 'title', 'description', 'date', 'total', 'receiptUrl', 'noReceipt']);
   const sourceKey = text(raw, 'sourceKey', 120, true)!;
   const title = text(raw, 'title', 120, true)!;
   const description = text(raw, 'description', 2000, true)!;
   const date = requireDate(raw);
   const total = requireTotal(raw);
-  const receiptUrl = normalizeReceiptUrl(text(raw, 'receiptUrl', 2048, true)!);
+  // A no-receipt expense (a Home Depot web-link receipt) skips the PDF download entirely.
+  const noReceipt = raw.noReceipt === true;
+  const receiptUrl = noReceipt ? null : normalizeReceiptUrl(text(raw, 'receiptUrl', 2048, true)!);
   if (!mentionsSource(description, sourceKey)) {
     throw new InvalidAssistantArgs('description must contain sourceKey exactly, so the expense can be found again.');
   }
@@ -234,21 +236,24 @@ export async function logExpense(
   }
 
   // 3. Receipt: download before creating anything, then serve it from our private short-lived URL.
-  const receipt = await downloadReceipt(fetchReceipt, receiptUrl);
-  if (!receipt.ok) {
-    await release();
-    return failed('receipt_unavailable', `The receipt link could not be downloaded as a PDF (${receipt.reason}). Nothing was created.`, sourceKey, receipt.reason);
-  }
-  let jobberReceiptUrl: string;
-  try {
-    jobberReceiptUrl = await publishReceipt(target, receipt.pdf);
-  } catch (err) {
-    await release();
-    return failed('receipt_store_failed', `Could not store the receipt, so nothing was created. (${safeMessage(err)})`, sourceKey);
+  // A no-receipt expense (a Home Depot web-link receipt) is created with no attached file.
+  let jobberReceiptUrl: string | undefined;
+  if (receiptUrl) {
+    const receipt = await downloadReceipt(fetchReceipt, receiptUrl);
+    if (!receipt.ok) {
+      await release();
+      return failed('receipt_unavailable', `The receipt link could not be downloaded as a PDF (${receipt.reason}). Nothing was created.`, sourceKey, receipt.reason);
+    }
+    try {
+      jobberReceiptUrl = await publishReceipt(target, receipt.pdf);
+    } catch (err) {
+      await release();
+      return failed('receipt_store_failed', `Could not store the receipt, so nothing was created. (${safeMessage(err)})`, sourceKey);
+    }
   }
 
   // 4. Create once.
-  const input: Record<string, unknown> = { title, description, date: `${date}T12:00:00Z`, total, receiptUrl: jobberReceiptUrl };
+  const input: Record<string, unknown> = { title, description, date: `${date}T12:00:00Z`, total, ...(jobberReceiptUrl ? { receiptUrl: jobberReceiptUrl } : {}) };
   let created: { expenseCreate?: { expense?: ExpenseNode | null; userErrors?: Array<{ message?: string }> } | null };
   try {
     created = await jobber.graphqlRequest(EXPENSE_CREATE, { input });
@@ -292,7 +297,9 @@ export async function logExpense(
     expenseId,
     verified,
     expense: stored ?? mapExpense(created.expenseCreate!.expense!),
-    receipt: { submitted: true, note: 'The Jobber API cannot show receipts back. Confirm the PDF on the expense in Jobber\'s web UI.' },
+    receipt: jobberReceiptUrl
+      ? { submitted: true, note: 'The Jobber API cannot show receipts back. Confirm the PDF on the expense in Jobber\'s web UI.' }
+      : { submitted: false, note: 'No file was attached; the receipt link is in the description.' },
   };
 }
 
