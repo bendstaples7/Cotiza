@@ -323,30 +323,32 @@ async function setItem(db: D1Database, id: string, status: string, reason: strin
 /** Match each pending Home Depot row to exactly one active Jobber job (card f9e131f8 T4); reads no Jobber data otherwise. */
 export async function matchHomeDepotJobs(messages: GmailInvoiceMessage[], db: D1Database, jobber: JobberReadClient, homeDepotGoLive = true) {
   const out = { matched: 0, unmatched: 0, ambiguous: 0 };
-  const pending: Array<{ id: string; needle: string }> = [];
+  const pending: Array<{ id: string; needle: string; amount: number | null; expenseDate: string | null; dedupeKey: string | null }> = [];
   for (const m of messages) {
-    const row = await db.prepare("SELECT job_name FROM invoice_inbox_items WHERE message_id = ? AND vendor = 'Home Depot' AND status = 'uncertain'").bind(m.id).first<{ job_name: string | null }>();
-    if (row?.job_name) pending.push({ id: m.id, needle: squash(row.job_name) });
+    const row = await db.prepare("SELECT job_name, amount, expense_date, dedupe_key FROM invoice_inbox_items WHERE message_id = ? AND vendor = 'Home Depot' AND status = 'uncertain'").bind(m.id).first<{ job_name: string | null; amount: number | null; expense_date: string | null; dedupe_key: string | null }>();
+    if (row?.job_name) pending.push({ id: m.id, needle: squash(row.job_name), amount: row.amount, expenseDate: row.expense_date, dedupeKey: row.dedupe_key });
   }
   if (!pending.length) return out;
   const jobs: Array<{ id: string; keys: string[] }> = [];
   let after: string | null = null, complete = false;
   for (let page = 0; page < MAX_JOB_PAGES; page++) {
-    const reply = await jobber.graphqlRequest<{ jobs?: { edges?: Array<{ node: any }>; pageInfo?: { hasNextPage?: boolean; endCursor?: string | null } } }>(HOME_DEPOT_JOBS_QUERY, { first: JOB_PAGE_SIZE, after });
+    const reply: { jobs?: { edges?: Array<{ node: any }>; pageInfo?: { hasNextPage?: boolean; endCursor?: string | null } } } = await jobber.graphqlRequest<{ jobs?: { edges?: Array<{ node: any }>; pageInfo?: { hasNextPage?: boolean; endCursor?: string | null } } }>(HOME_DEPOT_JOBS_QUERY, { first: JOB_PAGE_SIZE, after });
     for (const { node: n } of reply.jobs?.edges ?? []) {
       if (!n.id || String(n.jobStatus ?? '').toLowerCase() === 'archived') continue;
       const a = n.property?.address;
       const keys = [n.title, n.jobNumber == null ? null : String(n.jobNumber), [a?.street1, a?.street2, a?.city, a?.province, a?.postalCode].filter(Boolean).join(' ') || null].filter(Boolean).map(squash);
       jobs.push({ id: n.id, keys });
     }
-    const info = reply.jobs?.pageInfo;
+    const info: { hasNextPage?: boolean; endCursor?: string | null } | undefined = reply.jobs?.pageInfo;
     if (!info?.hasNextPage) { complete = true; break; }
     if (!info.endCursor) break;
     after = info.endCursor;
   }
-  for (const { id, needle } of pending) {
+  for (const { id, needle, amount, expenseDate, dedupeKey } of pending) {
     if (!complete) { await setItem(db, id, 'uncertain', 'home depot receipt: job list incomplete'); out.ambiguous++; continue; }
     const hits = jobs.filter((j) => j.keys.includes(needle));
+    // Only a row that logWouldLogRows can actually log may become would_log (card f9e131f8 T4).
+    if (hits.length === 1 && (amount === null || !expenseDate || !dedupeKey)) { await setItem(db, id, 'uncertain', 'home depot receipt: missing amount, date or dedupe key'); out.ambiguous++; continue; }
     // A Home Depot match stays would_log while HOME_DEPOT_GO_LIVE is not 'true' (card f9e131f8 T5).
     if (hits.length === 1) { await db.prepare('UPDATE invoice_inbox_items SET status = ?, reason = ?, jobber_job_id = ? WHERE message_id = ?').bind('would_log', homeDepotGoLive ? null : 'home depot dry run', hits[0].id, id).run(); out.matched++; }
     else if (!hits.length) { await setItem(db, id, 'uncertain', 'home depot receipt: no matching job'); out.unmatched++; }

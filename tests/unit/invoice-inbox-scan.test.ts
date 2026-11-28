@@ -706,7 +706,9 @@ describe('Home Depot job matching (card f9e131f8 T4)', () => {
   const seed = (store: ReturnType<typeof db>, over: Partial<DbRow> = {}) => {
     store.rows.push({
       message_id: 'm1',
-      dedupe_key: '',
+      dedupe_key: 'home depot|w12345678',
+      amount: 143.27,
+      expense_date: '2026-11-20',
       vendor: 'Home Depot',
       job_name: '4123 N Kedzie',
       status: 'uncertain',
@@ -752,6 +754,15 @@ describe('Home Depot job matching (card f9e131f8 T4)', () => {
     const out = await matchHomeDepotJobs([receipt()], store as unknown as D1Database, j as never);
     expect(out).toEqual({ matched: 0, unmatched: 1, ambiguous: 0 });
     expect(store.rows[0]).toMatchObject({ status: 'uncertain', reason: 'home depot receipt: no matching job' });
+  });
+
+  it('keeps a matched Home Depot row uncertain when amount, date or dedupe key is missing', async () => {
+    const store = db();
+    seed(store, { amount: null });
+    const j = jobber([], [{ id: 'job-1', title: '4123 N Kedzie', jobStatus: 'active' }]);
+    const out = await matchHomeDepotJobs([receipt()], store as unknown as D1Database, j as never);
+    expect(out).toEqual({ matched: 0, unmatched: 0, ambiguous: 1 });
+    expect(store.rows[0]).toMatchObject({ status: 'uncertain', reason: 'home depot receipt: missing amount, date or dedupe key' });
   });
 });
 
