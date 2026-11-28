@@ -5,9 +5,11 @@ import {
   invoiceDedupeKey,
   scanInvoiceInbox,
   runInvoiceInboxScan,
+  matchHomeDepotJobs,
   type GmailInvoiceMessage,
 } from '../../worker/src/services/invoice-inbox-scan.js';
-import { EmailContextService } from '../../worker/src/services/email-context-service.js';
+import { EmailContextService, homeDepotReceiptLink } from '../../worker/src/services/email-context-service.js';
+import { EXPENSE_CREATE_QUERIES, logExpense } from '../../worker/src/services/jobber-expense-create.js';
 
 function msg(over: Partial<GmailInvoiceMessage> = {}): GmailInvoiceMessage {
   return {
@@ -32,6 +34,7 @@ interface DbRow {
   status?: string;
   reason?: string | null;
   jobber_expense_id?: string | null;
+  jobber_job_id?: string | null;
 }
 
 /** In-memory stand-in for the invoice_inbox_items table. */
@@ -56,7 +59,8 @@ function db() {
             if (row) {
               row.status = String(args[0]);
               row.reason = args[1] as string | null;
-              row.jobber_expense_id = args[2] as string | null;
+              if (sql.includes('jobber_job_id')) row.jobber_job_id = args[2] as string | null;
+              else row.jobber_expense_id = args[2] as string | null;
             }
             return { success: true };
           }
@@ -84,10 +88,23 @@ function db() {
 
 const SQUARE_LINK = 'https://a.squareupmessaging.com/CL0/https%3A%2F%2Fsquareup.com%2Finvoices%2F1/1/0101';
 
-function jobber(pages: Array<Array<Record<string, unknown>>> = []) {
+function jobber(
+  pages: Array<Array<Record<string, unknown>>> = [],
+  jobs: Array<Record<string, unknown>> = [],
+  jobPages?: Array<Array<Record<string, unknown>>>,
+) {
   let call = 0;
+  let jobCall = 0;
   return {
-    graphqlRequest: vi.fn(async () => {
+    graphqlRequest: vi.fn(async (query: string) => {
+      if (query.includes('jobs(')) {
+        if (!jobPages) return { jobs: { edges: jobs.map((node) => ({ node })), pageInfo: { hasNextPage: false, endCursor: null } } };
+        const edges = (jobPages[jobCall] ?? []).map((node) => ({ node }));
+        const hasNextPage = jobCall < jobPages.length;
+        const pageInfo = { hasNextPage, endCursor: hasNextPage ? `jcursor-${jobCall}` : null };
+        jobCall++;
+        return { jobs: { edges, pageInfo } };
+      }
       const edges = (pages[call] ?? []).map((node) => ({ node }));
       const hasNextPage = call < pages.length;
       const pageInfo = { hasNextPage, endCursor: hasNextPage ? `cursor-${call}` : null };
@@ -97,12 +114,13 @@ function jobber(pages: Array<Array<Record<string, unknown>>> = []) {
   };
 }
 
-function liveDeps(over: { log?: unknown; jobber?: ReturnType<typeof jobber> } = {}) {
+function liveDeps(over: { log?: unknown; jobber?: ReturnType<typeof jobber>; homeDepotGoLive?: boolean } = {}) {
   return {
     jobber: (over.jobber ?? jobber()) as never,
     target: { bucket: {} as never, origin: 'https://cotiza.test' },
     userId: 'invoice-inbox',
     log: (over.log ?? vi.fn()) as never,
+    ...(over.homeDepotGoLive === undefined ? {} : { homeDepotGoLive: over.homeDepotGoLive }),
   };
 }
 
@@ -667,10 +685,10 @@ describe('Home Depot receipts (card f9e131f8 T3)', () => {
       store as unknown as D1Database,
       liveDeps({ jobber: j, log }),
     );
-    vi.restoreAllMocks();
-    expect(j.graphqlRequest).not.toHaveBeenCalled();
+    expect(j.graphqlRequest).toHaveBeenCalledTimes(1);
     expect(log).not.toHaveBeenCalled();
     expect(store.rows[0]).toMatchObject({ vendor: 'Home Depot', job_name: '4123 N Kedzie', status: 'uncertain' });
+    vi.restoreAllMocks();
   });
 
   it('marks a repeat Home Depot receipt skipped', async () => {
@@ -679,5 +697,335 @@ describe('Home Depot receipts (card f9e131f8 T3)', () => {
     const second = await scanInvoiceInbox({ messages: [receipt({ id: 'm2' })], db: store as unknown as D1Database });
     expect(first.uncertain).toBe(1);
     expect(second.skipped).toBe(1);
+  });
+});
+
+describe('Home Depot job matching (card f9e131f8 T4)', () => {
+  const receipt = (over: Partial<GmailInvoiceMessage> = {}) =>
+    msg({
+      from: 'Home Depot <HomeDepot@email.homedepot.com>',
+      subject: 'Your Home Depot receipt for order #W12345678',
+      bodyText: 'Order Total $143.27\nJob Name: 4123 N Kedzie',
+      attachmentNames: [],
+      ...over,
+    });
+
+  const seed = (store: ReturnType<typeof db>, over: Partial<DbRow> = {}) => {
+    store.rows.push({
+      message_id: 'm1',
+      dedupe_key: 'home depot|w12345678',
+      amount: 143.27,
+      expense_date: '2026-11-20',
+      vendor: 'Home Depot',
+      job_name: '4123 N Kedzie',
+      status: 'uncertain',
+      reason: 'home depot receipt: job match pending',
+      ...over,
+    });
+  };
+
+  it('a Home Depot row matching one active job becomes would_log with the job id', async () => {
+    const store = db();
+    seed(store);
+    const j = jobber([], [{ id: 'job-1', title: '4123 N Kedzie', jobStatus: 'active' }]);
+    const out = await matchHomeDepotJobs([receipt()], store as unknown as D1Database, j as never);
+    expect(out).toEqual({ matched: 1, unmatched: 0, ambiguous: 0 });
+    expect(store.rows[0]).toMatchObject({ status: 'would_log', jobber_job_id: 'job-1', reason: null });
+  });
+
+  it('a Home Depot row matching no job stays uncertain', async () => {
+    const store = db();
+    seed(store);
+    const j = jobber([], [{ id: 'job-1', title: 'Some Other Job', jobStatus: 'active' }]);
+    const out = await matchHomeDepotJobs([receipt()], store as unknown as D1Database, j as never);
+    expect(out).toEqual({ matched: 0, unmatched: 1, ambiguous: 0 });
+    expect(store.rows[0]).toMatchObject({ status: 'uncertain', reason: 'home depot receipt: no matching job' });
+  });
+
+  it('leaves a Home Depot row uncertain when the job list is incomplete', async () => {
+    const store = db();
+    seed(store);
+    const j = jobber([], [], Array.from({ length: 11 }, (_, i) => [{ id: `job-${i}`, title: `Job ${i}`, jobStatus: 'active' }]));
+    const out = await matchHomeDepotJobs([receipt()], store as unknown as D1Database, j as never);
+    expect(out).toEqual({ matched: 0, unmatched: 0, ambiguous: 1 });
+    expect(store.rows[0]).toMatchObject({ status: 'uncertain', reason: 'home depot receipt: job list incomplete' });
+  });
+
+  it('a Home Depot row matching several jobs stays uncertain', async () => {
+    const store = db();
+    seed(store);
+    const j = jobber([], [
+      { id: 'job-1', title: '4123 N Kedzie', jobStatus: 'active' },
+      { id: 'job-2', title: '4123 N Kedzie', jobStatus: 'active' },
+    ]);
+    const out = await matchHomeDepotJobs([receipt()], store as unknown as D1Database, j as never);
+    expect(out).toEqual({ matched: 0, unmatched: 0, ambiguous: 1 });
+    expect(store.rows[0]).toMatchObject({ status: 'uncertain', reason: 'home depot receipt: several matching jobs' });
+  });
+
+  it('an archived job is not a match', async () => {
+    const store = db();
+    seed(store);
+    const j = jobber([], [{ id: 'job-1', title: '4123 N Kedzie', jobStatus: 'archived' }]);
+    const out = await matchHomeDepotJobs([receipt()], store as unknown as D1Database, j as never);
+    expect(out).toEqual({ matched: 0, unmatched: 1, ambiguous: 0 });
+    expect(store.rows[0]).toMatchObject({ status: 'uncertain', reason: 'home depot receipt: no matching job' });
+  });
+
+  it('keeps a matched Home Depot row uncertain when amount, date or dedupe key is missing', async () => {
+    const store = db();
+    seed(store, { amount: null });
+    const j = jobber([], [{ id: 'job-1', title: '4123 N Kedzie', jobStatus: 'active' }]);
+    const out = await matchHomeDepotJobs([receipt()], store as unknown as D1Database, j as never);
+    expect(out).toEqual({ matched: 0, unmatched: 0, ambiguous: 1 });
+    expect(store.rows[0]).toMatchObject({ status: 'uncertain', reason: 'home depot receipt: missing amount, date or dedupe key' });
+  });
+});
+
+describe('Home Depot receipt logging (card f9e131f8 T8)', () => {
+  const HD_LINK = 'https://www.homedepot.com/order/view/W12345678';
+  const receipt = (over: Partial<GmailInvoiceMessage> = {}) =>
+    msg({
+      from: 'Home Depot <HomeDepot@email.homedepot.com>',
+      subject: 'Your Home Depot receipt for order #W12345678',
+      bodyText: 'Order Total $143.27\nPlaced on November 20, 2026\nJob Name: 4123 N Kedzie',
+      attachmentNames: [],
+      receiptUrl: HD_LINK,
+      ...over,
+    });
+
+  it('reads the one Home Depot link from an email body', () => {
+    expect(homeDepotReceiptLink(`<a href="${HD_LINK}">receipt</a>`)).toBe(HD_LINK);
+    expect(homeDepotReceiptLink('no link here')).toBeNull();
+    // Tracking parameters are dropped, so the same order link twice is still one link.
+    expect(homeDepotReceiptLink(`${HD_LINK} ${HD_LINK}?x=1`)).toBe(HD_LINK);
+    expect(homeDepotReceiptLink(HD_LINK.replace('https', 'http'))).toBeNull();
+  });
+
+  it('a matched Home Depot receipt with only an HTML link is logged once with the link in the description', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const j = jobber([], [{ id: 'job-1', title: '4123 N Kedzie', jobStatus: 'active' }]);
+    const log = vi.fn()
+      .mockResolvedValueOnce({ outcome: 'failed' as const, failure: { code: 'receipt_unavailable', message: 'not a PDF', detail: 'not_a_pdf' } })
+      .mockResolvedValueOnce({ outcome: 'created' as const, expenseId: 'exp-hd', verified: true });
+    await runInvoiceInboxScan(
+      { fetchMailboxAddress: () => Promise.resolve('b@x.com'), fetchInvoiceMessages: () => Promise.resolve([receipt()]) },
+      store as unknown as D1Database,
+      liveDeps({ jobber: j, log, homeDepotGoLive: true }),
+    );
+    expect(log).toHaveBeenCalledTimes(2);
+    const retry = log.mock.calls[1][4] as { noReceipt?: boolean; description: string };
+    expect(retry.noReceipt).toBe(true);
+    expect(retry.description).toContain('W12345678');
+    expect(retry.description).toContain(HD_LINK);
+    expect(store.rows[0]).toMatchObject({ status: 'logged', reason: 'no PDF receipt; link in description', jobber_expense_id: 'exp-hd' });
+    vi.restoreAllMocks();
+  });
+
+  it('a Home Depot receipt with no receipt link stays uncertain', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const j = jobber([], [{ id: 'job-1', title: '4123 N Kedzie', jobStatus: 'active' }]);
+    const log = vi.fn();
+    await runInvoiceInboxScan(
+      { fetchMailboxAddress: () => Promise.resolve('b@x.com'), fetchInvoiceMessages: () => Promise.resolve([receipt({ receiptUrl: null })]) },
+      store as unknown as D1Database,
+      liveDeps({ jobber: j, log, homeDepotGoLive: true }),
+    );
+    vi.restoreAllMocks();
+    expect(log).not.toHaveBeenCalled();
+    expect(store.rows[0]).toMatchObject({ status: 'uncertain' });
+  });
+
+  it('logExpense with no receipt file creates one expense with the link in the description and no attachment', async () => {
+    const rows = new Map<string, { status: string; jobber_expense_id: string | null }>();
+    const db = {
+      prepare(sql: string) {
+        return {
+          bind(...args: unknown[]) {
+            return {
+              async run() {
+                const key = (sql.includes('UPDATE') ? args[2] : args[0]) as string;
+                if (sql.includes('INSERT')) {
+                  if (rows.has(key)) return { meta: { changes: 0 } };
+                  rows.set(key, { status: 'pending', jobber_expense_id: null });
+                  return { meta: { changes: 1 } };
+                }
+                if (sql.includes('DELETE')) { rows.delete(key); return { meta: { changes: 1 } }; }
+                if (sql.includes('UPDATE')) { const r = rows.get(key); if (r) Object.assign(r, { status: args[0], jobber_expense_id: args[1] }); return { meta: { changes: 1 } }; }
+                throw new Error(sql);
+              },
+              async first() { return rows.get(args[0] as string) ?? null; },
+            };
+          },
+        };
+      },
+    };
+    const title = 'Home Depot W12345678';
+    const description = `Home Depot order #W12345678 (hd-w12345678) receipt: ${HD_LINK}`;
+    const create = { expenseCreate: { expense: { id: 'exp-hd', title, total: 143.27, date: '2026-11-20T12:00:00Z' }, userErrors: [] } };
+    const j = {
+      graphqlRequest: vi.fn(async (query: string, vars?: Record<string, unknown>) => {
+        if (query === EXPENSE_CREATE_QUERIES.EXPENSES_QUERY) return { expenses: { edges: [] } };
+        if (query === EXPENSE_CREATE_QUERIES.EXPENSE_CREATE) return create;
+        if (query === EXPENSE_CREATE_QUERIES.EXPENSE_QUERY) return { expense: { id: vars?.id, title, total: 143.27, date: '2026-11-20T12:00:00Z' } };
+        throw new Error('unexpected query');
+      }),
+    };
+    const fetchReceipt = vi.fn();
+    const r = await logExpense(
+      j as never,
+      db as never,
+      { bucket: {} as never, origin: 'https://cotiza.test' },
+      'u',
+      { sourceKey: 'hd-w12345678', title, description, date: '2026-11-20', total: 143.27, noReceipt: true },
+      fetchReceipt as never,
+    );
+    expect(r).toMatchObject({ outcome: 'created', expenseId: 'exp-hd', verified: true });
+    const creates = j.graphqlRequest.mock.calls.filter(([q]) => q === EXPENSE_CREATE_QUERIES.EXPENSE_CREATE);
+    expect(creates).toHaveLength(1);
+    const input = (creates[0][1] as { input: Record<string, unknown> }).input;
+    expect('receiptUrl' in input).toBe(false);
+    expect(input.description).toContain(HD_LINK);
+    expect(fetchReceipt).not.toHaveBeenCalled();
+  });
+});
+
+describe('Home Depot job linking and dry run (card f9e131f8 T4/T8)', () => {
+  const HD_LINK = 'https://www.homedepot.com/order/view/W12345678';
+  const hdReceipt = (over: Partial<GmailInvoiceMessage> = {}) =>
+    msg({
+      from: 'Home Depot <HomeDepot@email.homedepot.com>',
+      subject: 'Your Home Depot receipt for order #W12345678',
+      bodyText: 'Order Total $143.27\nPlaced on November 20, 2026\nJob Name: 4123 N Kedzie',
+      attachmentNames: [],
+      receiptUrl: HD_LINK,
+      ...over,
+    });
+
+  it('passes the matched job id to log as jobId for a Home Depot row', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const j = jobber([], [{ id: 'job-1', title: '4123 N Kedzie', jobStatus: 'active' }]);
+    const log = vi.fn(async () => ({ outcome: 'created' as const, expenseId: 'exp-hd', verified: true }));
+    await runInvoiceInboxScan(
+      { fetchMailboxAddress: () => Promise.resolve('b@x.com'), fetchInvoiceMessages: () => Promise.resolve([hdReceipt()]) },
+      store as unknown as D1Database,
+      liveDeps({ jobber: j, log, homeDepotGoLive: true }),
+    );
+    expect(log).toHaveBeenCalledTimes(1);
+    expect((log.mock.calls[0][4] as { jobId?: string }).jobId).toBe('job-1');
+    expect(store.rows[0]).toMatchObject({ status: 'logged', jobber_expense_id: 'exp-hd' });
+    vi.restoreAllMocks();
+  });
+
+  it('sends no jobId for a row with no matched job', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const log = vi.fn(async () => ({ outcome: 'created' as const, expenseId: 'exp-sq', verified: true }));
+    await runInvoiceInboxScan(
+      { fetchMailboxAddress: () => Promise.resolve('b@x.com'), fetchInvoiceMessages: () => Promise.resolve([msg({ receiptUrl: SQUARE_LINK })]) },
+      store as unknown as D1Database,
+      liveDeps({ jobber: jobber(), log }),
+    );
+    expect(log).toHaveBeenCalledTimes(1);
+    expect((log.mock.calls[0][4] as { jobId?: string }).jobId).toBeUndefined();
+    expect(store.rows[0]).toMatchObject({ status: 'logged' });
+    vi.restoreAllMocks();
+  });
+
+  it('logExpense links the expense to jobId and omits linkedJobId without it', async () => {
+    const rows = new Map<string, { status: string; jobber_expense_id: string | null }>();
+    const store = {
+      prepare(sql: string) {
+        return {
+          bind(...args: unknown[]) {
+            return {
+              async run() {
+                const key = (sql.includes('UPDATE') ? args[2] : args[0]) as string;
+                if (sql.includes('INSERT')) {
+                  if (rows.has(key)) return { meta: { changes: 0 } };
+                  rows.set(key, { status: 'pending', jobber_expense_id: null });
+                  return { meta: { changes: 1 } };
+                }
+                if (sql.includes('DELETE')) { rows.delete(key); return { meta: { changes: 1 } }; }
+                if (sql.includes('UPDATE')) { const r = rows.get(key); if (r) Object.assign(r, { status: args[0], jobber_expense_id: args[1] }); return { meta: { changes: 1 } }; }
+                throw new Error(sql);
+              },
+              async first() { return rows.get(args[0] as string) ?? null; },
+            };
+          },
+        };
+      },
+    };
+    const title = 'Home Depot W12345678';
+    const j = {
+      graphqlRequest: vi.fn(async (query: string, vars?: Record<string, unknown>) => {
+        if (query === EXPENSE_CREATE_QUERIES.EXPENSES_QUERY) return { expenses: { edges: [] } };
+        if (query === EXPENSE_CREATE_QUERIES.EXPENSE_CREATE) return { expenseCreate: { expense: { id: 'exp-hd', title, total: 143.27, date: '2026-11-20T12:00:00Z' }, userErrors: [] } };
+        if (query === EXPENSE_CREATE_QUERIES.EXPENSE_QUERY) return { expense: { id: vars?.id, title, total: 143.27, date: '2026-11-20T12:00:00Z' } };
+        throw new Error('unexpected query');
+      }),
+    };
+    const target = { bucket: {} as never, origin: 'https://cotiza.test' };
+    const base = { title, date: '2026-11-20', total: 143.27, noReceipt: true };
+    await logExpense(j as never, store as never, target, 'u', { ...base, sourceKey: 'hd-w1', description: 'Home Depot order #W1 (hd-w1)', jobId: 'job-1' }, vi.fn() as never);
+    await logExpense(j as never, store as never, target, 'u', { ...base, sourceKey: 'hd-w2', description: 'Home Depot order #W2 (hd-w2)' }, vi.fn() as never);
+    const creates = j.graphqlRequest.mock.calls.filter(([q]) => q === EXPENSE_CREATE_QUERIES.EXPENSE_CREATE);
+    expect(creates).toHaveLength(2);
+    expect((creates[0][1] as { input: Record<string, unknown> }).input.linkedJobId).toBe('job-1');
+    expect('linkedJobId' in (creates[1][1] as { input: Record<string, unknown> }).input).toBe(false);
+  });
+
+  it('rejects a jobId that is not a Jobber encoded id', async () => {
+    const j = { graphqlRequest: vi.fn() };
+    await expect(logExpense(
+      j as never,
+      { prepare: () => ({ bind: () => ({ run: async () => ({ meta: { changes: 1 } }), first: async () => null }) }) } as never,
+      { bucket: {} as never, origin: 'https://cotiza.test' },
+      'u',
+      { sourceKey: 'hd-w3', title: 'Home Depot W3', description: 'Home Depot order #W3 (hd-w3)', date: '2026-11-20', total: 143.27, noReceipt: true, jobId: 'not a real id!' },
+      vi.fn() as never,
+    )).rejects.toThrow(/jobId/);
+    expect(j.graphqlRequest).not.toHaveBeenCalled();
+  });
+
+  it('keeps a matched Home Depot row would_log on dry run while still logging a Square row', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const j = jobber([], [{ id: 'job-1', title: '4123 N Kedzie', jobStatus: 'active' }]);
+    const log = vi.fn(async () => ({ outcome: 'created' as const, expenseId: 'exp-sq', verified: true }));
+    await runInvoiceInboxScan(
+      {
+        fetchMailboxAddress: () => Promise.resolve('b@x.com'),
+        fetchInvoiceMessages: () => Promise.resolve([
+          hdReceipt(),
+          msg({ id: 'm2', subject: 'Invoice #5511-R-0025', receiptUrl: SQUARE_LINK }),
+        ]),
+      },
+      store as unknown as D1Database,
+      liveDeps({ jobber: j, log, homeDepotGoLive: false }),
+    );
+    expect(log).toHaveBeenCalledTimes(1);
+    expect((log.mock.calls[0][4] as { sourceKey: string }).sourceKey).toBe('20four7va|5511-r-0025');
+    expect(store.rows.find((row) => row.message_id === 'm1')).toMatchObject({ status: 'would_log', reason: 'home depot dry run' });
+    expect(store.rows.find((row) => row.message_id === 'm2')).toMatchObject({ status: 'logged' });
+    vi.restoreAllMocks();
+  });
+
+  it('logs a matched Home Depot row once when HOME_DEPOT_GO_LIVE is true', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const j = jobber([], [{ id: 'job-1', title: '4123 N Kedzie', jobStatus: 'active' }]);
+    const log = vi.fn(async () => ({ outcome: 'created' as const, expenseId: 'exp-hd', verified: true }));
+    await runInvoiceInboxScan(
+      { fetchMailboxAddress: () => Promise.resolve('b@x.com'), fetchInvoiceMessages: () => Promise.resolve([hdReceipt()]) },
+      store as unknown as D1Database,
+      liveDeps({ jobber: j, log, homeDepotGoLive: true }),
+    );
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(store.rows[0]).toMatchObject({ status: 'logged', jobber_expense_id: 'exp-hd' });
+    vi.restoreAllMocks();
   });
 });

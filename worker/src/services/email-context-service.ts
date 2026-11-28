@@ -460,7 +460,11 @@ export class EmailContextService {
         })(),
         snippet: msg.snippet,
         attachmentNames: collected.names,
-        receiptUrl: squareInvoiceLink(collected.htmls.map((data) => this.decodeBase64(data, INVOICE_HTML_MAX_CHARS)).join('\n').slice(0, INVOICE_HTML_MAX_CHARS)),
+        receiptUrl: (() => {
+          // A Home Depot e-receipt is a web link, not a PDF; keep it for T8, but only for a Home Depot sender.
+          const html = collected.htmls.map((data) => this.decodeBase64(data, INVOICE_HTML_MAX_CHARS)).join('\n').slice(0, INVOICE_HTML_MAX_CHARS);
+          return squareInvoiceLink(html) ?? (/@(?:[a-z0-9-]+\.)*homedepot\.com(?![.\w-])/i.test(this.getHeader(msg.payload?.headers ?? [], 'From')) ? homeDepotReceiptLink(html) : null);
+        })(),
       });
     }
     return messages;
@@ -643,6 +647,18 @@ export function squareInvoiceLink(html: string): string | null {
     } else if ((url.hostname === 'squareup.com' || url.hostname === 'app.squareup.com') && /^\/(?:invoices?|receipts?)(?:\/|$)/.test(url.pathname)) {
       links.add(url.toString());
     }
+  }
+  return links.size === 1 ? [...links][0] : null;
+}
+
+/** The one Home Depot order/receipt link in an email body; null when none or more than one. Requires https and compares without query/fragment, so tracking parameters do not hide the order. */
+export function homeDepotReceiptLink(html: string): string | null {
+  const links = new Set<string>();
+  for (const match of html.matchAll(/https:\/\/[^\s"'<>()]+/g)) {
+    let url: URL;
+    try { url = new URL(match[0].replace(/&amp;/g, '&')); } catch { continue; }
+    if (!/^(?:www\.)?homedepot\.com$/.test(url.hostname) || url.username || url.password) continue;
+    links.add(`${url.origin}${url.pathname}`);
   }
   return links.size === 1 ? [...links][0] : null;
 }

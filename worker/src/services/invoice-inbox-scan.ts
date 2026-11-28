@@ -12,6 +12,14 @@ const HOME_DEPOT_RECEIPT = /\b(?:receipt|order|purchase|e-?receipt)\b/i;
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const MAX_PER_RUN = 25;
 
+const HOME_DEPOT_JOBS_QUERY = `query InvoiceInboxJobs($first: Int!, $after: String) {
+  jobs(first: $first, after: $after) { edges { node { id jobNumber title jobStatus property { address { street1 street2 city province postalCode } } } } pageInfo { hasNextPage endCursor } }
+}`;
+const JOB_PAGE_SIZE = 100;
+const MAX_JOB_PAGES = 10;
+/** Lowercase, letters and digits only, so "77 Elm St." and "77 elm street" compare. */
+const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+
 export interface GmailInvoiceMessage {
   id: string;
   threadId: string;
@@ -248,10 +256,10 @@ export async function scanInvoiceInbox(deps: {
   return result;
 }
 
-interface WouldLogRow { status: string; dedupe_key: string | null; vendor: string | null; invoice_number: string | null; amount: number | null; expense_date: string | null }
+interface WouldLogRow { status: string; dedupe_key: string | null; vendor: string | null; invoice_number: string | null; amount: number | null; expense_date: string | null; jobber_job_id: string | null }
 interface ExpenseNode { id?: string; title?: string | null; description?: string | null; total?: number | null; date?: string | null }
 interface ExistingExpense { found: ExpenseNode | null; complete: boolean }
-export interface InvoiceLiveDeps { jobber: JobberReadClient; target: ReceiptTarget; userId: string; log?: typeof logExpense; fetchReceipt?: ReceiptFetcher; label?: (messageId: string) => Promise<{ ok: true } | { ok: false; reason: string }> }
+export interface InvoiceLiveDeps { jobber: JobberReadClient; target: ReceiptTarget; userId: string; log?: typeof logExpense; fetchReceipt?: ReceiptFetcher; label?: (messageId: string) => Promise<{ ok: true } | { ok: false; reason: string }>; homeDepotGoLive?: boolean }
 
 const DAY_MS = 86_400_000;
 const EXPENSE_PAGE_SIZE = 100;
@@ -312,6 +320,43 @@ async function setItem(db: D1Database, id: string, status: string, reason: strin
     .run();
 }
 
+/** Match each pending Home Depot row to exactly one active Jobber job (card f9e131f8 T4); reads no Jobber data otherwise. */
+export async function matchHomeDepotJobs(messages: GmailInvoiceMessage[], db: D1Database, jobber: JobberReadClient, homeDepotGoLive = true) {
+  const out = { matched: 0, unmatched: 0, ambiguous: 0 };
+  const pending: Array<{ id: string; needle: string; amount: number | null; expenseDate: string | null; dedupeKey: string | null }> = [];
+  for (const m of messages) {
+    const row = await db.prepare("SELECT job_name, amount, expense_date, dedupe_key FROM invoice_inbox_items WHERE message_id = ? AND vendor = 'Home Depot' AND status = 'uncertain'").bind(m.id).first<{ job_name: string | null; amount: number | null; expense_date: string | null; dedupe_key: string | null }>();
+    if (row?.job_name) pending.push({ id: m.id, needle: squash(row.job_name), amount: row.amount, expenseDate: row.expense_date, dedupeKey: row.dedupe_key });
+  }
+  if (!pending.length) return out;
+  const jobs: Array<{ id: string; keys: string[] }> = [];
+  let after: string | null = null, complete = false;
+  for (let page = 0; page < MAX_JOB_PAGES; page++) {
+    const reply: { jobs?: { edges?: Array<{ node: any }>; pageInfo?: { hasNextPage?: boolean; endCursor?: string | null } } } = await jobber.graphqlRequest<{ jobs?: { edges?: Array<{ node: any }>; pageInfo?: { hasNextPage?: boolean; endCursor?: string | null } } }>(HOME_DEPOT_JOBS_QUERY, { first: JOB_PAGE_SIZE, after });
+    for (const { node: n } of reply.jobs?.edges ?? []) {
+      if (!n.id || String(n.jobStatus ?? '').toLowerCase() === 'archived') continue;
+      const a = n.property?.address;
+      const keys = [n.title, n.jobNumber == null ? null : String(n.jobNumber), [a?.street1, a?.street2, a?.city, a?.province, a?.postalCode].filter(Boolean).join(' ') || null].filter(Boolean).map(squash);
+      jobs.push({ id: n.id, keys });
+    }
+    const info: { hasNextPage?: boolean; endCursor?: string | null } | undefined = reply.jobs?.pageInfo;
+    if (!info?.hasNextPage) { complete = true; break; }
+    if (!info.endCursor) break;
+    after = info.endCursor;
+  }
+  for (const { id, needle, amount, expenseDate, dedupeKey } of pending) {
+    if (!complete) { await setItem(db, id, 'uncertain', 'home depot receipt: job list incomplete'); out.ambiguous++; continue; }
+    const hits = jobs.filter((j) => j.keys.includes(needle));
+    // Only a row that logWouldLogRows can actually log may become would_log (card f9e131f8 T4).
+    if (hits.length === 1 && (amount === null || !expenseDate || !dedupeKey)) { await setItem(db, id, 'uncertain', 'home depot receipt: missing amount, date or dedupe key'); out.ambiguous++; continue; }
+    // A Home Depot match stays would_log while HOME_DEPOT_GO_LIVE is not 'true' (card f9e131f8 T5).
+    if (hits.length === 1) { await db.prepare('UPDATE invoice_inbox_items SET status = ?, reason = ?, jobber_job_id = ? WHERE message_id = ?').bind('would_log', homeDepotGoLive ? null : 'home depot dry run', hits[0].id, id).run(); out.matched++; }
+    else if (!hits.length) { await setItem(db, id, 'uncertain', 'home depot receipt: no matching job'); out.unmatched++; }
+    else { await setItem(db, id, 'uncertain', 'home depot receipt: several matching jobs'); out.ambiguous++; }
+  }
+  return out;
+}
+
 /** Create the would_log rows in Jobber once each; never retries an unknown reply. */
 async function logWouldLogRows(
   messages: GmailInvoiceMessage[],
@@ -322,10 +367,12 @@ async function logWouldLogRows(
   const result = { logged: 0, skipped: 0, uncertain: 0 };
   for (const message of messages.slice(0, MAX_PER_RUN)) {
     const row = await db
-      .prepare('SELECT status, dedupe_key, vendor, invoice_number, amount, expense_date FROM invoice_inbox_items WHERE message_id = ?')
+      .prepare('SELECT status, dedupe_key, vendor, invoice_number, amount, expense_date, jobber_job_id FROM invoice_inbox_items WHERE message_id = ?')
       .bind(message.id)
       .first<WouldLogRow>();
     if (!row || row.status !== 'would_log' || !row.dedupe_key || row.amount === null || !row.expense_date) continue;
+    // Home Depot logging is off until HOME_DEPOT_GO_LIVE is 'true'; leave the matched row would_log.
+    if ((row.vendor ?? '') === 'Home Depot' && live.homeDepotGoLive !== true) continue;
     if (!message.receiptUrl) {
       await setItem(db, message.id, 'uncertain', 'no receipt link in the email');
       result.uncertain++;
@@ -350,23 +397,28 @@ async function logWouldLogRows(
       continue;
     }
     const vendor = row.vendor ?? '';
+    const homeDepot = vendor === 'Home Depot';
+    const base = {
+      sourceKey: row.dedupe_key,
+      title: `${vendor} ${row.invoice_number ?? ''}`.trim().slice(0, 120),
+      // A Home Depot e-receipt is a web link, not a PDF: the order number and link go in the
+      // description, and the row is logged with no file when the link is not a PDF.
+      description: homeDepot
+        ? `${vendor} order #${row.invoice_number ?? ''} (${row.dedupe_key})${message.receiptUrl ? ` receipt: ${message.receiptUrl}` : ''}`
+        : `${vendor} invoice #${row.invoice_number ?? ''} (${row.dedupe_key})`,
+      date: row.expense_date,
+      total: row.amount,
+      // The matched Jobber job, when there is one, links the expense (card f9e131f8 T4/T8).
+      jobId: row.jobber_job_id ?? undefined,
+    };
     let outcome: Awaited<ReturnType<typeof log>>;
+    let noFile = false;
     try {
-      outcome = await log(
-        live.jobber,
-        db,
-        live.target,
-        live.userId,
-        {
-          sourceKey: row.dedupe_key,
-          title: `${vendor} ${row.invoice_number ?? ''}`.trim().slice(0, 120),
-          description: `${vendor} invoice #${row.invoice_number ?? ''} (${row.dedupe_key})`,
-          date: row.expense_date,
-          total: row.amount,
-          receiptUrl: message.receiptUrl,
-        },
-        live.fetchReceipt,
-      );
+      outcome = await log(live.jobber, db, live.target, live.userId, { ...base, receiptUrl: message.receiptUrl }, live.fetchReceipt);
+      if (homeDepot && outcome.outcome === 'failed' && outcome.failure.code === 'receipt_unavailable') {
+        noFile = true;
+        outcome = await log(live.jobber, db, live.target, live.userId, { ...base, noReceipt: true }, live.fetchReceipt);
+      }
     } catch (err) {
       await setItem(db, message.id, 'uncertain', err instanceof Error ? err.message : 'log_expense threw');
       result.uncertain++;
@@ -374,7 +426,7 @@ async function logWouldLogRows(
     }
     const expenseId = 'expenseId' in outcome ? outcome.expenseId : null;
     if ((outcome.outcome === 'created' || outcome.outcome === 'duplicate') && expenseId) {
-      await setItem(db, message.id, 'logged', null, expenseId);
+      await setItem(db, message.id, 'logged', noFile ? 'no PDF receipt; link in description' : null, expenseId);
       result.logged++;
       // A missing label scope must not undo a logged row; keep it logged and record the note.
       const applied = await live.label?.(message.id);
@@ -420,6 +472,8 @@ export async function runInvoiceInboxScan(
         ...live,
         label: live.label ?? (addLabel ? (id: string) => addLabel(id, 'Cotiza/Logged') : undefined),
       };
+      const matched = await matchHomeDepotJobs(messages, db, withLabel.jobber, withLabel.homeDepotGoLive === true);
+      console.log(`[invoice-inbox] home-depot matched=${matched.matched} unmatched=${matched.unmatched} ambiguous=${matched.ambiguous}`);
       const pass = await logWouldLogRows(messages, db, withLabel);
       console.log(`[invoice-inbox] logged=${pass.logged} skipped=${pass.skipped} uncertain=${pass.uncertain}`);
     }

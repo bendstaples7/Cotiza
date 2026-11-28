@@ -203,4 +203,14 @@ describe('attach_expense_receipt via receiptUrl', () => {
     expect(bucket.put).not.toHaveBeenCalled();
     expect(graphqlRequest).not.toHaveBeenCalled();
   });
+
+  it('refuses a Home Depot link, which is Square-only for attach_expense_receipt', async () => {
+    const graphqlRequest = vi.fn();
+    const bucket = createMockR2();
+    const fetcher = vi.fn().mockResolvedValue(pdfResponse());
+    await expect(callExpenseWriteTool({ graphqlRequest } as never, { bucket, origin: 'https://worker.test' } as never, 'attach_expense_receipt', { expenseId: 'exp-1', receiptUrl: 'https://www.homedepot.com/order/view/W1' }, fetcher)).rejects.toThrow(/must be an https link/);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(bucket.put).not.toHaveBeenCalled();
+    expect(graphqlRequest).not.toHaveBeenCalled();
+  });
 });

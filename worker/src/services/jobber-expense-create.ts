@@ -19,7 +19,7 @@ const EXPENSES_QUERY = `query AssistantExpenseDupes($first: Int!, $searchTerm: S
   expenses(first: $first, searchTerm: $searchTerm) { edges { node { id title description total date } } }
 }`;
 const EXPENSE_QUERY = `query AssistantExpenseCreated($id: EncodedId!) {
-  expense(id: $id) { id title description total date }
+  expense(id: $id) { id title description total date linkedJob { id } }
 }`;
 const EXPENSE_CREATE = `mutation AssistantExpenseCreate($input: ExpenseCreateInput!) {
   expenseCreate(input: $input) { expense { id title description total date } userErrors { message path } }
@@ -27,11 +27,13 @@ const EXPENSE_CREATE = `mutation AssistantExpenseCreate($input: ExpenseCreateInp
 export const EXPENSE_CREATE_QUERIES = { EXPENSES_QUERY, EXPENSE_QUERY, EXPENSE_CREATE };
 
 const RECEIPT_HOSTS = new Set(['squareup.com', 'app.squareup.com']);
+// Only logExpense's own receipt path accepts a Home Depot web link, never attach_expense_receipt.
+const HOME_DEPOT_HOSTS = new Set(['homedepot.com', 'www.homedepot.com']);
 const TRACKING_HOSTS = new Set(['a.squareupmessaging.com']);
 const MAX_RECEIPT_BYTES = 5 * 1024 * 1024;
 const MAX_REDIRECTS = 3;
 
-interface ExpenseNode { id?: string; title?: string | null; description?: string | null; total?: number | null; date?: string | null }
+interface ExpenseNode { id?: string; title?: string | null; description?: string | null; total?: number | null; date?: string | null; linkedJob?: { id?: string | null } | null }
 
 function objectArgs(args: unknown): Record<string, unknown> {
   if (args === undefined || args === null) return {};
@@ -76,19 +78,20 @@ function requireTotal(raw: Record<string, unknown>): number {
   return Math.round(value * 100) / 100;
 }
 
-function allowedReceiptUrl(url: URL): boolean {
-  return url.protocol === 'https:' && RECEIPT_HOSTS.has(url.hostname) && !url.username && !url.password;
+function allowedReceiptUrl(url: URL, hosts: Set<string> = RECEIPT_HOSTS): boolean {
+  return url.protocol === 'https:' && hosts.has(url.hostname) && !url.username && !url.password;
 }
 
-/** Accept a direct Square invoice link or a Square click-tracking wrapper around one. */
-export function normalizeReceiptUrl(raw: string): string {
+/** Accept a direct Square invoice link or a Square click-tracking wrapper around one. Home Depot links are allowed only on logExpense's own receipt path. */
+export function normalizeReceiptUrl(raw: string, allowHomeDepot = false): string {
   let url: URL;
   try { url = new URL(raw); } catch { throw new InvalidAssistantArgs('receiptUrl is not a valid URL.'); }
   if (TRACKING_HOSTS.has(url.hostname) && url.pathname.startsWith('/CL0/')) {
     const wrapped = url.pathname.slice('/CL0/'.length).split('/')[0];
     try { url = new URL(decodeURIComponent(wrapped)); } catch { throw new InvalidAssistantArgs('receiptUrl tracking link does not wrap a valid URL.'); }
   }
-  if (!allowedReceiptUrl(url)) throw new InvalidAssistantArgs(`receiptUrl must be an https link on ${[...RECEIPT_HOSTS].join(' or ')}.`);
+  const hosts = allowHomeDepot ? new Set([...RECEIPT_HOSTS, ...HOME_DEPOT_HOSTS]) : RECEIPT_HOSTS;
+  if (!allowedReceiptUrl(url, hosts)) throw new InvalidAssistantArgs(`receiptUrl must be an https link on ${[...hosts].join(' or ')}.`);
   return url.toString();
 }
 
@@ -121,7 +124,8 @@ async function readBounded(body: ReadableStream<Uint8Array> | null): Promise<Uin
 }
 
 /** Download the receipt PDF, following redirects by hand so every hop stays on an allowed host. */
-async function downloadReceipt(fetcher: ReceiptFetcher, url: string): Promise<{ ok: true; pdf: Uint8Array } | { ok: false; reason: string }> {
+async function downloadReceipt(fetcher: ReceiptFetcher, url: string, allowHomeDepot = false): Promise<{ ok: true; pdf: Uint8Array } | { ok: false; reason: string }> {
+  const hosts = allowHomeDepot ? new Set([...RECEIPT_HOSTS, ...HOME_DEPOT_HOSTS]) : RECEIPT_HOSTS;
   let current = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     let response: Response;
@@ -131,7 +135,7 @@ async function downloadReceipt(fetcher: ReceiptFetcher, url: string): Promise<{ 
       const location = response.headers.get('location');
       let next: URL;
       try { next = new URL(location ?? '', current); } catch { return { ok: false, reason: 'bad_redirect' }; }
-      if (!location || !allowedReceiptUrl(next)) return { ok: false, reason: 'redirect_off_allowlist' };
+      if (!location || !allowedReceiptUrl(next, hosts)) return { ok: false, reason: 'redirect_off_allowlist' };
       current = next.toString();
       continue;
     }
@@ -192,13 +196,21 @@ export async function logExpense(
   fetchReceipt: ReceiptFetcher = defaultFetcher,
 ) {
   const raw = objectArgs(args);
-  onlyKeys(raw, ['sourceKey', 'title', 'description', 'date', 'total', 'receiptUrl']);
+  onlyKeys(raw, ['sourceKey', 'title', 'description', 'date', 'total', 'receiptUrl', 'noReceipt', 'jobId']);
   const sourceKey = text(raw, 'sourceKey', 120, true)!;
   const title = text(raw, 'title', 120, true)!;
   const description = text(raw, 'description', 2000, true)!;
   const date = requireDate(raw);
   const total = requireTotal(raw);
-  const receiptUrl = normalizeReceiptUrl(text(raw, 'receiptUrl', 2048, true)!);
+  // A no-receipt expense (a Home Depot web-link receipt) skips the PDF download entirely.
+  const noReceipt = raw.noReceipt === true;
+  const receiptUrl = noReceipt ? null : normalizeReceiptUrl(text(raw, 'receiptUrl', 2048, true)!, true);
+  // A matched Jobber job id links the expense to that job (card f9e131f8 T4/T8). Jobber encodes
+  // ids as base64 (standard or url-safe), so allow those characters only.
+  const jobId = text(raw, 'jobId', 200, false);
+  if (jobId !== undefined && !/^[A-Za-z0-9+\/_=-]+$/.test(jobId)) {
+    throw new InvalidAssistantArgs('jobId must be a Jobber encoded id.');
+  }
   if (!mentionsSource(description, sourceKey)) {
     throw new InvalidAssistantArgs('description must contain sourceKey exactly, so the expense can be found again.');
   }
@@ -234,21 +246,24 @@ export async function logExpense(
   }
 
   // 3. Receipt: download before creating anything, then serve it from our private short-lived URL.
-  const receipt = await downloadReceipt(fetchReceipt, receiptUrl);
-  if (!receipt.ok) {
-    await release();
-    return failed('receipt_unavailable', `The receipt link could not be downloaded as a PDF (${receipt.reason}). Nothing was created.`, sourceKey, receipt.reason);
-  }
-  let jobberReceiptUrl: string;
-  try {
-    jobberReceiptUrl = await publishReceipt(target, receipt.pdf);
-  } catch (err) {
-    await release();
-    return failed('receipt_store_failed', `Could not store the receipt, so nothing was created. (${safeMessage(err)})`, sourceKey);
+  // A no-receipt expense (a Home Depot web-link receipt) is created with no attached file.
+  let jobberReceiptUrl: string | undefined;
+  if (receiptUrl) {
+    const receipt = await downloadReceipt(fetchReceipt, receiptUrl, true);
+    if (!receipt.ok) {
+      await release();
+      return failed('receipt_unavailable', `The receipt link could not be downloaded as a PDF (${receipt.reason}). Nothing was created.`, sourceKey, receipt.reason);
+    }
+    try {
+      jobberReceiptUrl = await publishReceipt(target, receipt.pdf);
+    } catch (err) {
+      await release();
+      return failed('receipt_store_failed', `Could not store the receipt, so nothing was created. (${safeMessage(err)})`, sourceKey);
+    }
   }
 
   // 4. Create once.
-  const input: Record<string, unknown> = { title, description, date: `${date}T12:00:00Z`, total, receiptUrl: jobberReceiptUrl };
+  const input: Record<string, unknown> = { title, description, date: `${date}T12:00:00Z`, total, ...(jobberReceiptUrl ? { receiptUrl: jobberReceiptUrl } : {}), ...(jobId ? { linkedJobId: jobId } : {}) };
   let created: { expenseCreate?: { expense?: ExpenseNode | null; userErrors?: Array<{ message?: string }> } | null };
   try {
     created = await jobber.graphqlRequest(EXPENSE_CREATE, { input });
@@ -281,7 +296,8 @@ export async function logExpense(
       stored = mapExpense(back.expense);
       verified = back.expense.title === title
         && Math.round(Number(back.expense.total) * 100) === Math.round(total * 100)
-        && String(back.expense.date ?? '').slice(0, 10) === date;
+        && String(back.expense.date ?? '').slice(0, 10) === date
+        && (!jobId || back.expense.linkedJob?.id === jobId);
     }
   } catch (err) {
     console.error(`[ops-assistant] expense read-back failed ${safeMessage(err)}`);
@@ -292,18 +308,20 @@ export async function logExpense(
     expenseId,
     verified,
     expense: stored ?? mapExpense(created.expenseCreate!.expense!),
-    receipt: { submitted: true, note: 'The Jobber API cannot show receipts back. Confirm the PDF on the expense in Jobber\'s web UI.' },
+    receipt: jobberReceiptUrl
+      ? { submitted: true, note: 'The Jobber API cannot show receipts back. Confirm the PDF on the expense in Jobber\'s web UI.' }
+      : { submitted: false, note: 'No file was attached; the receipt link is in the description.' },
   };
 }
 
 export const EXPENSE_CREATE_TOOL = {
   name: 'log_expense',
-  description: 'Create one Chicago Reno expense in Jobber from a paid vendor invoice, at most once per sourceKey (e.g. "20four7VA invoice #5511-R-0026"; the description must contain it). Checks Jobber for an existing expense mentioning sourceKey, downloads the Square invoice PDF receipt first, creates the expense with the receipt, and reads it back. Outcomes: created, duplicate, unresolved_prior_attempt, unknown, failed. Only created or duplicate mean it is in Jobber. Never retry after unknown. Office account only.',
+  description: 'Create one Chicago Reno expense in Jobber from a paid vendor invoice, at most once per sourceKey (e.g. "20four7VA invoice #5511-R-0026"; the description must contain it). Checks Jobber for an existing expense mentioning sourceKey, downloads the receipt first (a Square invoice PDF link, or a Home Depot order link with noReceipt), creates the expense with the receipt, and reads it back. Pass receiptUrl, or noReceipt:true for a Home Depot web-link receipt. Pass jobId to link the expense to a matched Jobber job. Outcomes: created, duplicate, unresolved_prior_attempt, unknown, failed. Only created or duplicate mean it is in Jobber. Never retry after unknown. Office account only.',
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   inputSchema: {
     type: 'object',
     additionalProperties: false,
-    required: ['sourceKey', 'title', 'description', 'date', 'total', 'receiptUrl'],
+    required: ['sourceKey', 'title', 'description', 'date', 'total'],
     properties: {
       sourceKey: { type: 'string', maxLength: 120 },
       title: { type: 'string', maxLength: 120 },
@@ -311,6 +329,8 @@ export const EXPENSE_CREATE_TOOL = {
       date: { type: 'string', description: 'YYYY-MM-DD' },
       total: { type: 'number', exclusiveMinimum: 0 },
       receiptUrl: { type: 'string', description: 'Square invoice PDF link (click-tracking wrapper accepted).' },
+      noReceipt: { type: 'boolean', description: 'True to skip the PDF download for a Home Depot web-link receipt (put the link in the description).' },
+      jobId: { type: 'string', description: 'Matched Jobber job encoded id to link the expense to.' },
     },
   },
 } as const;
