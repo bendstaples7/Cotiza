@@ -91,12 +91,19 @@ const SQUARE_LINK = 'https://a.squareupmessaging.com/CL0/https%3A%2F%2Fsquareup.
 function jobber(
   pages: Array<Array<Record<string, unknown>>> = [],
   jobs: Array<Record<string, unknown>> = [],
+  jobPages?: Array<Array<Record<string, unknown>>>,
 ) {
   let call = 0;
+  let jobCall = 0;
   return {
     graphqlRequest: vi.fn(async (query: string) => {
       if (query.includes('jobs(')) {
-        return { jobs: { edges: jobs.map((node) => ({ node })), pageInfo: { hasNextPage: false, endCursor: null } } };
+        if (!jobPages) return { jobs: { edges: jobs.map((node) => ({ node })), pageInfo: { hasNextPage: false, endCursor: null } } };
+        const edges = (jobPages[jobCall] ?? []).map((node) => ({ node }));
+        const hasNextPage = jobCall < jobPages.length;
+        const pageInfo = { hasNextPage, endCursor: hasNextPage ? `jcursor-${jobCall}` : null };
+        jobCall++;
+        return { jobs: { edges, pageInfo } };
       }
       const edges = (pages[call] ?? []).map((node) => ({ node }));
       const hasNextPage = call < pages.length;
@@ -735,6 +742,15 @@ describe('Home Depot job matching (card f9e131f8 T4)', () => {
     expect(store.rows[0]).toMatchObject({ status: 'uncertain', reason: 'home depot receipt: no matching job' });
   });
 
+  it('leaves a Home Depot row uncertain when the job list is incomplete', async () => {
+    const store = db();
+    seed(store);
+    const j = jobber([], [], Array.from({ length: 11 }, (_, i) => [{ id: `job-${i}`, title: `Job ${i}`, jobStatus: 'active' }]));
+    const out = await matchHomeDepotJobs([receipt()], store as unknown as D1Database, j as never);
+    expect(out).toEqual({ matched: 0, unmatched: 0, ambiguous: 1 });
+    expect(store.rows[0]).toMatchObject({ status: 'uncertain', reason: 'home depot receipt: job list incomplete' });
+  });
+
   it('a Home Depot row matching several jobs stays uncertain', async () => {
     const store = db();
     seed(store);
@@ -781,7 +797,9 @@ describe('Home Depot receipt logging (card f9e131f8 T8)', () => {
   it('reads the one Home Depot link from an email body', () => {
     expect(homeDepotReceiptLink(`<a href="${HD_LINK}">receipt</a>`)).toBe(HD_LINK);
     expect(homeDepotReceiptLink('no link here')).toBeNull();
-    expect(homeDepotReceiptLink(`${HD_LINK} ${HD_LINK}?x=1`)).toBeNull();
+    // Tracking parameters are dropped, so the same order link twice is still one link.
+    expect(homeDepotReceiptLink(`${HD_LINK} ${HD_LINK}?x=1`)).toBe(HD_LINK);
+    expect(homeDepotReceiptLink(HD_LINK.replace('https', 'http'))).toBeNull();
   });
 
   it('a matched Home Depot receipt with only an HTML link is logged once with the link in the description', async () => {
