@@ -192,7 +192,7 @@ export async function logExpense(
   fetchReceipt: ReceiptFetcher = defaultFetcher,
 ) {
   const raw = objectArgs(args);
-  onlyKeys(raw, ['sourceKey', 'title', 'description', 'date', 'total', 'receiptUrl', 'noReceipt']);
+  onlyKeys(raw, ['sourceKey', 'title', 'description', 'date', 'total', 'receiptUrl', 'noReceipt', 'jobId']);
   const sourceKey = text(raw, 'sourceKey', 120, true)!;
   const title = text(raw, 'title', 120, true)!;
   const description = text(raw, 'description', 2000, true)!;
@@ -201,6 +201,12 @@ export async function logExpense(
   // A no-receipt expense (a Home Depot web-link receipt) skips the PDF download entirely.
   const noReceipt = raw.noReceipt === true;
   const receiptUrl = noReceipt ? null : normalizeReceiptUrl(text(raw, 'receiptUrl', 2048, true)!);
+  // A matched Jobber job id links the expense to that job (card f9e131f8 T4/T8). Jobber encodes
+  // ids as base64 (standard or url-safe), so allow those characters only.
+  const jobId = text(raw, 'jobId', 200, false);
+  if (jobId !== undefined && !/^[A-Za-z0-9+\/_=-]+$/.test(jobId)) {
+    throw new InvalidAssistantArgs('jobId must be a Jobber encoded id.');
+  }
   if (!mentionsSource(description, sourceKey)) {
     throw new InvalidAssistantArgs('description must contain sourceKey exactly, so the expense can be found again.');
   }
@@ -253,7 +259,7 @@ export async function logExpense(
   }
 
   // 4. Create once.
-  const input: Record<string, unknown> = { title, description, date: `${date}T12:00:00Z`, total, ...(jobberReceiptUrl ? { receiptUrl: jobberReceiptUrl } : {}) };
+  const input: Record<string, unknown> = { title, description, date: `${date}T12:00:00Z`, total, ...(jobberReceiptUrl ? { receiptUrl: jobberReceiptUrl } : {}), ...(jobId ? { linkedJobId: jobId } : {}) };
   let created: { expenseCreate?: { expense?: ExpenseNode | null; userErrors?: Array<{ message?: string }> } | null };
   try {
     created = await jobber.graphqlRequest(EXPENSE_CREATE, { input });

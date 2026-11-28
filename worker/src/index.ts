@@ -248,6 +248,8 @@ export default {
                 origin: env.INVOICE_INBOX_ORIGIN || 'https://social-media-cross-poster.chicago-reno.workers.dev',
               },
               userId: 'invoice-inbox',
+              // Home Depot logging stays dry-run until HOME_DEPOT_GO_LIVE is 'true' (card f9e131f8 T5).
+              homeDepotGoLive: (env as unknown as { HOME_DEPOT_GO_LIVE?: string }).HOME_DEPOT_GO_LIVE === 'true',
             });
           } catch (err) {
             console.error('[invoice-inbox] go-live setup failed, staying dry-run', err);

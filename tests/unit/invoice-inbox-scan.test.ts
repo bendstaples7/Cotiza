@@ -107,12 +107,13 @@ function jobber(
   };
 }
 
-function liveDeps(over: { log?: unknown; jobber?: ReturnType<typeof jobber> } = {}) {
+function liveDeps(over: { log?: unknown; jobber?: ReturnType<typeof jobber>; homeDepotGoLive?: boolean } = {}) {
   return {
     jobber: (over.jobber ?? jobber()) as never,
     target: { bucket: {} as never, origin: 'https://cotiza.test' },
     userId: 'invoice-inbox',
     log: (over.log ?? vi.fn()) as never,
+    ...(over.homeDepotGoLive === undefined ? {} : { homeDepotGoLive: over.homeDepotGoLive }),
   };
 }
 
@@ -782,7 +783,7 @@ describe('Home Depot receipt logging (card f9e131f8 T8)', () => {
     await runInvoiceInboxScan(
       { fetchMailboxAddress: () => Promise.resolve('b@x.com'), fetchInvoiceMessages: () => Promise.resolve([receipt()]) },
       store as unknown as D1Database,
-      liveDeps({ jobber: j, log }),
+      liveDeps({ jobber: j, log, homeDepotGoLive: true }),
     );
     expect(log).toHaveBeenCalledTimes(2);
     const retry = log.mock.calls[1][4] as { noReceipt?: boolean; description: string };
@@ -801,7 +802,7 @@ describe('Home Depot receipt logging (card f9e131f8 T8)', () => {
     await runInvoiceInboxScan(
       { fetchMailboxAddress: () => Promise.resolve('b@x.com'), fetchInvoiceMessages: () => Promise.resolve([receipt({ receiptUrl: null })]) },
       store as unknown as D1Database,
-      liveDeps({ jobber: j, log }),
+      liveDeps({ jobber: j, log, homeDepotGoLive: true }),
     );
     vi.restoreAllMocks();
     expect(log).not.toHaveBeenCalled();
@@ -859,5 +860,143 @@ describe('Home Depot receipt logging (card f9e131f8 T8)', () => {
     expect('receiptUrl' in input).toBe(false);
     expect(input.description).toContain(HD_LINK);
     expect(fetchReceipt).not.toHaveBeenCalled();
+  });
+});
+
+describe('Home Depot job linking and dry run (card f9e131f8 T4/T8)', () => {
+  const HD_LINK = 'https://www.homedepot.com/order/view/W12345678';
+  const hdReceipt = (over: Partial<GmailInvoiceMessage> = {}) =>
+    msg({
+      from: 'Home Depot <HomeDepot@email.homedepot.com>',
+      subject: 'Your Home Depot receipt for order #W12345678',
+      bodyText: 'Order Total $143.27\nPlaced on November 20, 2026\nJob Name: 4123 N Kedzie',
+      attachmentNames: [],
+      receiptUrl: HD_LINK,
+      ...over,
+    });
+
+  it('passes the matched job id to log as jobId for a Home Depot row', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const j = jobber([], [{ id: 'job-1', title: '4123 N Kedzie', jobStatus: 'active' }]);
+    const log = vi.fn(async () => ({ outcome: 'created' as const, expenseId: 'exp-hd', verified: true }));
+    await runInvoiceInboxScan(
+      { fetchMailboxAddress: () => Promise.resolve('b@x.com'), fetchInvoiceMessages: () => Promise.resolve([hdReceipt()]) },
+      store as unknown as D1Database,
+      liveDeps({ jobber: j, log, homeDepotGoLive: true }),
+    );
+    expect(log).toHaveBeenCalledTimes(1);
+    expect((log.mock.calls[0][4] as { jobId?: string }).jobId).toBe('job-1');
+    expect(store.rows[0]).toMatchObject({ status: 'logged', jobber_expense_id: 'exp-hd' });
+    vi.restoreAllMocks();
+  });
+
+  it('sends no jobId for a row with no matched job', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const log = vi.fn(async () => ({ outcome: 'created' as const, expenseId: 'exp-sq', verified: true }));
+    await runInvoiceInboxScan(
+      { fetchMailboxAddress: () => Promise.resolve('b@x.com'), fetchInvoiceMessages: () => Promise.resolve([msg({ receiptUrl: SQUARE_LINK })]) },
+      store as unknown as D1Database,
+      liveDeps({ jobber: jobber(), log }),
+    );
+    expect(log).toHaveBeenCalledTimes(1);
+    expect((log.mock.calls[0][4] as { jobId?: string }).jobId).toBeUndefined();
+    expect(store.rows[0]).toMatchObject({ status: 'logged' });
+    vi.restoreAllMocks();
+  });
+
+  it('logExpense links the expense to jobId and omits linkedJobId without it', async () => {
+    const rows = new Map<string, { status: string; jobber_expense_id: string | null }>();
+    const store = {
+      prepare(sql: string) {
+        return {
+          bind(...args: unknown[]) {
+            return {
+              async run() {
+                const key = (sql.includes('UPDATE') ? args[2] : args[0]) as string;
+                if (sql.includes('INSERT')) {
+                  if (rows.has(key)) return { meta: { changes: 0 } };
+                  rows.set(key, { status: 'pending', jobber_expense_id: null });
+                  return { meta: { changes: 1 } };
+                }
+                if (sql.includes('DELETE')) { rows.delete(key); return { meta: { changes: 1 } }; }
+                if (sql.includes('UPDATE')) { const r = rows.get(key); if (r) Object.assign(r, { status: args[0], jobber_expense_id: args[1] }); return { meta: { changes: 1 } }; }
+                throw new Error(sql);
+              },
+              async first() { return rows.get(args[0] as string) ?? null; },
+            };
+          },
+        };
+      },
+    };
+    const title = 'Home Depot W12345678';
+    const j = {
+      graphqlRequest: vi.fn(async (query: string, vars?: Record<string, unknown>) => {
+        if (query === EXPENSE_CREATE_QUERIES.EXPENSES_QUERY) return { expenses: { edges: [] } };
+        if (query === EXPENSE_CREATE_QUERIES.EXPENSE_CREATE) return { expenseCreate: { expense: { id: 'exp-hd', title, total: 143.27, date: '2026-11-20T12:00:00Z' }, userErrors: [] } };
+        if (query === EXPENSE_CREATE_QUERIES.EXPENSE_QUERY) return { expense: { id: vars?.id, title, total: 143.27, date: '2026-11-20T12:00:00Z' } };
+        throw new Error('unexpected query');
+      }),
+    };
+    const target = { bucket: {} as never, origin: 'https://cotiza.test' };
+    const base = { title, date: '2026-11-20', total: 143.27, noReceipt: true };
+    await logExpense(j as never, store as never, target, 'u', { ...base, sourceKey: 'hd-w1', description: 'Home Depot order #W1 (hd-w1)', jobId: 'job-1' }, vi.fn() as never);
+    await logExpense(j as never, store as never, target, 'u', { ...base, sourceKey: 'hd-w2', description: 'Home Depot order #W2 (hd-w2)' }, vi.fn() as never);
+    const creates = j.graphqlRequest.mock.calls.filter(([q]) => q === EXPENSE_CREATE_QUERIES.EXPENSE_CREATE);
+    expect(creates).toHaveLength(2);
+    expect((creates[0][1] as { input: Record<string, unknown> }).input.linkedJobId).toBe('job-1');
+    expect('linkedJobId' in (creates[1][1] as { input: Record<string, unknown> }).input).toBe(false);
+  });
+
+  it('rejects a jobId that is not a Jobber encoded id', async () => {
+    const j = { graphqlRequest: vi.fn() };
+    await expect(logExpense(
+      j as never,
+      { prepare: () => ({ bind: () => ({ run: async () => ({ meta: { changes: 1 } }), first: async () => null }) }) } as never,
+      { bucket: {} as never, origin: 'https://cotiza.test' },
+      'u',
+      { sourceKey: 'hd-w3', title: 'Home Depot W3', description: 'Home Depot order #W3 (hd-w3)', date: '2026-11-20', total: 143.27, noReceipt: true, jobId: 'not a real id!' },
+      vi.fn() as never,
+    )).rejects.toThrow(/jobId/);
+    expect(j.graphqlRequest).not.toHaveBeenCalled();
+  });
+
+  it('keeps a matched Home Depot row would_log on dry run while still logging a Square row', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const j = jobber([], [{ id: 'job-1', title: '4123 N Kedzie', jobStatus: 'active' }]);
+    const log = vi.fn(async () => ({ outcome: 'created' as const, expenseId: 'exp-sq', verified: true }));
+    await runInvoiceInboxScan(
+      {
+        fetchMailboxAddress: () => Promise.resolve('b@x.com'),
+        fetchInvoiceMessages: () => Promise.resolve([
+          hdReceipt(),
+          msg({ id: 'm2', subject: 'Invoice #5511-R-0025', receiptUrl: SQUARE_LINK }),
+        ]),
+      },
+      store as unknown as D1Database,
+      liveDeps({ jobber: j, log, homeDepotGoLive: false }),
+    );
+    expect(log).toHaveBeenCalledTimes(1);
+    expect((log.mock.calls[0][4] as { sourceKey: string }).sourceKey).toBe('20four7va|5511-r-0025');
+    expect(store.rows.find((row) => row.message_id === 'm1')).toMatchObject({ status: 'would_log', reason: 'home depot dry run' });
+    expect(store.rows.find((row) => row.message_id === 'm2')).toMatchObject({ status: 'logged' });
+    vi.restoreAllMocks();
+  });
+
+  it('logs a matched Home Depot row once when HOME_DEPOT_GO_LIVE is true', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const store = db();
+    const j = jobber([], [{ id: 'job-1', title: '4123 N Kedzie', jobStatus: 'active' }]);
+    const log = vi.fn(async () => ({ outcome: 'created' as const, expenseId: 'exp-hd', verified: true }));
+    await runInvoiceInboxScan(
+      { fetchMailboxAddress: () => Promise.resolve('b@x.com'), fetchInvoiceMessages: () => Promise.resolve([hdReceipt()]) },
+      store as unknown as D1Database,
+      liveDeps({ jobber: j, log, homeDepotGoLive: true }),
+    );
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(store.rows[0]).toMatchObject({ status: 'logged', jobber_expense_id: 'exp-hd' });
+    vi.restoreAllMocks();
   });
 });
